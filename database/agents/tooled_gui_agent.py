@@ -98,8 +98,10 @@ class TooledGuiAgent:
                         f"Action execution failed on client side (action_type={action_type})."
                     )
                 )
+                # The model sees this message, so pass on the client's reason.
                 raise RuntimeError(
-                    f"Action '{action_type}' failed on client side. Inputs: {action_inputs}"
+                    f"Action '{action_type}' failed on client side. Inputs: {action_inputs}. "
+                    f"Client error: {result.get('error') or 'unknown'}"
                 )
 
         # Brief pause so the UI can settle before the next screenshot.
@@ -240,7 +242,12 @@ class TooledGuiAgent:
 
     @tool(
         name="hotkey",
-        description="Press a keyboard shortcut (e.g. 'ctrl c', 'alt f4'). Split keys with a space, use lowercase, max 3 keys.",
+        description=(
+            "Press a keyboard shortcut (e.g. 'ctrl c', 'alt f4', 'ctrl -' to zoom out, 'ctrl +' to zoom in). "
+            "Split keys with a space, use lowercase, max 3 keys. Key names: ctrl, shift, alt, win, enter, "
+            "esc, tab, space, backspace, delete, up, down, left, right, pageup, pagedown, home, end, f1-f12, "
+            "or the character itself (a, 1, -, +, =)."
+        ),
         context=True,
     )
     async def hotkey(
