@@ -7,7 +7,16 @@ from typing import Any
 import pyautogui
 import pyperclip
 
+from .keys import resolve_keys
 from .models import ActionResult
+
+
+def _single_key(key: str) -> str:
+    # The parser turns "space" into " ", so a bare space is the space bar.
+    name = key if key == " " else key.strip()
+    if not name:
+        raise ValueError("requires a key")
+    return resolve_keys([name], pyautogui.isValidKey)[0]
 
 
 def _center_to_pixels(start_box: Any) -> tuple[int, int]:
@@ -92,20 +101,14 @@ def execute_action(action: dict[str, Any], dry_run: bool = False) -> ActionResul
 
         elif action_type == "hotkey":
             hotkey = str(action_inputs.get("hotkey") or action_inputs.get("key") or "")
-            keys = [k for k in hotkey.split(" ") if k]
-            if not keys:
-                raise ValueError("hotkey requires one or more keys")
+            keys = resolve_keys(hotkey, pyautogui.isValidKey)
             pyautogui.hotkey(*keys)
         elif action_type in {"keydown", "press"}:
             key = str(action_inputs.get("key") or action_inputs.get("press") or "")
-            if not key:
-                raise ValueError("keydown requires a key")
-            pyautogui.keyDown(key)
+            pyautogui.keyDown(_single_key(key))
         elif action_type in {"keyup", "release"}:
             key = str(action_inputs.get("key") or action_inputs.get("press") or "")
-            if not key:
-                raise ValueError("keyup requires a key")
-            pyautogui.keyUp(key)
+            pyautogui.keyUp(_single_key(key))
         elif action_type == "type":
             content = str(action_inputs.get("content") or "")
             pyperclip.copy(content.rstrip("\n"))
