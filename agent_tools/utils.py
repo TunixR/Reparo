@@ -1,4 +1,6 @@
+from collections.abc import MutableMapping
 from dataclasses import dataclass
+from typing import Any
 
 from pydantic import ValidationError
 from pydantic_core import InitErrorDetails
@@ -13,6 +15,17 @@ from agent_tools.process_model import (
 )
 
 CONTINUATION_STATE_KEY = "continuation"
+# Not "model": Strands puts its own Model object under that key of the state.
+PROCESS_MODEL_STATE_KEY = "process_model"
+
+# Sent back to an agent that reports success without a stored continuation.
+CONTINUATION_REMINDER = (
+    "You reported a successful recovery but haven't set where the robot continues. "
+    "Call `set_continuation` now: with process_finished true if the recovery completed "
+    "the rest of the process, otherwise with the model event id of the task in `model` "
+    "the robot runs next and one 0-based pass per enclosing loop. If it rejects the "
+    "continuation, correct it as its error says and call it again until it returns ok."
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +47,27 @@ class Continuation:
     model_event_id: str | None
     loop_iteration: tuple[int, ...]
     loop_depth_checked: bool
+
+
+def stored_continuation(state: MutableMapping[str, Any]) -> Continuation | None:
+    """The continuation `set_continuation` stored in an invocation state, if any."""
+    continuation = state.get(CONTINUATION_STATE_KEY)
+    return continuation if isinstance(continuation, Continuation) else None
+
+
+def continuation_fields(continuation: Continuation | None) -> dict[str, Any]:
+    """The answer fields for a continuation; `None` is the "no continuation" answer."""
+    if continuation is None:
+        return {
+            "process_finished": False,
+            "continue_from_model_event_id": None,
+            "loop_iteration": [],
+        }
+    return {
+        "process_finished": continuation.process_finished,
+        "continue_from_model_event_id": continuation.model_event_id,
+        "loop_iteration": list(continuation.loop_iteration),
+    }
 
 
 def _invalid(field: str, value: object, message: str) -> ValidationError:
@@ -87,7 +121,7 @@ def set_continuation(
         )
         return "ok: the process is finished; the robot has nothing left to run."
 
-    model = state.get("model")
+    model = state.get(PROCESS_MODEL_STATE_KEY)
     if not isinstance(model, str):
         raise RuntimeError(
             "The process model must be provided in the invocation state."

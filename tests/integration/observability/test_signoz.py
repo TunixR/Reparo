@@ -13,6 +13,7 @@ import pytest
 from opentelemetry import trace
 from sqlmodel import Session
 
+from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agents.models import Agent
 from database.logging.models import RobotException
 from tests.integration.observability.conftest import SECRET, Telemetry
@@ -155,7 +156,15 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
             model=ScriptedModel("Recovered."), name="gateway", callback_handler=None
         )
         await agent.invoke_async("Recover the robot")
-        return {"success": True, "continue_from_step": 2}
+        # What set_continuation stores once the error agent names a valid task.
+        assert invocation_state is not None
+        invocation_state[CONTINUATION_STATE_KEY] = Continuation(
+            process_finished=False,
+            model_event_id="click_submit",
+            loop_iteration=(),
+            loop_depth_checked=False,
+        )
+        return {"success": True}
 
     monkeypatch.setattr(Agent, "__call__", _gateway)
 

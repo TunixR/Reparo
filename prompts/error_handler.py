@@ -57,10 +57,35 @@ Follow these guidelines:
       '''
 }
 
-After the recovery is executed, if it is succesful, tell the robot where to continue by calling the `set_continuation` tool:
+After the recovery is executed, if it is succesful, tell the robot where to continue by calling the `set_continuation` tool. You can't report a successful recovery without it:
 - with `process_finished` true if the recovery completed the rest of the process;
-- otherwise with the model event id of the task in `model` the robot runs next (never a UI log `event_id`), and one 0-based pass per loop enclosing that task, outermost first (`[]` when it is in no loop).
-If the tool rejects the continuation, correct it as its error says and call it again until it returns `ok`.
+- otherwise pick the model event to run next from `model`, and call it with that task's id as `model_event_id` and one 0-based pass per loop enclosing that task, outermost first (`[]` when it is in no loop).
+- Never pass a UI log `event_id` (`"8"`): it counts occurrences in this run and is never a task of `model`.
+- Naming the errored model event means "retry it"; naming an earlier one means "go back"; naming a later one means "the recovery already did everything before it".
+If the tool rejects the continuation, correct it as its error says and call it again until it returns `ok`. Only `set_continuation` decides what the robot receives; your report can't change it.
+
+Example. The process approves pending spending requests, one per loop pass:
+
+```
+process spending_approval
+  open_requests "Open the requests page"
+  for each_request: request_id in pending
+    open_request "Open the request"
+    if decide: amount within limit
+      click_approve "Click Approve"
+    otherwise
+      click_reject "Click Reject"
+    back_to_list "Return to the list"
+```
+
+The robot failed clicking Approve on the third request: `errored_act` has `model_event_id: "click_approve"`, `event_id: "8"` and `event_name: "Click Approve #2"`, so it is pass 2 of `each_request`. Depending on how the recovery went:
+- couldn't click Approve, the robot should retry it: `set_continuation(process_finished=false, model_event_id="click_approve", loop_iteration=[2])`;
+- clicked Approve, the robot continues after it: `model_event_id="back_to_list"`, `loop_iteration=[2]`;
+- approved and went back to the list, the robot opens the next request: `model_event_id="open_request"`, `loop_iteration=[3]`;
+- found the request must be rejected instead: `model_event_id="click_reject"`, `loop_iteration=[2]`;
+- finished every remaining request itself: `set_continuation(process_finished=true, model_event_id=null, loop_iteration=[])`;
+- couldn't recover: don't call it, and report `success` false.
+`model_event_id="8"` (the UI log `event_id`) or `loop_iteration=[]` for `click_approve` would be rejected. With nested loops (outer over approvers, inner over their requests), the second approver's third request is `loop_iteration=[1, 2]`.
 
 When delegating to `standalone_uitars`, include context explicitly:
 - failed interaction (`errored_act`) and the most relevant recent entries from `ui_log`,
@@ -79,10 +104,9 @@ Your final report, after executing all steps, should include the following:
   - Recovery approach: "General approach for recovery"
   - Challenges: "Potential challenges or alternative approaches"
 - Steps: ["Step 1", "Step 2", "Step 3", "..."]
-- Continuation: <the task and loop passes you set with `set_continuation`, or that the process is finished>
 - Result: "The recovery plan was successfully executed."
-- Finished robot goal: True|False (True if you called `set_continuation` with `process_finished` true, else False)
-- Continue from step: -1 if the process is finished, else 0 (the robot continues from the task you set with `set_continuation`)
+- Success: True|False
+- Process finished, continue from model event id and loop iteration: exactly what `set_continuation` accepted (false, null and [] when the recovery failed)
 """
 
 

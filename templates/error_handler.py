@@ -8,17 +8,31 @@ class UiExceptionReport(TemplateModel):
         ...,
         description="Summary of the recovery execution result.",
     )
-    finished_activity: bool = Field(
-        ...,
-        description="Flag indicating whether the task and all future activities were completed.",
-    )
     success: bool = Field(
         ...,
         description="Indicates if the recovery was successful.",
     )
-    continue_from_step: int = Field(
+    process_finished: bool = Field(
         ...,
-        description="Index of the next step to resume if unfinished, otherwise -1.",
+        description=(
+            "Whether the recovery completed the rest of the process, as set with "
+            "`set_continuation`."
+        ),
+    )
+    continue_from_model_event_id: str | None = Field(
+        ...,
+        description=(
+            "The model event id (a task id of `model`) the robot runs next, as set "
+            "with `set_continuation`; null when the process is finished or the "
+            "recovery failed."
+        ),
+    )
+    loop_iteration: list[int] = Field(
+        ...,
+        description=(
+            "0-based passes of the loops enclosing that task, outermost first, as set "
+            "with `set_continuation`; [] when there is none."
+        ),
     )
 
 

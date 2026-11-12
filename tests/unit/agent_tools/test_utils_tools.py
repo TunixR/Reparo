@@ -14,7 +14,12 @@ from pydantic import ValidationError
 from strands.types.events import ToolResultEvent
 
 from agent_tools.hooks import LimitToolCounts
-from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation, set_continuation
+from agent_tools.utils import (
+    CONTINUATION_STATE_KEY,
+    PROCESS_MODEL_STATE_KEY,
+    Continuation,
+    set_continuation,
+)
 from tests.unit.agent_tools._shared.fakes import (
     FakeAfterToolCallEvent,
     FakeBeforeToolCallEvent,
@@ -44,7 +49,7 @@ def _call(state: dict[str, Any], **tool_input: Any) -> ToolResultEvent:
 
 
 def _state(model: str) -> dict[str, Any]:
-    return {"agent": MagicMock(), "model": model}
+    return {"agent": MagicMock(), PROCESS_MODEL_STATE_KEY: model}
 
 
 def _text(result: ToolResultEvent) -> str:

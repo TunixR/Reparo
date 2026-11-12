@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 from typing import Any
 from uuid import UUID
@@ -16,6 +17,11 @@ from pydantic import ValidationError
 from sqlmodel import select
 
 import database.general as database
+from agent_tools.utils import (
+    PROCESS_MODEL_STATE_KEY,
+    continuation_fields,
+    stored_continuation,
+)
 from database.agents.models import Agent, AgentType
 from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
@@ -23,6 +29,7 @@ from observability import attributes as attrs
 from observability.instrumentation import recovery as telemetry
 from security.utils import robot_key_hash
 from templates.common import TemplateModel
+from templates.gateway import RecoveryAnswer
 from templates.recovery_payload import RecoveryPayload
 
 router = APIRouter(prefix="/recovery")
@@ -129,17 +136,51 @@ def _persist_exception_with_context(
     return exception
 
 
+def _build_answer(
+    response: dict[str, Any], invocation_state: dict[str, Any]
+) -> tuple[RecoveryAnswer, str | None]:
+    """Build ``done.content`` from the gateway's report and the invocation state.
+
+    Only ``success`` comes from the LLM. The continuation is the one
+    ``set_continuation`` validated, and the variables are those the recovery left.
+
+    Returns:
+        The answer, and why a reported success was turned into a failure
+        (``missing_continuation``), if it was.
+    """
+    variables: dict[str, Any] = invocation_state["variables"]
+    continuation = stored_continuation(invocation_state)
+    reported_success = response.get("success") is True
+
+    if not reported_success:
+        return RecoveryAnswer(
+            success=False, variables=variables, **continuation_fields(None)
+        ), None
+    if continuation is None:
+        # Last-resort safety net: the turn ended without a validated continuation.
+        return RecoveryAnswer(
+            success=False, variables=variables, **continuation_fields(None)
+        ), attrs.EVENT_RECOVERY_MISSING_CONTINUATION
+    return RecoveryAnswer(
+        success=True, variables=variables, **continuation_fields(continuation)
+    ), None
+
+
 async def _invoke_gateway_agent(
     agent: Agent,
     websocket: WebSocket,
     exception: RobotException,
     recovery_context: RecoveryContext,
-):
-    invocation_state = {
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the gateway agent; returns its report and the final invocation state."""
+    invocation_state: dict[str, Any] = {
         "websocket": websocket,
         "robot_exception_id": exception.id,
         # Read by set_continuation to validate the continuation the error agent names.
-        "model": recovery_context.model,
+        PROCESS_MODEL_STATE_KEY: recovery_context.model,
+        # The variables the GUI agents start from and alter_variable changes; sent
+        # back to the robot, so they never pass through an LLM.
+        "variables": copy.deepcopy(recovery_context.variables),
     }
 
     ui_log = [
@@ -179,7 +220,7 @@ async def _invoke_gateway_agent(
             "error_description": act.error_description,
         }
 
-    return await agent(
+    response = await agent(
         invocation_state=invocation_state,
         task_name=recovery_context.task_name,
         platform=recovery_context.platform,
@@ -189,6 +230,7 @@ async def _invoke_gateway_agent(
         errored_act=errored_act,
         model=recovery_context.model,
     )
+    return response, invocation_state
 
 
 @router.websocket("/robot_exception/ws")
@@ -247,16 +289,27 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
                 turn.persisted(exception.id)
 
                 # Strands traces the agent run as a child span of this turn.
-                response = await _invoke_gateway_agent(
+                response, invocation_state = await _invoke_gateway_agent(
                     agent, websocket, exception, recovery_context
                 )
-                success = bool(response.get("success", False))
+                answer, failure_reason = _build_answer(response, invocation_state)
+                turn.answered(
+                    answer,
+                    stored_continuation(invocation_state),
+                    failure_reason,
+                )
+                success = answer.success
 
                 await websocket.send_json(
-                    {"type": "done", "content": response, "id": str(exception.id)}
+                    {
+                        "type": "done",
+                        "content": answer.model_dump(),
+                        "id": str(exception.id),
+                    }
                 )
                 await websocket.close()
 
+                # Always what was sent to the robot.
                 exception.infered_success = success
                 session.add(exception)
                 session.commit()

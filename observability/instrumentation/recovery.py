@@ -25,7 +25,9 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span, Tracer
     from starlette.datastructures import Address
 
+    from agent_tools.utils import Continuation
     from database.logging.models import RecoveryContext
+    from templates.gateway import RecoveryAnswer
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,39 @@ class RecoveryTurnTelemetry:
                 ),
             }
         )
+
+    def answered(
+        self,
+        answer: RecoveryAnswer,
+        continuation: Continuation | None,
+        failure_reason: str | None,
+    ) -> None:
+        """Record the answer sent in ``done`` and how its continuation was checked.
+
+        ``failure_reason`` is set when a reported success was sent as a failure
+        (``missing_continuation``); a continuation whose loop depth couldn't be
+        read off the model is sent as given and traced as ``loop_depth_unchecked``.
+        """
+        self.span.set_attributes(
+            {
+                attrs.RECOVERY_PROCESS_FINISHED: answer.process_finished,
+                attrs.RECOVERY_LOOP_ITERATION: answer.loop_iteration,
+            }
+        )
+        if answer.continue_from_model_event_id is not None:
+            self.span.set_attribute(
+                attrs.RECOVERY_CONTINUE_FROM_MODEL_EVENT_ID,
+                brief(answer.continue_from_model_event_id),
+            )
+        if failure_reason is not None:
+            self.span.set_attribute(attrs.RECOVERY_FAILURE_REASON, failure_reason)
+            self.span.add_event(failure_reason)
+        if (
+            answer.success
+            and continuation is not None
+            and not continuation.loop_depth_checked
+        ):
+            self.span.add_event(attrs.EVENT_RECOVERY_LOOP_DEPTH_UNCHECKED)
 
     # --- Failures ------------------------------------------------------------
 
