@@ -122,7 +122,7 @@ class Router(SQLModel, table=True):
     ) -> list[float]:
         """Map model-space coordinates back to original-image coordinates."""
         model_height, model_width = self.relative_dim(height, width)
-        if x > 1 and y > 1:  # Coords in range [0.0, model_width/height]
+        if x > 1 or y > 1:  # Coords in range [0.0, model_width/height]
             return [
                 x * width / model_width,
                 y * height / model_height,
