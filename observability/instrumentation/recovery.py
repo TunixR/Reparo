@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from starlette.datastructures import Address
 
     from database.logging.models import RecoveryContext
+    from templates.gateway import ResponseToRPA
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,22 @@ class RecoveryTurnTelemetry:
                 ),
             }
         )
+
+    def answered(self, answer: ResponseToRPA, failure_reason: str | None) -> None:
+        self.span.set_attributes(
+            {
+                attrs.RECOVERY_PROCESS_FINISHED: answer.process_finished,
+                attrs.RECOVERY_LOOP_ITERATION: answer.loop_iteration,
+            }
+        )
+        if answer.continue_from_model_event_id is not None:
+            self.span.set_attribute(
+                attrs.RECOVERY_CONTINUE_FROM_MODEL_EVENT_ID,
+                brief(answer.continue_from_model_event_id),
+            )
+        if failure_reason is not None:
+            self.span.set_attribute(attrs.RECOVERY_FAILURE_REASON, failure_reason)
+            self.span.add_event(failure_reason)
 
     # --- Failures ------------------------------------------------------------
 

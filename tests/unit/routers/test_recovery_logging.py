@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from sqlmodel import Session
 
 import routers.recovery as recovery_module
+from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agents.models import Agent
 from observability.attributes import OTEL_EVENT_NAME, RECOVERY_PAYLOAD_INVALID_FIELDS
 
@@ -79,7 +80,13 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
         invocation_state: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return {"success": True, "continue_from_step": 2}
+        assert invocation_state is not None
+        invocation_state[CONTINUATION_STATE_KEY] = Continuation(
+            process_finished=False,
+            continue_from_model_event_id="click_submit",
+            loop_iteration=[],
+        )
+        return {"success": True}
 
     monkeypatch.setattr(Agent, "__call__", _fake_call)
     caplog.set_level(logging.INFO)

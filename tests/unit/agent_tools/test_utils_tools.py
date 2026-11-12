@@ -10,11 +10,17 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from pydantic import ValidationError
 from strands.types.events import ToolResultEvent
 
 from agent_tools.hooks import LimitToolCounts
-from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation, set_continuation
+from agent_tools.utils import (
+    CONTINUATION_STATE_KEY,
+    PROCESS_MODEL_STATE_KEY,
+    Continuation,
+    set_continuation,
+)
 from tests.unit.agent_tools._shared.fakes import (
     FakeAfterToolCallEvent,
     FakeBeforeToolCallEvent,
@@ -44,7 +50,7 @@ def _call(state: dict[str, Any], **tool_input: Any) -> ToolResultEvent:
 
 
 def _state(model: str) -> dict[str, Any]:
-    return {"agent": MagicMock(), "model": model}
+    return {"agent": MagicMock(), PROCESS_MODEL_STATE_KEY: model}
 
 
 def _text(result: ToolResultEvent) -> str:
@@ -176,9 +182,8 @@ def test_stores_a_task_inside_an_xor_branch_whose_ui_log_ids_differ():
     )
     assert state[CONTINUATION_STATE_KEY] == Continuation(
         process_finished=False,
-        model_event_id="click_reject",
-        loop_iteration=(),
-        loop_depth_checked=True,
+        continue_from_model_event_id="click_reject",
+        loop_iteration=[],
     )
 
 
@@ -197,7 +202,7 @@ def test_stores_both_passes_of_nested_loops():
         "each_approver (For each approver), each_request (For each request of the "
         "approver): each_approver pass 1, each_request pass 2."
     )
-    assert state[CONTINUATION_STATE_KEY].loop_iteration == (1, 2)
+    assert state[CONTINUATION_STATE_KEY].loop_iteration == [1, 2]
 
 
 def test_stores_the_passes_as_given_for_a_compact_model_of_unknown_depth():
@@ -214,10 +219,31 @@ def test_stores_the_passes_as_given_for_a_compact_model_of_unknown_depth():
     assert "can't be read from this model" in _text(result)
     assert state[CONTINUATION_STATE_KEY] == Continuation(
         process_finished=False,
-        model_event_id="click_approve",
-        loop_iteration=(2,),
-        loop_depth_checked=False,
+        continue_from_model_event_id="click_approve",
+        loop_iteration=[2],
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "loop_iteration", "unchecked"),
+    [(COMPACT_MODEL, [2], True), (SPENDING_APPROVAL_MODEL, [2], False)],
+)
+def test_traces_an_unchecked_loop_depth_on_the_tool_span(
+    model: str, loop_iteration: list[int], unchecked: bool
+):
+    tracer = TracerProvider().get_tracer("tests.set_continuation")
+
+    with tracer.start_as_current_span("execute_tool set_continuation") as span:
+        _ = _call(
+            _state(model),
+            process_finished=False,
+            model_event_id="click_approve",
+            loop_iteration=loop_iteration,
+        )
+
+    assert isinstance(span, ReadableSpan)
+    events = [event.name for event in span.events]
+    assert ("loop_depth_unchecked" in events) is unchecked
 
 
 def test_stores_a_finished_process():
@@ -230,9 +256,8 @@ def test_stores_a_finished_process():
     assert result.tool_result["status"] == "success"
     assert state[CONTINUATION_STATE_KEY] == Continuation(
         process_finished=True,
-        model_event_id=None,
-        loop_iteration=(),
-        loop_depth_checked=True,
+        continue_from_model_event_id=None,
+        loop_iteration=[],
     )
 
 
@@ -251,7 +276,7 @@ def test_a_later_valid_call_replaces_a_rejected_one():
 
     assert rejected.tool_result["status"] == "error"
     assert accepted.tool_result["status"] == "success"
-    assert state[CONTINUATION_STATE_KEY].model_event_id == "click_approve"
+    assert state[CONTINUATION_STATE_KEY].continue_from_model_event_id == "click_approve"
 
 
 def test_fails_without_a_model_in_the_invocation_state():

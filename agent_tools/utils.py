@@ -1,6 +1,8 @@
-from dataclasses import dataclass
+from collections.abc import MutableMapping
+from typing import Any
 
-from pydantic import ValidationError
+from opentelemetry import trace
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_core import InitErrorDetails
 from strands import ToolContext, tool
 
@@ -11,29 +13,38 @@ from agent_tools.process_model import (
     describe_model_event,
     enclosing_loops,
 )
+from observability import attributes as attrs
 
 CONTINUATION_STATE_KEY = "continuation"
+# Not "model": Strands puts its own Model object under that key of the state.
+PROCESS_MODEL_STATE_KEY = "process_model"
 
 
-@dataclass(frozen=True)
-class Continuation:
+class Continuation(BaseModel):
     """Where the robot continues after the recovery, as validated by `set_continuation`.
 
     Attributes:
         process_finished: The recovery completed the rest of the process.
-        model_event_id: The task of the model the robot runs next; `None`
-            when the process is finished.
+        continue_from_model_event_id: The task of the model the robot runs next;
+            `None` when the process is finished or no continuation was set.
         loop_iteration: 0-based passes of the loops enclosing that task,
             outermost first.
-        loop_depth_checked: Whether the length of `loop_iteration` was checked
-            against the model. It isn't when the model is not BPMN or its loops
-            can't be read.
     """
 
-    process_finished: bool
-    model_event_id: str | None
-    loop_iteration: tuple[int, ...]
-    loop_depth_checked: bool
+    model_config = ConfigDict(frozen=True)
+
+    process_finished: bool = False
+    continue_from_model_event_id: str | None = None
+    loop_iteration: list[int] = Field(default_factory=list)
+
+
+NO_CONTINUATION = Continuation()
+
+
+def stored_continuation(state: MutableMapping[str, Any]) -> Continuation:
+    """The continuation in an invocation state; `NO_CONTINUATION` if none was set."""
+    continuation = state.get(CONTINUATION_STATE_KEY)
+    return continuation if isinstance(continuation, Continuation) else NO_CONTINUATION
 
 
 def _invalid(field: str, value: object, message: str) -> ValidationError:
@@ -79,15 +90,10 @@ def set_continuation(
     state = tool_context.invocation_state
 
     if process_finished:
-        state[CONTINUATION_STATE_KEY] = Continuation(
-            process_finished=True,
-            model_event_id=None,
-            loop_iteration=(),
-            loop_depth_checked=True,
-        )
+        state[CONTINUATION_STATE_KEY] = Continuation(process_finished=True)
         return "ok: the process is finished; the robot has nothing left to run."
 
-    model = state.get("model")
+    model = state.get(PROCESS_MODEL_STATE_KEY)
     if not isinstance(model, str):
         raise RuntimeError(
             "The process model must be provided in the invocation state."
@@ -127,11 +133,10 @@ def set_continuation(
         )
 
     state[CONTINUATION_STATE_KEY] = Continuation(
-        process_finished=False,
-        model_event_id=model_event_id,
-        loop_iteration=tuple(loop_iteration),
-        loop_depth_checked=loops is not None,
+        continue_from_model_event_id=model_event_id, loop_iteration=loop_iteration
     )
+    if loops is None:
+        trace.get_current_span().add_event(attrs.EVENT_LOOP_DEPTH_UNCHECKED)
 
     event = describe_model_event(model, model_event_id)
     target = (

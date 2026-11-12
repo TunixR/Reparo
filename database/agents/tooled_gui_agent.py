@@ -447,7 +447,7 @@ class TooledGuiAgent:
             variables: Process variables and known runtime values.
             ui_log: Ordered UI execution history leading up to failure.
             errored_act: Structured details for the failed activity.
-            model: Model-generated textual context for failure and recovery intent.
+            model: The process model, whose task ids are model event ids.
             override_invocation_state: Optional override for the invocation state.
 
         Returns:
@@ -490,6 +490,9 @@ class TooledGuiAgent:
             raise ValueError("WebSocket must be provided in tool context")
 
         websocket = tool_context.invocation_state["websocket"]
+        state_variables = tool_context.invocation_state.get("variables")
+        if isinstance(state_variables, dict):
+            variables = state_variables  # pyright: ignore[reportUnknownVariableType]
         # Enriches the Strands span of this tool call.
         telemetry = GuiTaskTelemetry(
             task=task, model=model, ui_log=ui_log, errored_act=errored_act

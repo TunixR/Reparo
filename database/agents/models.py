@@ -15,7 +15,12 @@ from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
 from strands.types.content import Messages
 
-from agent_tools.hooks import AgentLoggingHook, LimitToolCounts, ToolLoggingHook
+from agent_tools.hooks import (
+    AgentLoggingHook,
+    LimitToolCounts,
+    RequireToolCalls,
+    ToolLoggingHook,
+)
 from agent_tools.image import screenshot_bytes
 from database.agents.tooled_gui_agent import TooledGuiAgent
 from database.provider.models import Router
@@ -272,6 +277,10 @@ class Agent(SQLModel, table=True):
                 tool_limits[sa.child_agent.get_tool_name()] = sa.limit
         return LimitToolCounts(tool_limits)
 
+    def get_required_tools_hook(self) -> RequireToolCalls:
+        """Return a hook that sends the agent back until its required tools are called."""
+        return RequireToolCalls([at.tool.name for at in self.tools if at.required])
+
     def get_logging_hooks(self, invocation_state: dict[str, Any]) -> list[HookProvider]:
         agent_logging_hook = AgentLoggingHook(
             agent_id=self.id,
@@ -516,7 +525,11 @@ class Agent(SQLModel, table=True):
 
         model = self.get_model()
 
-        hooks = [self.get_tool_limiter(), *self.get_logging_hooks(invocation_state)]
+        hooks = [
+            self.get_tool_limiter(),
+            self.get_required_tools_hook(),
+            *self.get_logging_hooks(invocation_state),
+        ]
 
         strands_agent = StrandsAgent(
             model=model,

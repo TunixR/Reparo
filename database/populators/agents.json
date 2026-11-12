@@ -117,7 +117,8 @@
       ],
       "tools": {
         "names": ["set_continuation"],
-        "limits": [null]
+        "limits": [null],
+        "required": [true]
       }
     },
     {

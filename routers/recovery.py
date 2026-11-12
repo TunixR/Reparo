@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 from typing import Any
 from uuid import UUID
@@ -16,6 +17,12 @@ from pydantic import ValidationError
 from sqlmodel import select
 
 import database.general as database
+from agent_tools.utils import (
+    CONTINUATION_STATE_KEY,
+    NO_CONTINUATION,
+    PROCESS_MODEL_STATE_KEY,
+    stored_continuation,
+)
 from database.agents.models import Agent, AgentType
 from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
@@ -23,6 +30,7 @@ from observability import attributes as attrs
 from observability.instrumentation import recovery as telemetry
 from security.utils import robot_key_hash
 from templates.common import TemplateModel
+from templates.gateway import ResponseToRPA
 from templates.recovery_payload import RecoveryPayload
 
 router = APIRouter(prefix="/recovery")
@@ -129,17 +137,45 @@ def _persist_exception_with_context(
     return exception
 
 
+def _build_answer(
+    response: dict[str, Any], invocation_state: dict[str, Any]
+) -> tuple[ResponseToRPA, str | None]:
+    """Build ``done.content``: ``success`` from the gateway, the rest from the state.
+
+    Returns:
+        The answer, and ``missing_continuation`` if a reported success had to be
+        sent as a failure because no continuation was set.
+    """
+    continuation = stored_continuation(invocation_state)
+    failure_reason = None
+    success = response.get("success") is True
+    if not success:
+        continuation = NO_CONTINUATION
+    elif continuation == NO_CONTINUATION:
+        success = False
+        failure_reason = attrs.EVENT_RECOVERY_MISSING_CONTINUATION
+    answer = ResponseToRPA(
+        success=success,
+        variables=invocation_state["variables"],
+        **continuation.model_dump(),
+    )
+    return answer, failure_reason
+
+
 async def _invoke_gateway_agent(
     agent: Agent,
     websocket: WebSocket,
     exception: RobotException,
     recovery_context: RecoveryContext,
-):
-    invocation_state = {
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the gateway agent; returns its report and the final invocation state."""
+    invocation_state: dict[str, Any] = {
         "websocket": websocket,
         "robot_exception_id": exception.id,
         # Read by set_continuation to validate the continuation the error agent names.
-        "model": recovery_context.model,
+        PROCESS_MODEL_STATE_KEY: recovery_context.model,
+        CONTINUATION_STATE_KEY: NO_CONTINUATION,
+        "variables": copy.deepcopy(recovery_context.variables),
     }
 
     ui_log = [
@@ -179,7 +215,7 @@ async def _invoke_gateway_agent(
             "error_description": act.error_description,
         }
 
-    return await agent(
+    response = await agent(
         invocation_state=invocation_state,
         task_name=recovery_context.task_name,
         platform=recovery_context.platform,
@@ -189,6 +225,7 @@ async def _invoke_gateway_agent(
         errored_act=errored_act,
         model=recovery_context.model,
     )
+    return response, invocation_state
 
 
 @router.websocket("/robot_exception/ws")
@@ -247,13 +284,19 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
                 turn.persisted(exception.id)
 
                 # Strands traces the agent run as a child span of this turn.
-                response = await _invoke_gateway_agent(
+                response, invocation_state = await _invoke_gateway_agent(
                     agent, websocket, exception, recovery_context
                 )
-                success = bool(response.get("success", False))
+                answer, failure_reason = _build_answer(response, invocation_state)
+                turn.answered(answer, failure_reason)
+                success = answer.success
 
                 await websocket.send_json(
-                    {"type": "done", "content": response, "id": str(exception.id)}
+                    {
+                        "type": "done",
+                        "content": answer.model_dump(),
+                        "id": str(exception.id),
+                    }
                 )
                 await websocket.close()
 

@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agents.models import Agent
 from database.logging.models import RecoveryContext, RobotException
 from templates.recovery_payload import RecoveryPayload
@@ -46,7 +47,18 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     async def _fake_call(_self, invocation_state=None, **kwargs):  # pyright: ignore[reportMissingParameterType]
         captured_invocation["invocation_state"] = invocation_state
         captured_invocation["kwargs"] = kwargs
-        return {"success": True, "continue_from_step": 2}
+        assert invocation_state is not None
+        invocation_state[CONTINUATION_STATE_KEY] = Continuation(
+            process_finished=False,
+            continue_from_model_event_id="click_submit",
+            loop_iteration=[],
+        )
+        return {
+            "success": True,
+            "process_finished": False,
+            "continue_from_model_event_id": "click_submit",
+            "loop_iteration": [],
+        }
 
     monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
 
@@ -59,8 +71,13 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
 
     assert message["type"] == "done"
     assert isinstance(message["content"], dict)
-    assert message["content"]["success"] is True
-    assert message["content"]["continue_from_step"] == 2
+    assert message["content"] == {
+        "success": True,
+        "process_finished": False,
+        "continue_from_model_event_id": "click_submit",
+        "loop_iteration": [],
+        "variables": valid_recovery_payload["variables"],
+    }
 
     robot_exception = session.get(RobotException, UUID(message["id"]))
     assert robot_exception is not None
@@ -94,6 +111,9 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         captured_invocation["invocation_state"]["robot_exception_id"]
         == robot_exception.id
     )
+    state_variables = captured_invocation["invocation_state"]["variables"]
+    assert state_variables == valid_recovery_payload["variables"]
+    assert state_variables is not recovery_context.variables
     assert (
         captured_invocation["kwargs"]["task_name"]
         == valid_recovery_payload["task_name"]

@@ -156,7 +156,7 @@ the model's text, so its `gui.action` and `gui.screenshot` spans sit directly un
 
 | Span | Attributes |
 | --- | --- |
-| `recovery.turn` | `robot_key.id`, `agent.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_gateway_agent`, `internal_error`), `recovery.success`, `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields` |
+| `recovery.turn` | `robot_key.id`, `agent.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_gateway_agent`, `internal_error`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span event `missing_continuation`. The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
 | `recovery.persist` | none |
 | `invoke_agent` (Strands) | `agent.id`, `agent_trace.id` (joins the trace to the `AgentTrace` row) |
 | `execute_tool` (GUI agent) | `gui.task.name`, `gui.task.process_model`, `gui.task.ui_log_count`, `gui.task.has_errored_activity`, `gui.task.iterations`, `gui.task.outcome` (`done`, `model_stopped`, `client_disconnected`, `error`; UI-TARS also `max_actions_exceeded`, `unparseable_response`); errors carry a redacted exception |
