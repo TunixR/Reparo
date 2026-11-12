@@ -138,10 +138,12 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
 
 
 def test_recovery_ws_ingest_rejects_invalid_payload(
+    session: Session,
     client: TestClient,
     valid_robot_key_raw: str,
-    gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
 ):
+    # No gateway agent: the payload is validated first, so a malformed payload
+    # is reported as such even on a misconfigured server.
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     with client.websocket_connect(
         "/recovery/robot_exception/ws", headers=headers
@@ -153,6 +155,7 @@ def test_recovery_ws_ingest_rejects_invalid_payload(
     assert message["type"] == "error"
     assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
     assert closed["code"] == 1003
+    assert session.exec(select(RobotException)).first() is None
 
 
 def test_recovery_ws_ingest_rejects_non_json_payload(
@@ -171,23 +174,6 @@ def test_recovery_ws_ingest_rejects_non_json_payload(
     assert message["type"] == "error"
     assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
     assert closed["code"] == 1003
-
-
-def test_invalid_payload_is_reported_before_the_missing_gateway(
-    session: Session,
-    client: TestClient,
-    valid_robot_key_raw: str,
-):
-    headers = {"X-ROBOT-KEY": valid_robot_key_raw}
-    with client.websocket_connect(
-        "/recovery/robot_exception/ws", headers=headers
-    ) as ws:
-        ws.send_json({"task_name": "missing-graph"})
-        message = ws.receive_json()
-
-    assert message["type"] == "error"
-    assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
-    assert session.exec(select(RobotException)).first() is None
 
 
 def test_missing_gateway_agent_is_an_error_not_done(
