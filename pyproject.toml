@@ -28,6 +28,7 @@ dependencies = [
     "websockets>=17.0.1",
     "regex>=2026.7.10",
     "opentelemetry-instrumentation-logging>=0.66b2",
+    "defusedxml>=0.7.1",
 ]
 
 [dependency-groups]

@@ -116,7 +116,7 @@
         }
       ],
       "tools": {
-        "names": ["compute_continuation_activity"],
+        "names": ["set_continuation"],
         "limits": [null]
       }
     },

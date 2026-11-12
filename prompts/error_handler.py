@@ -57,9 +57,10 @@ Follow these guidelines:
       '''
 }
 
-After the recovery is executed, if it is succesful, identify which of the futureActivities have already been completed by the recovery process.
-You will do so by using the compute_continuation_activity tool, providing the list of futureActivities and a list of booleans with the same length indicating which futureActivity were executed during the recovery process.
-If the last futureActivity was executed, -1 is returned by the compute_continuation_activity to indicate the robot can finish its execution.
+After the recovery is executed, if it is succesful, tell the robot where to continue by calling the `set_continuation` tool:
+- with `process_finished` true if the recovery completed the rest of the process;
+- otherwise with the model event id of the task in `model` the robot runs next (never a UI log `event_id`), and one 0-based pass per loop enclosing that task, outermost first (`[]` when it is in no loop).
+If the tool rejects the continuation, correct it as its error says and call it again until it returns `ok`.
 
 When delegating to `standalone_uitars`, include context explicitly:
 - failed interaction (`errored_act`) and the most relevant recent entries from `ui_log`,
@@ -78,10 +79,10 @@ Your final report, after executing all steps, should include the following:
   - Recovery approach: "General approach for recovery"
   - Challenges: "Potential challenges or alternative approaches"
 - Steps: ["Step 1", "Step 2", "Step 3", "..."]
-- Future Activities: {{"futureActivity 1": "executed on step X", "futureActivity 2": "not executed", "..."}}
+- Continuation: <the task and loop passes you set with `set_continuation`, or that the process is finished>
 - Result: "The recovery plan was successfully executed."
-- Finished robot goal: True|False (If continue activity is -1, then True, else False)
-- Continue from step: <step number from where the robot should continue execution, using the compute_continuation_activity tool>
+- Finished robot goal: True|False (True if you called `set_continuation` with `process_finished` true, else False)
+- Continue from step: -1 if the process is finished, else 0 (the robot continues from the task you set with `set_continuation`)
 """
 
 
