@@ -31,6 +31,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def record_answer(
+    span: Span, answer: ResponseToRPA, failure_reason: str | None
+) -> None:
+    """Put an answer's continuation, and why it had to fail if it did, on a span."""
+    span.set_attributes(
+        {
+            attrs.RECOVERY_PROCESS_FINISHED: answer.process_finished,
+            attrs.RECOVERY_LOOP_ITERATION: answer.loop_iteration,
+        }
+    )
+    if answer.continue_from_model_event_id is not None:
+        span.set_attribute(
+            attrs.RECOVERY_CONTINUE_FROM_MODEL_EVENT_ID,
+            brief(answer.continue_from_model_event_id),
+        )
+    if failure_reason is not None:
+        span.set_attribute(attrs.RECOVERY_FAILURE_REASON, failure_reason)
+        span.add_event(failure_reason)
+
+
 def auth_failed(client: Address | None) -> None:
     """A robot connected with a missing, unknown or disabled key."""
     log_event(
@@ -128,20 +148,7 @@ class RecoveryTurnTelemetry:
         )
 
     def answered(self, answer: ResponseToRPA, failure_reason: str | None) -> None:
-        self.span.set_attributes(
-            {
-                attrs.RECOVERY_PROCESS_FINISHED: answer.process_finished,
-                attrs.RECOVERY_LOOP_ITERATION: answer.loop_iteration,
-            }
-        )
-        if answer.continue_from_model_event_id is not None:
-            self.span.set_attribute(
-                attrs.RECOVERY_CONTINUE_FROM_MODEL_EVENT_ID,
-                brief(answer.continue_from_model_event_id),
-            )
-        if failure_reason is not None:
-            self.span.set_attribute(attrs.RECOVERY_FAILURE_REASON, failure_reason)
-            self.span.add_event(failure_reason)
+        record_answer(self.span, answer, failure_reason)
 
     # --- Failures ------------------------------------------------------------
 
