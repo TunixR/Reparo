@@ -310,3 +310,48 @@ def test_agent_update_accepts_compatible_input_type(
     session.commit()
 
     assert agent.input_type == Agent.InputType.IMAGETEXT
+
+
+def test_agent_reasoning_effort_defaults_to_provider(
+    make_agent: Callable[..., Agent], mock_router: Router
+):
+    agent = make_agent(router=mock_router)
+
+    assert agent.reasoning_effort is None
+    assert agent.get_model_params() == {}
+    assert "reasoning_effort" not in agent.get_model().get_config().get("params", {})
+
+
+def test_agent_reasoning_effort_persists_and_reaches_model_params(
+    session: Session, make_agent: Callable[..., Agent], mock_router: Router
+):
+    agent = make_agent(
+        router=mock_router, reasoning_effort=Agent.ReasoningEffort.MEDIUM
+    )
+    session.expire_all()
+
+    persisted = session.get(Agent, agent.id)
+
+    assert persisted is not None
+    assert persisted.get_model().get_config()["params"] == {
+        "reasoning_effort": "medium"
+    }
+
+
+def test_agent_apply_update_clears_reasoning_effort_on_explicit_null():
+    router = _make_router()
+    agent = Agent(
+        name="Agent",
+        description="d",
+        prompt="p",
+        input_type=Agent.InputType.TEXT,
+        type=AgentType.Agent,
+        router=router,
+        reasoning_effort=Agent.ReasoningEffort.HIGH,
+    )
+
+    agent.apply_update(AgentUpdate(name="Renamed"), router)
+    assert agent.reasoning_effort == Agent.ReasoningEffort.HIGH
+
+    agent.apply_update(AgentUpdate(reasoning_effort=None), router)
+    assert agent.reasoning_effort is None

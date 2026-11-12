@@ -533,7 +533,7 @@ class TooledGuiAgent:
             }
         ]
 
-        agent_model = self.agent.router.get_model()
+        agent_model = self.agent.get_model()
 
         agent = StrandsAgent(  # type: ignore
             model=agent_model,

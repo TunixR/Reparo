@@ -133,8 +133,13 @@ class Router(SQLModel, table=True):
                 y * height,
             ]
 
-    def get_model(self) -> Model:
-        """Return the model instance for the router."""
+    def get_model(self, **params: Any) -> Model:
+        """Return the model instance for the router.
+
+        Args:
+            **params: Request parameters sent with every model call (e.g.
+                ``reasoning_effort``), as chosen by the agent using the model.
+        """
         if (
             self.provider_type == self.Provider.OPENAI
             or self.provider_type == self.Provider.VLLM
@@ -147,6 +152,7 @@ class Router(SQLModel, table=True):
                 },
                 stream=True,
                 model_id=self.model_name,
+                params=params,
             )
 
         raise NotImplementedError(
