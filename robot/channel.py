@@ -1,23 +1,22 @@
-"""The robot's side of a recovery websocket, read by a single task.
+"""A recovery websocket, owned by one object from accept to close.
 
-Once the payload is in, the robot only speaks when asked: an action result or a
+The robot sends a payload, then only speaks when asked: an action result or a
 screenshot. The exception is ``abort``, which it can send at any time, including
-while an LLM is thinking and nothing is reading the socket. Read straight from
-the socket, an abort would sit in the buffer and be taken for the next action
-result.
+while an LLM is thinking and nothing is waiting for a frame. It can also just go
+away, and the server pings it to keep the connection open.
 
-``RobotChannel`` owns the socket's reads after the payload. One reader task
-routes ``{"type": "abort"}`` to an abort event and queues every other frame for
-``receive_json()`` / ``receive_bytes()``, the calls the GUI tools make. Once the
-robot aborts, those calls fail with ``AbortedByRobot``, and the router, which
-races the gateway against the abort, cancels the run.
+``RobotConnection`` owns all of that. One reader task routes ``abort`` and
+disconnects to the connection's ending, and queues every other frame for
+``receive_text()`` / ``receive_json()`` / ``receive_bytes()``. A keep-alive task
+pings. Every send goes through one lock. ``run()`` races the work (the gateway)
+against the ending and cancels it as soon as the robot aborts, disconnects or a
+ping fails. Routers never touch the raw socket after accepting it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
@@ -25,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 from fastapi import WebSocketDisconnect
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
     from types import TracebackType
 
     from fastapi import WebSocket
@@ -32,8 +32,15 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 ABORT_MESSAGE_TYPE = "abort"
+PING_MESSAGE = {"type": "ping"}
+KEEP_ALIVE_INTERVAL = 10.0
+
+# Websocket close codes (RFC 6455).
+CLOSE_NORMAL = 1000
+CLOSE_SERVER_ERROR = 1011
 # A robot abort is a normal closure: the robot asked for it.
-ABORT_CLOSE_CODE = 1000
+ABORT_CLOSE_CODE = CLOSE_NORMAL
+
 # Bounds what a robot can make us store; telemetry bounds it further.
 ABORT_CODE_MAX_LENGTH = 255
 ABORT_DESCRIPTION_MAX_LENGTH = 4096
@@ -41,8 +48,8 @@ ABORT_DESCRIPTION_MAX_LENGTH = 4096
 _END = object()
 
 
-class RobotConnection(Protocol):
-    """What the GUI tools need from the robot: a ``RobotChannel`` in a recovery.
+class RobotIO(Protocol):
+    """What the GUI tools need from the robot: a ``RobotConnection`` in a recovery.
 
     A bare ``WebSocket`` fits too, for the standalone eval agents.
     """
@@ -82,6 +89,9 @@ def parse_abort(data: Any) -> RobotAbort | None:
 
 
 def _parse_abort_frame(text: str) -> RobotAbort | None:
+    # Skip decoding frames that can't be an abort, such as most payloads.
+    if ABORT_MESSAGE_TYPE not in text:
+        return None
     try:
         return parse_abort(json.loads(text))
     except json.JSONDecodeError:
@@ -100,23 +110,41 @@ class AbortedByRobot(WebSocketDisconnect):
         self.abort = abort
 
 
-class RobotChannel:
-    """Reads a recovery websocket after its payload; use as an async context manager.
+class KeepAliveFailed(RuntimeError):
+    """A ping failed for a reason other than the robot going away."""
 
-    It stands in for the socket wherever the GUI tools read from it, and passes
-    ``send_json`` through.
+
+class RobotConnection:
+    """An accepted recovery websocket; use as an async context manager.
+
+    Leaving the context stops the reader and the keep-alive, and closes the
+    socket if nothing closed it yet: normally, or with 1011 on an exception.
     """
 
-    def __init__(self, websocket: WebSocket) -> None:
+    def __init__(
+        self, websocket: WebSocket, keep_alive_interval: float = KEEP_ALIVE_INTERVAL
+    ) -> None:
         self._websocket = websocket
+        self._keep_alive_interval = keep_alive_interval
         self._frames: asyncio.Queue[str | bytes | object] = asyncio.Queue()
-        self._aborted = asyncio.Event()
-        self._ended: BaseException | None = None
-        self._reader: asyncio.Task[None] | None = None
-        self.abort: RobotAbort | None = None
+        self._send_lock = asyncio.Lock()
+        self._ended = asyncio.Event()
+        self._ending: BaseException | None = None
+        self._tasks: list[asyncio.Task[None]] = []
+        self._closed = False
+
+    @property
+    def abort(self) -> RobotAbort | None:
+        """The robot's abort, if that is how the connection ended."""
+        return self._ending.abort if isinstance(self._ending, AbortedByRobot) else None
+
+    # --- Lifecycle -----------------------------------------------------------
 
     async def __aenter__(self) -> Self:
-        self._reader = asyncio.create_task(self._read())
+        self._tasks = [
+            asyncio.create_task(self._read()),
+            asyncio.create_task(self._keep_alive()),
+        ]
         return self
 
     async def __aexit__(
@@ -125,10 +153,17 @@ class RobotChannel:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        if self._reader is not None:
-            _ = self._reader.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._reader
+        for task in self._tasks:
+            _ = task.cancel()
+        _ = await asyncio.gather(*self._tasks, return_exceptions=True)
+        await self.close(CLOSE_NORMAL if exc is None else CLOSE_SERVER_ERROR)
+
+    def _end(self, ending: BaseException) -> None:
+        """Record how the connection ended; only the first ending counts."""
+        if self._ending is None:
+            self._ending = ending
+            self._frames.put_nowait(_END)
+            self._ended.set()
 
     async def _read(self) -> None:
         try:
@@ -137,7 +172,7 @@ class RobotChannel:
                 if message["type"] == "websocket.disconnect":
                     self._end(
                         WebSocketDisconnect(
-                            code=message.get("code", 1000),
+                            code=message.get("code", CLOSE_NORMAL),
                             reason=message.get("reason"),
                         )
                     )
@@ -146,43 +181,77 @@ class RobotChannel:
                 if text is not None:
                     abort = _parse_abort_frame(text)
                     if abort is not None:
-                        self.abort = abort
                         self._end(AbortedByRobot(abort))
-                        self._aborted.set()
                         return
                     self._frames.put_nowait(text)
                 elif (data := message.get("bytes")) is not None:
                     self._frames.put_nowait(data)
-        except Exception as exc:  # noqa: BLE001 - handed to whoever waits for a frame
+        except Exception as exc:  # noqa: BLE001 - becomes the connection's ending
             self._end(exc)
 
-    def _end(self, error: BaseException) -> None:
-        if self._ended is None:
-            self._ended = error
-            self._frames.put_nowait(_END)
+    async def _keep_alive(self) -> None:
+        while True:
+            await asyncio.sleep(self._keep_alive_interval)
+            try:
+                await self.send_json(PING_MESSAGE)
+            except WebSocketDisconnect as exc:
+                self._end(exc)
+                return
+            except Exception as exc:  # noqa: BLE001 - becomes the connection's ending
+                failure = KeepAliveFailed(
+                    f"Keep-alive ping failed: {type(exc).__name__}"
+                )
+                failure.__cause__ = exc
+                self._end(failure)
+                return
 
-    def _raise_ended(self) -> None:
-        if self.abort is not None:
-            raise AbortedByRobot(self.abort)
-        raise self._ended or WebSocketDisconnect()
+    # --- Work ----------------------------------------------------------------
+
+    async def run(self, awaitable: Awaitable[T]) -> T:
+        """Await ``awaitable``, cancelling it if the connection ends first.
+
+        Raises:
+            AbortedByRobot: the robot aborted.
+            WebSocketDisconnect: the robot went away.
+            KeepAliveFailed: a ping failed.
+        """
+        work = asyncio.ensure_future(awaitable)
+        ended = asyncio.create_task(self._ended.wait())
+        try:
+            _ = await asyncio.wait({work, ended}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            _ = ended.cancel()
+            if self._ending is not None or not work.done():
+                _ = work.cancel()
+                # Let the work unwind; its own outcome no longer matters.
+                _ = await asyncio.gather(work, return_exceptions=True)
+        self._raise_if_ended()
+        return work.result()
+
+    def _raise_if_ended(self) -> None:
+        if self._ending is not None:
+            raise self._ending
+
+    # --- Frames --------------------------------------------------------------
 
     async def _next(self) -> str | bytes:
-        # After an abort nothing else the robot sent matters.
-        if self.abort is not None:
-            self._raise_ended()
+        # Once the connection ended, nothing else the robot sent matters.
+        self._raise_if_ended()
         frame = await self._frames.get()
         if frame is _END:
-            # Leave it for the next waiter.
-            self._frames.put_nowait(_END)
-            self._raise_ended()
+            self._raise_if_ended()
         return frame  # pyright: ignore[reportReturnType] - only _END is not a frame
+
+    async def receive_text(self) -> str:
+        """The robot's next frame, which must be text."""
+        frame = await self._next()
+        if isinstance(frame, bytes):
+            raise TypeError("Expected a text frame from the robot, got binary.")
+        return frame
 
     async def receive_json(self) -> Any:
         """The robot's next frame, which must be JSON text."""
-        frame = await self._next()
-        if isinstance(frame, bytes):
-            raise TypeError("Expected a JSON text frame from the robot, got binary.")
-        return json.loads(frame)
+        return json.loads(await self.receive_text())
 
     async def receive_bytes(self) -> bytes:
         """The robot's next frame, which must be binary."""
@@ -192,24 +261,15 @@ class RobotChannel:
         return frame
 
     async def send_json(self, data: Any) -> None:
-        await self._websocket.send_json(data)
+        async with self._send_lock:
+            await self._websocket.send_json(data)
 
-    async def run_until_aborted(self, awaitable: Awaitable[T]) -> T:
-        """Await ``awaitable``, cancelling it if the robot aborts first.
-
-        Raises:
-            AbortedByRobot: the robot aborted before ``awaitable`` finished.
-        """
-        work = asyncio.ensure_future(awaitable)
-        aborted = asyncio.create_task(self._aborted.wait())
-        try:
-            _ = await asyncio.wait({work, aborted}, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            _ = aborted.cancel()
-            if self.abort is not None or not work.done():
-                _ = work.cancel()
-                # Let the run unwind; its own outcome no longer matters.
-                _ = await asyncio.gather(work, return_exceptions=True)
-        if self.abort is not None:
-            raise AbortedByRobot(self.abort)
-        return work.result()
+    async def close(self, code: int = CLOSE_NORMAL, reason: str | None = None) -> None:
+        """Close the socket once; later calls, or a robot already gone, are no-ops."""
+        if self._closed:
+            return
+        self._closed = True
+        async with self._send_lock:
+            # The robot may already have closed its side.
+            with suppress(RuntimeError, OSError, WebSocketDisconnect):
+                await self._websocket.close(code=code, reason=reason)

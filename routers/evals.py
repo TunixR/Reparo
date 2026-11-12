@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from opentelemetry import trace
+from opentelemetry.trace import Span
 from pydantic import Field, ValidationError
 from pydantic.json_schema import SkipJsonSchema
 from sqlmodel import select
@@ -20,18 +21,19 @@ from agent_tools.utils import (
     set_continuation,
 )
 from database.agents.models import Agent, AgentType
+from database.keys.models import RobotKey
+from database.logging.models import RobotException
 from observability import attributes as attrs
 from observability.correlation import get_request_id
 from observability.events import error_type, log_event
 from observability.exceptions import record_exception
 from observability.instrumentation.genai import TracedOpenAIModel
 from observability.instrumentation.recovery import record_answer, record_robot_abort
-from robot.channel import AbortedByRobot, RobotChannel, parse_abort
+from robot.channel import ABORT_CLOSE_CODE, AbortedByRobot, RobotConnection
 from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
     ROBOT_KEY_HEADER,
     _build_answer,
     _build_recovery_context_or_raise,
-    _close_after_abort,
     _persist_exception_with_context,
     _record_abort,
     find_enabled_robot_key,
@@ -121,7 +123,7 @@ def _validate_payload(data: dict[str, Any]) -> None:
 
 
 async def _run_standalone_recovery(
-    channel: RobotChannel,
+    robot: RobotConnection,
     payload: dict[str, Any],
     recovery_task: str,
     agent: Agent,
@@ -140,7 +142,7 @@ async def _run_standalone_recovery(
         "variables": copy.deepcopy(variables),
     }
     override_invocation_state = {
-        "websocket": channel,
+        "websocket": robot,
         "robot_exception_id": robot_exception_id,
         "variables": invocation_state["variables"],
     }
@@ -227,77 +229,79 @@ async def handle_recovery_eval(
         record_exception=False,
         set_status_on_exception=False,
     ) as span:
+        async with RobotConnection(websocket) as robot:
+            await _run_eval_turn(robot, session, robot_key, agent, span)
+
+
+async def _run_eval_turn(
+    robot: RobotConnection,
+    session: database.SessionDep,
+    robot_key: RobotKey,
+    agent: Agent,
+    span: Span,
+) -> None:
+    """One eval: payload, recovery task, record, GUI agent run, result.
+
+    As in production, an abort (before or during the run) cancels it, fails the
+    recovery with its reason and sends no result.
+    """
+    exception: RobotException | None = None
+    try:
+        payload = await robot.receive_json()
+        _validate_payload(payload)
+
+        recovery_task_msg = await robot.receive_json()
+        recovery_task = recovery_task_msg.get("recovery_task", "")
+        if not recovery_task:
+            raise ValueError("recovery_task must be a non-empty string")
+
+        recovery_context = _build_recovery_context_or_raise(payload)
+        exception = _persist_exception_with_context(
+            session, payload, robot_key, recovery_context
+        )
+
+        result = await robot.run(
+            _run_standalone_recovery(
+                robot, payload, recovery_task, agent, str(exception.id)
+            )
+        )
+
+        await robot.send_json(
+            {
+                "type": "eval_result",
+                "content": result,
+                "exception_id": str(exception.id),
+                "request_id": get_request_id(),
+            }
+        )
+        await robot.close()
+    except AbortedByRobot as exc:
+        if exception is not None:
+            _record_abort(session, exception, exc.abort)
+        record_robot_abort(span, exc.abort)
+        await robot.close(ABORT_CLOSE_CODE)
+    except WebSocketDisconnect:
+        pass
+    except ValueError as exc:
+        # The client sent an unusable eval request: a warning, not an error.
+        log_event(
+            logger,
+            attrs.EVENT_RECOVERY_EVAL_INVALID,
+            {attrs.ERROR_TYPE: error_type(exc)},
+            logging.WARNING,
+        )
         try:
-            payload = await websocket.receive_json()
-            abort = parse_abort(payload)
-            if abort is not None:
-                record_robot_abort(span, abort)
-                await _close_after_abort(websocket)
-                return
-            _validate_payload(payload)
-
-            recovery_task_msg = await websocket.receive_json()
-            abort = parse_abort(recovery_task_msg)
-            if abort is not None:
-                record_robot_abort(span, abort)
-                await _close_after_abort(websocket)
-                return
-            recovery_task = recovery_task_msg.get("recovery_task", "")
-            if not recovery_task:
-                raise ValueError("recovery_task must be a non-empty string")
-
-            recovery_context = _build_recovery_context_or_raise(payload)
-            exception = _persist_exception_with_context(
-                session, payload, robot_key, recovery_context
+            await robot.send_json(
+                {"type": "error", "code": "VALIDATION_ERROR", "content": str(exc)}
             )
-
-            # As in production, an abort cancels the run and sends no result.
-            try:
-                async with RobotChannel(websocket) as channel:
-                    result = await channel.run_until_aborted(
-                        _run_standalone_recovery(
-                            channel, payload, recovery_task, agent, str(exception.id)
-                        )
-                    )
-            except AbortedByRobot as exc:
-                _record_abort(session, exception, exc.abort)
-                record_robot_abort(span, exc.abort)
-                await _close_after_abort(websocket)
-                return
-
-            await websocket.send_json(
-                {
-                    "type": "eval_result",
-                    "content": result,
-                    "exception_id": str(exception.id),
-                    "request_id": get_request_id(),
-                }
-            )
-            await websocket.close()
-        except WebSocketDisconnect:
-            pass
-        except ValueError as exc:
-            # The client sent an unusable eval request: a warning, not an error.
-            log_event(
-                logger,
-                attrs.EVENT_RECOVERY_EVAL_INVALID,
-                {attrs.ERROR_TYPE: error_type(exc)},
-                logging.WARNING,
-            )
-            try:
-                await websocket.send_json(
-                    {"type": "error", "code": "VALIDATION_ERROR", "content": str(exc)}
-                )
-                await websocket.close(code=1003, reason=str(exc))
-            except Exception:
-                logger.debug("Failed to send eval validation error", exc_info=True)
-        except Exception as exc:
-            logger.exception("Error during eval")
-            record_exception(span, exc, escaped=False)
-            try:
-                await websocket.send_json(
-                    {"type": "error", "content": "Internal server error"}
-                )
-                await websocket.close()
-            except Exception:
-                logger.debug("Failed to send eval error", exc_info=True)
+            await robot.close(code=1003, reason=str(exc))
+        except Exception:
+            logger.debug("Failed to send eval validation error", exc_info=True)
+    except Exception as exc:
+        logger.exception("Error during eval")
+        record_exception(span, exc, escaped=False)
+        try:
+            await robot.send_json({"type": "error", "content": "Internal server error"})
+            await robot.close()
+        except Exception:
+            logger.debug("Failed to send eval error", exc_info=True)

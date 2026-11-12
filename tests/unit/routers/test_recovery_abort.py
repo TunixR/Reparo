@@ -1,22 +1,26 @@
-"""A robot ``abort`` cancels the gateway, fails the recovery with its reason, and sends no ``done``."""
+"""How a recovery ends when the robot aborts or goes away: the gateway is cancelled and no ``done`` is sent."""
 
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from collections.abc import Callable, Coroutine, Iterator
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlmodel import Session, select
 
+import routers.evals as evals_module
 import routers.recovery as recovery_module
-from database.agents.models import Agent
+from database.agents.models import Agent, AgentType
 from database.logging.models import RobotException
-from robot.channel import AbortedByRobot, RobotChannel
+from database.provider.models import Router
+from robot.channel import AbortedByRobot, RobotConnection
 from settings import TELEMETRY_MAX_TEXT_LENGTH
 
 WS_PATH = "/recovery/robot_exception/ws"
@@ -57,8 +61,19 @@ def _receive_skipping_pings(ws: Any) -> dict[str, Any]:
         return message
 
 
+def _wait_for_turn(exporter: InMemorySpanExporter) -> ReadableSpan:
+    """The finished ``recovery.turn`` span, once the handler is done."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        for span in exporter.get_finished_spans():
+            if span.name == "recovery.turn":
+                return span
+        time.sleep(0.01)
+    raise AssertionError("recovery.turn never finished")
+
+
 def _gateway_cancelled_by_abort(
-    run: Callable[[RobotChannel], Coroutine[Any, Any, None]],
+    run: Callable[[RobotConnection], Coroutine[Any, Any, None]],
 ) -> tuple[GatewayCall, dict[str, bool]]:
     """A gateway that runs ``run`` and records whether it was cancelled."""
     seen = {"cancelled": False, "finished": False}
@@ -68,7 +83,7 @@ def _gateway_cancelled_by_abort(
     ) -> dict[str, Any]:
         assert invocation_state is not None
         channel = invocation_state["websocket"]
-        assert isinstance(channel, RobotChannel)
+        assert isinstance(channel, RobotConnection)
         try:
             await run(channel)
         except asyncio.CancelledError:
@@ -136,7 +151,7 @@ def test_abort_mid_llm_turn_cancels_the_gateway(
     span_exporter: InMemorySpanExporter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _thinking(_channel: RobotChannel) -> None:
+    async def _thinking(_robot: RobotConnection) -> None:
         # The LLM is thinking: nothing reads the socket.
         await asyncio.sleep(60)
 
@@ -165,7 +180,7 @@ def test_abort_mid_action_is_not_read_as_the_action_result(
 ) -> None:
     results: list[Any] = []
 
-    async def _acting(channel: RobotChannel) -> None:
+    async def _acting(channel: RobotConnection) -> None:
         await channel.send_json({"type": "action", "content": {"action_type": "click"}})
         try:
             results.append(await channel.receive_json())
@@ -213,3 +228,92 @@ def test_abort_before_the_payload_just_closes(
     )
     assert turn.attributes is not None
     assert turn.attributes["recovery.outcome"] == "robot_aborted"
+
+
+def test_disconnect_mid_llm_turn_cancels_the_gateway_and_is_recorded(
+    session: Session,
+    client: TestClient,
+    valid_recovery_payload: dict[str, Any],
+    gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
+    robot_key_raw: str,
+    span_exporter: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = threading.Event()
+
+    async def _thinking(_robot: RobotConnection) -> None:
+        started.set()
+        await asyncio.sleep(60)
+
+    call, seen = _gateway_cancelled_by_abort(_thinking)
+    monkeypatch.setattr(Agent, "__call__", call)
+
+    with client.websocket_connect(
+        WS_PATH, headers={"X-ROBOT-KEY": robot_key_raw}
+    ) as ws:
+        ws.send_json(valid_recovery_payload)
+        assert started.wait(timeout=5)
+        # The robot goes away while the gateway is thinking.
+        ws.close(code=1001)
+        turn = _wait_for_turn(span_exporter)
+
+    assert seen == {"cancelled": True, "finished": False}
+    session.expire_all()
+    exception = session.exec(select(RobotException)).one()
+    assert exception.infered_success is False
+    assert exception.abort_code is None
+
+    assert turn.attributes is not None
+    assert turn.attributes["recovery.outcome"] == "client_disconnected"
+
+
+def test_eval_abort_mid_run_cancels_it_and_sends_no_result(
+    session: Session,
+    client: TestClient,
+    valid_recovery_payload: dict[str, Any],
+    make_agent: Callable[..., Agent],
+    mock_router: Router,
+    robot_key_raw: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gui_agent = make_agent(
+        router=mock_router,
+        name="GUI",
+        description="GUI agent",
+        prompt="prompt",
+        response_model=None,
+        type=AgentType.GuiAgent,
+    )
+    seen = {"cancelled": False}
+    started = threading.Event()
+
+    async def _thinking(*_: Any, **__: Any) -> dict[str, Any]:
+        started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+        return {}
+
+    monkeypatch.setattr(evals_module, "_run_standalone_recovery", _thinking)
+    # The agent lookup isn't under test (it passes the raw header to a UUID column).
+    monkeypatch.setattr(evals_module, "_get_valid_agent", lambda *_: gui_agent)
+
+    with client.websocket_connect(
+        "/evals/recovery/ws",
+        headers={"X-ROBOT-KEY": robot_key_raw, "X-AGENT-ID": str(gui_agent.id)},
+    ) as ws:
+        ws.send_json(valid_recovery_payload)
+        ws.send_json({"recovery_task": "Approve the request"})
+        assert started.wait(timeout=5)
+        ws.send_json(ABORT)
+        closed = _receive_skipping_pings(ws)
+
+    assert closed["type"] == "websocket.close"
+    assert closed["code"] == 1000
+    assert seen == {"cancelled": True}
+    session.expire_all()
+    exception = session.exec(select(RobotException)).one()
+    assert exception.abort_code == "ENVIRONMENT_FAILURE"
+    assert exception.infered_success is False
