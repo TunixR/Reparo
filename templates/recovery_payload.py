@@ -7,18 +7,6 @@ from pydantic import ConfigDict, Field, field_validator
 
 from templates.common import TemplateModel
 
-EVENT_ID_DESCRIPTION = (
-    "Occurrence id of this event in the run, counting up. A model event done "
-    "several times (e.g. in a loop) has a different event_id each time. It is "
-    "not a task id of `model`."
-)
-MODEL_EVENT_ID_DESCRIPTION = (
-    "Id of the task in `model` that this event performed (its model event id), "
-    "the same on every run and loop pass. It links the UI log to the process "
-    "model; event_name stays a free, human-readable name that may repeat within "
-    "a process."
-)
-
 
 def _normalize_optional_id(value: str | int | None) -> str | None:
     if value is None:
@@ -36,11 +24,9 @@ class RecoveryUiLogEntry(TemplateModel):
     case_id: str
     activity_id: str | None
     activity_name: str | None
-    event_id: str = Field(description=EVENT_ID_DESCRIPTION)
+    event_id: str
     event_name: str | None
-    model_event_id: str | None = Field(
-        default=None, description=MODEL_EVENT_ID_DESCRIPTION
-    )
+    model_event_id: str | None = None
     action_type: str
     application: str | None
     input: str | None
@@ -84,11 +70,9 @@ class RecoveryErroredAct(TemplateModel):
     case_id: str
     activity_id: str | None
     activity_name: str | None
-    event_id: str = Field(description=EVENT_ID_DESCRIPTION)
+    event_id: str
     event_name: str | None
-    model_event_id: str | None = Field(
-        default=None, description=MODEL_EVENT_ID_DESCRIPTION
-    )
+    model_event_id: str | None = None
     action_type: str
     application: str | None
     input: str | None
@@ -127,18 +111,9 @@ class RecoveryPayload(TemplateModel):
     platform: str
     os: str
     variables: dict[str, Any] = Field(default_factory=dict)
-    ui_log: list[RecoveryUiLogEntry] = Field(
-        description="Events the robot performed before the failure, oldest "
-        "first. The errored event is not repeated here."
-    )
-    errored_act: RecoveryErroredAct = Field(
-        description="The event that failed, with its error."
-    )
-    model: str = Field(
-        description="The process model, in BPMN 2.0 XML or another textual "
-        "format (e.g. an indented outline). Its task ids are the model event ids "
-        "that `model_event_id` refers to."
-    )
+    ui_log: list[RecoveryUiLogEntry]
+    errored_act: RecoveryErroredAct
+    model: str
 
     @field_validator("model")
     @classmethod
