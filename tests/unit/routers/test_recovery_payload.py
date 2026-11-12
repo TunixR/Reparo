@@ -58,6 +58,7 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         message = ws.receive_json()
 
     assert message["type"] == "done"
+    assert isinstance(message["content"], dict)
     assert message["content"]["success"] is True
     assert message["content"]["continue_from_step"] == 2
 
@@ -137,6 +138,27 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
 
 
 def test_recovery_ws_ingest_rejects_invalid_payload(
+    session: Session,
+    client: TestClient,
+    valid_robot_key_raw: str,
+):
+    # No gateway agent: the payload is validated first, so a malformed payload
+    # is reported as such even on a misconfigured server.
+    headers = {"X-ROBOT-KEY": valid_robot_key_raw}
+    with client.websocket_connect(
+        "/recovery/robot_exception/ws", headers=headers
+    ) as ws:
+        ws.send_json({"task_name": "missing-graph"})
+        message = ws.receive_json()
+        closed = ws.receive()
+
+    assert message["type"] == "error"
+    assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
+    assert closed["code"] == 1003
+    assert session.exec(select(RobotException)).first() is None
+
+
+def test_recovery_ws_ingest_rejects_non_json_payload(
     client: TestClient,
     valid_robot_key_raw: str,
     gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
@@ -145,8 +167,34 @@ def test_recovery_ws_ingest_rejects_invalid_payload(
     with client.websocket_connect(
         "/recovery/robot_exception/ws", headers=headers
     ) as ws:
-        ws.send_json({"task_name": "missing-graph"})
+        ws.send_text("{not json")
         message = ws.receive_json()
+        closed = ws.receive()
 
     assert message["type"] == "error"
     assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
+    assert closed["code"] == 1003
+
+
+def test_missing_gateway_agent_is_an_error_not_done(
+    session: Session,
+    client: TestClient,
+    valid_robot_key_raw: str,
+    valid_recovery_payload: dict[str, Any],
+):
+    headers = {"X-ROBOT-KEY": valid_robot_key_raw}
+    with client.websocket_connect(
+        "/recovery/robot_exception/ws", headers=headers
+    ) as ws:
+        ws.send_json(valid_recovery_payload)
+        message = ws.receive_json()
+        closed = ws.receive()
+
+    assert message == {
+        "type": "error",
+        "code": "NO_GATEWAY_AGENT",
+        "content": "No GatewayAgent found in the database.",
+    }
+    assert closed["code"] == 1011
+    # No recovery was instantiated, so nothing was persisted.
+    assert session.exec(select(RobotException)).first() is None

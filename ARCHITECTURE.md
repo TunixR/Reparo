@@ -72,7 +72,10 @@ sequenceDiagram
    (click, type, scroll...) over the same WebSocket; the robot executes them and replies. This is the
    robot-side contract implemented by the test client in `scripts/recovery_ws_client/`.
 7. **Finish.** The gateway's structured response is sent to the robot in a `done` message with the
-   recovery id, and the inferred success is stored on the exception.
+   recovery id, and the inferred success is stored on the exception. `done` is sent only for a
+   recovery that was persisted and run; every other ending (an invalid payload, a server without a
+   gateway agent, an unexpected failure) is an `error` message with a machine-readable code, and the
+   socket is closed.
 8. **Report.** Once the robot (or its orchestrator) knows whether the process really continued, it
    reports the outcome through the report-result endpoint, authenticated with the same robot key.
 

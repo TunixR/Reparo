@@ -32,11 +32,23 @@ tracer = trace.get_tracer(__name__)
 ROBOT_KEY_HEADER = "X-ROBOT-KEY"
 
 
+INVALID_RECOVERY_PAYLOAD = "INVALID_RECOVERY_PAYLOAD"
+NO_GATEWAY_AGENT = "NO_GATEWAY_AGENT"
+INTERNAL_ERROR = "INTERNAL_ERROR"
+
+# Websocket close codes (RFC 6455): unsupported data / server error.
+CLOSE_INVALID_PAYLOAD = 1003
+CLOSE_SERVER_ERROR = 1011
+
+
 class RecoveryWsDomainError(Exception):
-    def __init__(self, code: str, content: str):
+    """A turn ending that is reported to the robot as an ``error`` message."""
+
+    def __init__(self, code: str, content: str, close_code: int):
         super().__init__(content)
         self.code = code
         self.content = content
+        self.close_code = close_code
 
 
 class RecoveryWsErrorResponse(TemplateModel):
@@ -67,15 +79,37 @@ def _get_gateway_agent(session: database.SessionDep):
     ).first()
 
 
-def _build_recovery_context_or_raise(data: dict[str, Any]):
+def _decode_payload_or_raise(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RecoveryWsDomainError(
+            code=INVALID_RECOVERY_PAYLOAD,
+            content=f"Recovery payload is not valid JSON: {exc.msg}",
+            close_code=CLOSE_INVALID_PAYLOAD,
+        ) from exc
+
+
+def _build_recovery_context_or_raise(data: Any):
     try:
         payload = RecoveryPayload.model_validate(data)
         return RecoveryContext.from_payload(payload=payload)
     except ValidationError as exc:
         raise RecoveryWsDomainError(
-            code="INVALID_RECOVERY_PAYLOAD",
+            code=INVALID_RECOVERY_PAYLOAD,
             content=str(exc),
+            close_code=CLOSE_INVALID_PAYLOAD,
         ) from exc
+
+
+async def _send_error_and_close(
+    websocket: WebSocket, code: str, content: str, close_code: int
+) -> None:
+    await websocket.send_json(
+        RecoveryWsErrorResponse(code=code, content=content).model_dump()
+    )
+    # The reason is capped at 123 bytes by the protocol; the code always fits.
+    await websocket.close(code=close_code, reason=code)
 
 
 def _persist_exception_with_context(
@@ -178,30 +212,28 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
                 return
 
         async def handle_exception():
-            # Will only accept one exception per connection. Read the raw text
-            # so the payload size is known without re-serializing it.
-            raw = await websocket.receive_text()
-            data = json.loads(raw)
-            turn.payload_received(raw, data)
-
-            agent = _get_gateway_agent(session)
-
-            if not agent:
-                turn.no_gateway_agent()
-                await websocket.send_json(
-                    {
-                        "type": "done",
-                        "content": "No GatewayAgent found in the database.",
-                    }
-                )
-                await websocket.close()
-                return
-
-            turn.agent_selected(agent.id)
-
+            # Every ending other than a finished gateway run is an ``error``
+            # message with a code; ``done`` means a recovery was instantiated.
             try:
+                # Will only accept one exception per connection. Read the raw
+                # text so the payload size is known without re-serializing it.
+                raw = await websocket.receive_text()
+                data = _decode_payload_or_raise(raw)
+                turn.payload_received(raw, data)
+
+                # Validate before looking up the gateway, so a malformed payload
+                # is reported as such even on a misconfigured server.
                 recovery_context = _build_recovery_context_or_raise(data)
                 turn.context_built(recovery_context)
+
+                agent = _get_gateway_agent(session)
+                if not agent:
+                    raise RecoveryWsDomainError(
+                        code=NO_GATEWAY_AGENT,
+                        content="No GatewayAgent found in the database.",
+                        close_code=CLOSE_SERVER_ERROR,
+                    )
+                turn.agent_selected(agent.id)
 
                 with turn.persisting():
                     exception = _persist_exception_with_context(
@@ -227,20 +259,21 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
             except WebSocketDisconnect:
                 turn.client_disconnected()
             except RecoveryWsDomainError as exc:
-                turn.invalid_payload(exc)
-                await websocket.send_json(
-                    RecoveryWsErrorResponse(
-                        code=exc.code,
-                        content=exc.content,
-                    ).model_dump()
+                if exc.code == NO_GATEWAY_AGENT:
+                    turn.no_gateway_agent()
+                else:
+                    turn.invalid_payload(exc)
+                await _send_error_and_close(
+                    websocket, exc.code, exc.content, exc.close_code
                 )
-                await websocket.close(code=1003, reason=exc.content)
             except Exception as exc:  # noqa: BLE001 - reported to the client and the span
                 turn.failed(exc)
-                await websocket.send_json(
-                    {"type": "error", "content": "Internal server error"}
+                await _send_error_and_close(
+                    websocket,
+                    INTERNAL_ERROR,
+                    "Internal server error",
+                    CLOSE_SERVER_ERROR,
                 )
-                await websocket.close()
 
         keep = asyncio.create_task(keep_alive())
         work = asyncio.create_task(handle_exception())

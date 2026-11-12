@@ -174,8 +174,14 @@ def test_turn_failure_logs_and_records_redacted_exception(
     ) as ws:
         ws.send_json(valid_recovery_payload)
         message = ws.receive_json()
+        closed = ws.receive()
 
-    assert message == {"type": "error", "content": "Internal server error"}
+    assert message == {
+        "type": "error",
+        "code": "INTERNAL_ERROR",
+        "content": "Internal server error",
+    }
+    assert closed["code"] == 1011
     events = _records_by_event(caplog)
     assert _extra(events["recovery.turn_failed"], "recovery.id")
     assert _extra(events["recovery.turn_failed"], "error.type") == "RuntimeError"
