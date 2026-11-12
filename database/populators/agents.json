@@ -10,6 +10,7 @@
       "agent_type": "GatewayAgent",
       "input_type": "TEXT",
       "enabled": true,
+      "reasoning_effort": "medium",
       "arguments": [
         {
           "name": "task_name",
@@ -69,6 +70,7 @@
       "agent_type": "ErrorAgent",
       "input_type": "TEXT",
       "enabled": true,
+      "reasoning_effort": "medium",
       "arguments": [
         {
           "name": "task_name",

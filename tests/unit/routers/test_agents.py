@@ -276,3 +276,61 @@ def test_agents_update_allows_compatible_router(
 
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["router_id"] == str(second_router.id)
+
+
+##############################
+# -- Reasoning effort
+##############################
+
+
+def test_agents_create_accepts_reasoning_effort(
+    session: Session, mock_admin: User, mock_router: Router, client: TestClient
+):
+    headers = make_auth_headers(mock_admin, session)
+    payload = make_agent_payload(mock_router.id)
+    payload.reasoning_effort = Agent.ReasoningEffort.XHIGH
+
+    response = client.post(
+        "/agents/", json=payload.model_dump(mode="json"), headers=headers
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["reasoning_effort"] == "xhigh"
+
+
+def test_agents_create_rejects_unknown_reasoning_effort(
+    session: Session, mock_admin: User, mock_router: Router, client: TestClient
+):
+    headers = make_auth_headers(mock_admin, session)
+    payload = make_agent_payload(mock_router.id).model_dump(mode="json")
+    payload["reasoning_effort"] = "extreme"
+
+    response = client.post("/agents/", json=payload, headers=headers)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_agents_patch_sets_and_clears_reasoning_effort(
+    session: Session, mock_admin: User, mock_agent: Agent, client: TestClient
+):
+    headers = make_auth_headers(mock_admin, session)
+
+    set_response = client.patch(
+        f"/agents/{mock_agent.id}",
+        json={"reasoning_effort": "medium"},
+        headers=headers,
+    )
+    untouched_response = client.patch(
+        f"/agents/{mock_agent.id}",
+        json={"name": "Renamed Agent"},
+        headers=headers,
+    )
+    cleared_response = client.patch(
+        f"/agents/{mock_agent.id}",
+        json={"reasoning_effort": None},
+        headers=headers,
+    )
+
+    assert set_response.json()["reasoning_effort"] == "medium"
+    assert untouched_response.json()["reasoning_effort"] == "medium"
+    assert cleared_response.json()["reasoning_effort"] is None

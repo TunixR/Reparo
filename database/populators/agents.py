@@ -120,6 +120,7 @@ def _create_agent(
     agent_type: AgentType,
     input_type: Agent.InputType = Agent.InputType.TEXT,
     enabled: bool = True,
+    reasoning_effort: Agent.ReasoningEffort | None = None,
 ) -> Agent:
     """Create and persist an Agent if it doesn't already exist."""
     existing = session.exec(select(Agent).where(Agent.name == name)).first()
@@ -133,6 +134,7 @@ def _create_agent(
         response_model=response_model,
         input_type=input_type,
         enabled=enabled,
+        reasoning_effort=reasoning_effort,
         router=router,
         type=agent_type,
         arguments=args,
@@ -202,6 +204,16 @@ def _resolve_input_type(value: str | None) -> Agent.InputType:
     return mapping.get(value.upper(), Agent.InputType.TEXT)
 
 
+def _resolve_reasoning_effort(value: str | None) -> Agent.ReasoningEffort | None:
+    """Resolve a configured reasoning effort, if any."""
+    if not value:
+        return None
+    try:
+        return Agent.ReasoningEffort(value.lower())
+    except ValueError as e:
+        raise ValueError(f"Unknown reasoning effort '{value}'.") from e
+
+
 def _resolve_agent_type(value: str) -> AgentType:
     mapping = {
         "GatewayAgent": AgentType.GatewayAgent,
@@ -231,6 +243,7 @@ def _load_json_config() -> dict[str, Any]:
           "agent_type": "GatewayAgent" | "ErrorAgent" | "GuiAgent",
           "input_type": "TEXT" | "IMAGETEXT",
           "enabled": true,
+          "reasoning_effort": "medium",  // optional, unset keeps the provider default
           "arguments": [
             {"name": "...", "description": "...", "type": "str", "json_type": "string"}
           ],
@@ -315,6 +328,7 @@ def populate_agents(engine: Engine) -> None:
             agent_type = _resolve_agent_type(item["agent_type"])
             input_type = _resolve_input_type(item.get("input_type"))
             enabled = bool(item.get("enabled", True))
+            reasoning_effort = _resolve_reasoning_effort(item.get("reasoning_effort"))
 
             args_list = []
             for arg in item.get("arguments", []):
@@ -338,6 +352,7 @@ def populate_agents(engine: Engine) -> None:
                 agent_type=agent_type,
                 input_type=input_type,
                 enabled=enabled,
+                reasoning_effort=reasoning_effort,
             )
 
             _sync_agent_arguments(session, agent, args_list)

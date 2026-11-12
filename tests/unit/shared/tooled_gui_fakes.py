@@ -63,9 +63,10 @@ def make_tooled_gui_agent(*turns: Turn) -> TooledGuiAgent:
         relative_dim=False,
         original_coords=lambda x, y, _w, _h: [x, y],
         model_name="scripted",
-        get_model=lambda: model,
     )
-    agent = SimpleNamespace(id=uuid4(), prompt="{instruction}", router=router)
+    agent = SimpleNamespace(
+        id=uuid4(), prompt="{instruction}", router=router, get_model=lambda: model
+    )
     return TooledGuiAgent(agent)  # pyright: ignore[reportArgumentType]
 
 

@@ -11,6 +11,7 @@ from sqlmodel import Enum, Field, Relationship, SQLModel
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
 from strands.hooks import HookProvider
+from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
 from strands.types.content import Messages
 
@@ -135,6 +136,15 @@ class Agent(SQLModel, table=True):
         TEXT = "TEXT"
         IMAGETEXT = "IMAGETEXT"
 
+    class ReasoningEffort(str, enum.Enum):
+        """Reasoning effort sent as ``reasoning_effort``; labels vary by model."""
+
+        MINIMAL = "minimal"
+        LOW = "low"
+        MEDIUM = "medium"
+        HIGH = "high"
+        XHIGH = "xhigh"
+
     id: uuid.UUID = Field(
         default_factory=uuid.uuid4,
         description="Unique identifier for the agent.",
@@ -160,6 +170,14 @@ class Agent(SQLModel, table=True):
     )
     enabled: bool = Field(
         True, description="Indicates whether the agent is enabled or not."
+    )
+    reasoning_effort: ReasoningEffort | None = Field(
+        default=None,
+        sa_column=Column(Enum(ReasoningEffort), nullable=True),
+        description=(
+            "Reasoning effort requested from reasoning models. Unset leaves the "
+            "provider default, which can be the highest effort."
+        ),
     )
 
     arguments: list["Argument"] = Relationship(
@@ -229,6 +247,19 @@ class Agent(SQLModel, table=True):
     def get_sub_agents(self) -> list["Agent"]:
         """Return the list of sub-agents associated with the agent."""
         return [sa.child_agent for sa in self.sub_agents if sa.child_agent.enabled]
+
+    def get_model_params(self) -> dict[str, Any]:
+        """Return the request parameters this agent sends to its router's model."""
+        params: dict[str, Any] = {}
+        if self.reasoning_effort is not None:
+            params["reasoning_effort"] = self.ReasoningEffort(
+                self.reasoning_effort
+            ).value
+        return params
+
+    def get_model(self) -> Model:
+        """Return the router's model configured with this agent's parameters."""
+        return self.router.get_model(**self.get_model_params())
 
     def get_tool_limiter(self) -> LimitToolCounts:
         """Return a tool limiter hook provider based on the agent's tool limits."""
@@ -396,6 +427,10 @@ class Agent(SQLModel, table=True):
             router_name=router.model_name,
         )
 
+        # An explicit null clears the effort back to the provider default.
+        if "reasoning_effort" in payload.model_fields_set:
+            data["reasoning_effort"] = payload.reasoning_effort
+
         for key, value in data.items():
             try:
                 setattr(self, key, value)
@@ -479,7 +514,7 @@ class Agent(SQLModel, table=True):
             },
         ]
 
-        model = self.router.get_model()
+        model = self.get_model()
 
         hooks = [self.get_tool_limiter(), *self.get_logging_hooks(invocation_state)]
 
@@ -569,6 +604,10 @@ class AgentCreate(SQLModel):
         description="The type of input the agent can process.",
     )
     enabled: bool = Field(default=True, description="Whether the agent is enabled.")
+    reasoning_effort: Agent.ReasoningEffort | None = Field(
+        default=None,
+        description="Reasoning effort for reasoning models; unset keeps the provider default.",
+    )
     router_id: uuid.UUID = Field(
         description="Foreign key to the router used by the agent."
     )
@@ -598,6 +637,10 @@ class AgentUpdate(SQLModel):
     )
     enabled: bool | None = Field(
         default=None, description="Whether the agent is enabled."
+    )
+    reasoning_effort: Agent.ReasoningEffort | None = Field(
+        default=None,
+        description="Reasoning effort for reasoning models; null clears it.",
     )
     router_id: uuid.UUID | None = Field(
         default=None, description="Foreign key to the router used by the agent."

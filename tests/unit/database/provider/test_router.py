@@ -133,3 +133,22 @@ def test_router_relative_dim_rejects_non_positive_dimensions(
 
     with pytest.raises(ValueError, match="positive"):
         router.relative_dim(0, 100)
+
+
+def test_router_get_model_sends_no_params_by_default(
+    make_router: Callable[..., Router],
+):
+    router = make_router()
+
+    assert router.get_model().get_config().get("params", {}) == {}
+
+
+def test_router_get_model_forwards_params(make_router: Callable[..., Router]):
+    router = make_router()
+
+    model = router.get_model(reasoning_effort="low", temperature=0.2)
+
+    assert model.get_config()["params"] == {
+        "reasoning_effort": "low",
+        "temperature": 0.2,
+    }
