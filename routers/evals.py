@@ -12,6 +12,7 @@ from strands import Agent as StrandsAgent
 import database.general as database
 from database.agents.models import Agent, AgentType
 from observability import attributes as attrs
+from observability.correlation import get_request_id
 from observability.events import error_type, log_event
 from observability.exceptions import record_exception
 from observability.instrumentation.genai import TracedOpenAIModel
@@ -189,6 +190,7 @@ async def handle_recovery_eval(
                     "type": "eval_result",
                     "content": result,
                     "exception_id": str(exception.id),
+                    "request_id": get_request_id(),
                 }
             )
             await websocket.close()
