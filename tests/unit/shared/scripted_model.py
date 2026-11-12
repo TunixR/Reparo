@@ -36,6 +36,7 @@ class ScriptedModel(Model):
         self._turns = list(turns)
         self._input_tokens, self._output_tokens = usage
         self.calls = 0
+        self.requests: list[Any] = []
 
     @override
     def update_config(self, **model_config: Any) -> None:
@@ -64,6 +65,7 @@ class ScriptedModel(Model):
         system_prompt: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[Any]:
+        self.requests.append(messages)
         turn = self._turns[min(self.calls, len(self._turns) - 1)]
         self.calls += 1
         if isinstance(turn, Exception):
