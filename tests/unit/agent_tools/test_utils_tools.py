@@ -182,8 +182,8 @@ def test_stores_a_task_inside_an_xor_branch_whose_ui_log_ids_differ():
     )
     assert state[CONTINUATION_STATE_KEY] == Continuation(
         process_finished=False,
-        model_event_id="click_reject",
-        loop_iteration=(),
+        continue_from_model_event_id="click_reject",
+        loop_iteration=[],
     )
 
 
@@ -202,7 +202,7 @@ def test_stores_both_passes_of_nested_loops():
         "each_approver (For each approver), each_request (For each request of the "
         "approver): each_approver pass 1, each_request pass 2."
     )
-    assert state[CONTINUATION_STATE_KEY].loop_iteration == (1, 2)
+    assert state[CONTINUATION_STATE_KEY].loop_iteration == [1, 2]
 
 
 def test_stores_the_passes_as_given_for_a_compact_model_of_unknown_depth():
@@ -219,8 +219,8 @@ def test_stores_the_passes_as_given_for_a_compact_model_of_unknown_depth():
     assert "can't be read from this model" in _text(result)
     assert state[CONTINUATION_STATE_KEY] == Continuation(
         process_finished=False,
-        model_event_id="click_approve",
-        loop_iteration=(2,),
+        continue_from_model_event_id="click_approve",
+        loop_iteration=[2],
     )
 
 
@@ -256,8 +256,8 @@ def test_stores_a_finished_process():
     assert result.tool_result["status"] == "success"
     assert state[CONTINUATION_STATE_KEY] == Continuation(
         process_finished=True,
-        model_event_id=None,
-        loop_iteration=(),
+        continue_from_model_event_id=None,
+        loop_iteration=[],
     )
 
 
@@ -276,7 +276,7 @@ def test_a_later_valid_call_replaces_a_rejected_one():
 
     assert rejected.tool_result["status"] == "error"
     assert accepted.tool_result["status"] == "success"
-    assert state[CONTINUATION_STATE_KEY].model_event_id == "click_approve"
+    assert state[CONTINUATION_STATE_KEY].continue_from_model_event_id == "click_approve"
 
 
 def test_fails_without_a_model_in_the_invocation_state():

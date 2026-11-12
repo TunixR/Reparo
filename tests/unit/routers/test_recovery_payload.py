@@ -50,8 +50,8 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         assert invocation_state is not None
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
-            model_event_id="click_submit",
-            loop_iteration=(),
+            continue_from_model_event_id="click_submit",
+            loop_iteration=[],
         )
         return {
             "success": True,

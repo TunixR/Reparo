@@ -83,8 +83,8 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
         assert invocation_state is not None
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
-            model_event_id="click_submit",
-            loop_iteration=(),
+            continue_from_model_event_id="click_submit",
+            loop_iteration=[],
         )
         return {"success": True}
 

@@ -21,7 +21,6 @@ from agent_tools.utils import (
     CONTINUATION_STATE_KEY,
     NO_CONTINUATION,
     PROCESS_MODEL_STATE_KEY,
-    continuation_fields,
     stored_continuation,
 )
 from database.agents.models import Agent, AgentType
@@ -158,7 +157,7 @@ def _build_answer(
     answer = ResponseToRPA(
         success=success,
         variables=invocation_state["variables"],
-        **continuation_fields(continuation),
+        **continuation.model_dump(),
     )
     return answer, failure_reason
 

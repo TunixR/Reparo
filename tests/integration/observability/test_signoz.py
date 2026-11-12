@@ -159,8 +159,8 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
         assert invocation_state is not None
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
-            model_event_id="click_submit",
-            loop_iteration=(),
+            continue_from_model_event_id="click_submit",
+            loop_iteration=[],
         )
         return {"success": True}
 
