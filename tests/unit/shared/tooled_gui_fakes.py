@@ -60,7 +60,7 @@ def make_tooled_gui_agent(*turns: Turn) -> TooledGuiAgent:
     """A GUI agent whose inner Strands model plays ``turns``."""
     model = ScriptedModel(*turns)
     router = SimpleNamespace(
-        relative_dim=False,
+        relative_dim=lambda h, w: [h, w],
         original_coords=lambda x, y, _w, _h: [x, y],
         model_name="scripted",
         get_model=lambda: model,

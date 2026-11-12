@@ -144,8 +144,7 @@ class TooledGuiAgent:
         """Left single click at the specified screen position.
 
         Args:
-            start_box: Bounding box [x1, y1, x2, y2] or point [x, y]. May be
-                absolute pixel coords (> 1.0) or normalized [0.0, 1.0].
+            start_box: Point [x, y] or box [x1, y1, x2, y2] in the coordinate space given in the instructions.
         """
         image_size: tuple[int, int] = tool_context.invocation_state["image_size"]
         box = self.original_coords(
@@ -168,8 +167,7 @@ class TooledGuiAgent:
         """Left double click at the specified screen position.
 
         Args:
-            start_box: Bounding box [x1, y1, x2, y2] or point [x, y]. May be
-                absolute pixel coords (> 1.0) or normalized [0.0, 1.0].
+            start_box: Point [x, y] or box [x1, y1, x2, y2] in the coordinate space given in the instructions.
         """
         image_size: tuple[int, int] = tool_context.invocation_state["image_size"]
         box = self.original_coords(
@@ -188,8 +186,7 @@ class TooledGuiAgent:
         """Right single click at the specified screen position.
 
         Args:
-            start_box: Bounding box [x1, y1, x2, y2] or point [x, y]. May be
-                absolute pixel coords (> 1.0) or normalized [0.0, 1.0].
+            start_box: Point [x, y] or box [x1, y1, x2, y2] in the coordinate space given in the instructions.
         """
         image_size: tuple[int, int] = tool_context.invocation_state["image_size"]
         box = self.original_coords(
@@ -212,8 +209,7 @@ class TooledGuiAgent:
         """Move the mouse to the specified screen position.
 
         Args:
-            start_box: Bounding box [x1, y1, x2, y2] or point [x, y]. May be
-                absolute pixel coords (> 1.0) or normalized [0.0, 1.0].
+            start_box: Point [x, y] or box [x1, y1, x2, y2] in the coordinate space given in the instructions.
         """
         image_size: tuple[int, int] = tool_context.invocation_state["image_size"]
         box = self.original_coords(
@@ -307,10 +303,8 @@ class TooledGuiAgent:
 
         Args:
             direction: One of 'up', 'down', 'left', 'right'.
-            start_box: Position [x1, y1, x2, y2] or [x, y]. Indicates the position of the scrollable area or scrollable element.
-                It needs to be precise, within the bounds of what is to be scrolled, either page, list of elements, or specific element.
-                May be absolute pixel coords
-                (> 1.0) or normalized [0.0, 1.0].
+            start_box: Point [x, y] or box [x1, y1, x2, y2] inside the area to scroll
+                (the page, a list, or a specific element), in the coordinate space given in the instructions.
         """
         action_inputs: dict[str, Any] = {"direction": direction}
         image_size: tuple[int, int] = tool_context.invocation_state["image_size"]
@@ -333,8 +327,8 @@ class TooledGuiAgent:
         """Click and drag between two screen positions.
 
         Args:
-            start_box: Drag origin [x1, y1, x2, y2] or [x, y]. May be absolute (> 1.0) or normalized.
-            end_box: Drag destination [x1, y1, x2, y2] or [x, y]. May be absolute (> 1.0) or normalized.
+            start_box: Drag origin as a point [x, y] or box [x1, y1, x2, y2] in the coordinate space given in the instructions.
+            end_box: Drag destination as a point [x, y] or box [x1, y1, x2, y2] in the coordinate space given in the instructions.
         """
         image_size: tuple[int, int] = tool_context.invocation_state["image_size"]
         s_box = self.original_coords(
@@ -377,8 +371,7 @@ class TooledGuiAgent:
         tool_context: ToolContext,
     ) -> str:
         """Mark the task as complete and persist the final GUI trace.
-        This should be called when the task is finished or when the number of actions exceeds 40.
-        This can also be called if you believe the task is unfullfillable.
+        Call it when the recovery goal is reached, or when it clearly cannot be reached.
 
         Args:
             content: Summary of what was accomplished.
@@ -496,14 +489,6 @@ class TooledGuiAgent:
         if "websocket" not in tool_context.invocation_state:
             raise ValueError("WebSocket must be provided in tool context")
 
-        instruction = f"""
-    Task: {task}
-    UI Log: {ui_log}
-    Errored Activity: {errored_act}
-    Variables: {variables}
-    Model Context: {model}
-    """
-
         websocket = tool_context.invocation_state["websocket"]
         # Enriches the Strands span of this tool call.
         telemetry = GuiTaskTelemetry(
@@ -524,6 +509,19 @@ class TooledGuiAgent:
             "current_image": image,
             "image_size": image_size,
         }
+
+        # Tools map coordinates back from this space (Router.original_coords).
+        width, height = image_size
+        model_height, model_width = self.relative_dim(height, width)
+        instruction = f"""
+    Task: {task}
+    UI Log: {ui_log}
+    Errored Activity: {errored_act}
+    Variables: {variables}
+    Model Context: {model}
+
+    IMPORTANT: Give coordinates in a {model_width}x{model_height} space: x from 0 to {model_width} (left to right), y from 0 to {model_height} (top to bottom).
+    """
 
         messages: Messages = [
             {
