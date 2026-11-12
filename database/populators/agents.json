@@ -50,7 +50,7 @@
         },
         {
           "name": "model",
-          "description": "Model-generated textual context for the recovery event.",
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
           "json_type": "string"
         }
@@ -110,7 +110,7 @@
         },
         {
           "name": "model",
-          "description": "Model-generated textual context for the recovery event.",
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
           "json_type": "string"
         }
@@ -333,7 +333,7 @@
         },
         {
           "name": "model",
-          "description": "Model-generated textual context for the recovery event.",
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
           "json_type": "string"
         }
