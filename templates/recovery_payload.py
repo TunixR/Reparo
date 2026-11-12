@@ -7,6 +7,28 @@ from pydantic import ConfigDict, Field, field_validator
 
 from templates.common import TemplateModel
 
+EVENT_ID_DESCRIPTION = (
+    "Occurrence id of this event in the run, counting up. A model event done "
+    "several times (e.g. in a loop) has a different event_id each time. It is "
+    "not a task id of `model`."
+)
+MODEL_EVENT_ID_DESCRIPTION = (
+    "Id of the task in `model` that this event performed (its model event id), "
+    "the same on every run and loop pass. It links the UI log to the process "
+    "model; event_name stays a free, human-readable name that may repeat within "
+    "a process."
+)
+
+
+def _normalize_optional_id(value: str | int | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return value if value.strip() else None
+    raise ValueError("optional id fields must be str, int, or null")
+
 
 class RecoveryUiLogEntry(TemplateModel):
     model_config = ConfigDict(extra="forbid")
@@ -14,8 +36,11 @@ class RecoveryUiLogEntry(TemplateModel):
     case_id: str
     activity_id: str | None
     activity_name: str | None
-    event_id: str
+    event_id: str = Field(description=EVENT_ID_DESCRIPTION)
     event_name: str | None
+    model_event_id: str | None = Field(
+        default=None, description=MODEL_EVENT_ID_DESCRIPTION
+    )
     action_type: str
     application: str | None
     input: str | None
@@ -34,18 +59,12 @@ class RecoveryUiLogEntry(TemplateModel):
             if not value.strip():
                 raise ValueError("id fields must be non-empty")
             return value
-        raise TypeError("id fields must be str or int")
+        raise ValueError("id fields must be str or int")
 
-    @field_validator("activity_id", mode="before")
+    @field_validator("activity_id", "model_event_id", mode="before")
     @classmethod
     def normalize_optional_id(cls, value: str | int | None) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str):
-            return value if value.strip() else None
-        raise TypeError("activity_id must be str, int, or null")
+        return _normalize_optional_id(value)
 
     @field_validator("timestamp")
     @classmethod
@@ -65,8 +84,11 @@ class RecoveryErroredAct(TemplateModel):
     case_id: str
     activity_id: str | None
     activity_name: str | None
-    event_id: str
+    event_id: str = Field(description=EVENT_ID_DESCRIPTION)
     event_name: str | None
+    model_event_id: str | None = Field(
+        default=None, description=MODEL_EVENT_ID_DESCRIPTION
+    )
     action_type: str
     application: str | None
     input: str | None
@@ -82,30 +104,41 @@ class RecoveryErroredAct(TemplateModel):
             if not value.strip():
                 raise ValueError("id fields must be non-empty")
             return value
-        raise TypeError("id fields must be str or int")
+        raise ValueError("id fields must be str or int")
 
-    @field_validator("activity_id", mode="before")
+    @field_validator("activity_id", "model_event_id", mode="before")
     @classmethod
     def normalize_optional_id(cls, value: str | int | None) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str):
-            return value if value.strip() else None
-        raise TypeError("activity_id must be str, int, or null")
+        return _normalize_optional_id(value)
 
 
 class RecoveryPayload(TemplateModel):
+    """The one message a robot sends to start a recovery.
+
+    `model` is the process model; its task ids are model event ids. UI log
+    entries and the errored activity name the task they performed through
+    `model_event_id`, while their `event_id` only identifies the occurrence in
+    this run.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     task_name: str
     platform: str
     os: str
     variables: dict[str, Any] = Field(default_factory=dict)
-    ui_log: list[RecoveryUiLogEntry]
-    errored_act: RecoveryErroredAct
-    model: str
+    ui_log: list[RecoveryUiLogEntry] = Field(
+        description="Events the robot performed before the failure, oldest "
+        "first. The errored event is not repeated here."
+    )
+    errored_act: RecoveryErroredAct = Field(
+        description="The event that failed, with its error."
+    )
+    model: str = Field(
+        description="The process model, in BPMN 2.0 XML or another textual "
+        "format (e.g. an indented outline). Its task ids are the model event ids "
+        "that `model_event_id` refers to."
+    )
 
     @field_validator("model")
     @classmethod

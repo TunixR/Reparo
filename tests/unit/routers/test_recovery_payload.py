@@ -80,10 +80,12 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     assert len(recovery_context.ui_log_entries) == 1
     assert recovery_context.ui_log_entries[0].activity_id is None
     assert recovery_context.ui_log_entries[0].event_name == "Type invoice id"
+    assert recovery_context.ui_log_entries[0].model_event_id == "type_invoice_id"
     assert recovery_context.errored_activity is not None
     assert recovery_context.errored_activity.activity_id is None
     assert recovery_context.errored_activity.event_name is None
     assert recovery_context.errored_activity.error_code == "E500"
+    assert recovery_context.errored_activity.model_event_id == "click_submit"
 
     assert isinstance(captured_from_payload["payload"], RecoveryPayload)
     assert captured_from_payload["payload"].model_dump() == valid_recovery_payload
@@ -111,6 +113,7 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     assert ui_log[0]["event_name"] == "Type invoice id"
     assert ui_log[0]["case_id"] == valid_recovery_payload["ui_log"][0]["case_id"]
     assert ui_log[0]["event_id"] == valid_recovery_payload["ui_log"][0]["event_id"]
+    assert ui_log[0]["model_event_id"] == "type_invoice_id"
     # Check that all id fields are strings
     assert isinstance(ui_log[0]["case_id"], str)
     assert isinstance(ui_log[0]["event_id"], str)
@@ -121,6 +124,8 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     assert errored_act["event_name"] is None  # fixture has event_name as None
     assert errored_act["case_id"] == valid_recovery_payload["errored_act"]["case_id"]
     assert errored_act["event_id"] == valid_recovery_payload["errored_act"]["event_id"]
+    assert errored_act["model_event_id"] == "click_submit"
+    assert errored_act["activity_name"] == "Click Submit"
     # Check that all id fields are strings
     assert isinstance(errored_act["case_id"], str)
     assert isinstance(errored_act["event_id"], str)

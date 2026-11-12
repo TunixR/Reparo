@@ -158,3 +158,41 @@ def test_payload_requires_model():
 
     with pytest.raises(ValidationError):
         _ = RecoveryPayload.model_validate(payload)
+
+
+def test_payload_model_event_id_is_optional():
+    parsed = RecoveryPayload.model_validate(_valid_payload())
+
+    assert parsed.ui_log[0].model_event_id is None
+    assert parsed.errored_act.model_event_id is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("click_submit", "click_submit"), (7, "7"), ("   ", None), (None, None)],
+)
+def test_payload_normalizes_model_event_id(raw: object, expected: str | None):
+    payload = _valid_payload()
+    payload["ui_log"][0]["model_event_id"] = raw
+    payload["errored_act"]["model_event_id"] = raw
+
+    parsed = RecoveryPayload.model_validate(payload)
+
+    assert parsed.ui_log[0].model_event_id == expected
+    assert parsed.errored_act.model_event_id == expected
+
+
+def test_payload_rejects_non_scalar_model_event_id():
+    payload = _valid_payload()
+    payload["errored_act"]["model_event_id"] = ["click_submit"]
+
+    with pytest.raises(ValidationError):
+        _ = RecoveryPayload.model_validate(payload)
+
+
+def test_payload_rejects_non_scalar_event_id():
+    payload = _valid_payload()
+    payload["ui_log"][0]["event_id"] = {"id": 1}
+
+    with pytest.raises(ValidationError):
+        _ = RecoveryPayload.model_validate(payload)

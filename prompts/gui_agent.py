@@ -171,7 +171,7 @@ Call context fields are simple and include:
 2. `variables`: process variables and known runtime values
 3. `ui_log`: ordered recent UI execution history
 4. `errored_act`: structured failed action details
-5. `model`: model-generated textual context for failure and continuation intent
+5. `model`: the process model, in BPMN XML or another textual format, whose task ids are model event ids (`model_event_id` in `ui_log` and `errored_act`)
 
 Use `errored_act` as the primary failure anchor and `ui_log` as the short-term execution timeline.
 

@@ -1,3 +1,4 @@
+from prompts.process_model import MODEL_EVENT_GUIDANCE
 from settings import UI_ERROR_PLANNING, UI_MID_AGENT
 
 UI_EXCEPTION_HANDLER = f"""
@@ -11,7 +12,7 @@ You will be given:
 4. `variables`: process variables and known runtime values
 5. `ui_log`: ordered list of recent UI activities before the failure
 6. `errored_act`: structured details for the failed activity
-7. `model`: model-generated textual context for the failure and recovery intent
+7. `model`: the process model, in BPMN XML or another textual format (e.g. an indented outline), whose task ids are model event ids
 
 Use `errored_act` as the primary failure anchor and `ui_log` as the ordered execution timeline leading to it.
 
@@ -28,6 +29,8 @@ Interpretation details for recovery attributes:
 - `errored_act.input`: intended data to enter or use.
 - `errored_act.error_code` / `errored_act.error_description`: likely technical failure class.
 - `ui_log`: immediate path history for identifying state drift and interruption causes.
+
+{MODEL_EVENT_GUIDANCE}
 
 Critical execution policy:
 - The original process path already failed and may no longer be valid. Take that into consideration when constructing the task for the recovery agent.
@@ -82,7 +85,7 @@ Your final report, after executing all steps, should include the following:
 """
 
 
-TASK_INFERENCE_ONLY = """
+TASK_INFERENCE_ONLY = f"""
 You are a specialized AI agent designed to recover robotic process automation (RPA) workflows that have failed.
 Your role is to analyze the current state, understand what went wrong, and generate a task that will get the process back on track.
 
@@ -93,7 +96,7 @@ You will be given:
 4. `variables`: process variables and known runtime values
 5. `ui_log`: ordered list of recent UI activities before the failure
 6. `errored_act`: structured details for the failed activity
-7. `model`: model-generated textual context for the failure and recovery intent
+7. `model`: the process model, in BPMN XML or another textual format (e.g. an indented outline), whose task ids are model event ids
 
 Use `errored_act` as the primary failure anchor and `ui_log` as the ordered execution timeline leading to it.
 
@@ -110,6 +113,8 @@ Interpretation details for recovery attributes:
 - `errored_act.input`: intended data to enter or use.
 - `errored_act.error_code` / `errored_act.error_description`: likely technical failure class.
 - `ui_log`: immediate path history for identifying state drift and interruption causes.
+
+{MODEL_EVENT_GUIDANCE}
 
 Critical execution policy:
 - The original process path already failed and may no longer be valid. Take that into consideration when constructing the task for the recovery agent.

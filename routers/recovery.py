@@ -147,6 +147,7 @@ async def _invoke_gateway_agent(
             "activity_name": entry.activity_name,
             "event_id": entry.event_id,
             "event_name": entry.event_name,
+            "model_event_id": entry.model_event_id,
             "action_type": entry.action_type,
             "application": entry.application,
             "input": entry.input,
@@ -165,8 +166,10 @@ async def _invoke_gateway_agent(
         errored_act = {
             "case_id": act.case_id,
             "activity_id": act.activity_id,
+            "activity_name": act.activity_name,
             "event_id": act.event_id,
             "event_name": act.event_name,
+            "model_event_id": act.model_event_id,
             "action_type": act.action_type,
             "application": act.application,
             "input": act.input,
