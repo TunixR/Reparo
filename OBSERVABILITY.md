@@ -163,7 +163,7 @@ the model's text, so its `gui.action` and `gui.screenshot` spans sit directly un
 | `gui.action` | `gui.action.iteration`, `gui.action.type`, `gui.action.success`; failed actions carry a redacted exception without the action inputs. In `TooledGuiAgent` a failed action is returned to the model as a tool error, so it does not end the task |
 | `gui.screenshot` | `gui.screenshot.width`, `gui.screenshot.height`, `gui.screenshot.size` |
 | `POST /recovery/report_result/{recovery_id}` | `recovery.id`, `robot_key.id`, `recovery.success` |
-| `recovery.eval` (`/evals/recovery/eval/ws`) | `robot_key.id`, `agent.id`; unexpected failures carry a redacted exception |
+| `recovery.eval` (`/evals/recovery/ws`) | `robot_key.id`, `agent.id`, and the answer as on `recovery.turn`: `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` with its span event; unexpected failures carry a redacted exception |
 
 Log events:
 
