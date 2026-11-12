@@ -52,7 +52,6 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
             process_finished=False,
             model_event_id="click_submit",
             loop_iteration=(),
-            loop_depth_checked=False,
         )
         return {
             "success": True,
@@ -112,7 +111,6 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         captured_invocation["invocation_state"]["robot_exception_id"]
         == robot_exception.id
     )
-    # The GUI agents start from a copy of the payload variables, owned by code.
     state_variables = captured_invocation["invocation_state"]["variables"]
     assert state_variables == valid_recovery_payload["variables"]
     assert state_variables is not recovery_context.variables

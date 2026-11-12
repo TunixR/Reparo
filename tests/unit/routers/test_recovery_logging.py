@@ -80,13 +80,11 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
         invocation_state: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        # What set_continuation stores once the error agent names a valid task.
         assert invocation_state is not None
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
             model_event_id="click_submit",
             loop_iteration=(),
-            loop_depth_checked=False,
         )
         return {"success": True}
 

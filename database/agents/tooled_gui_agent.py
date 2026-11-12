@@ -490,8 +490,6 @@ class TooledGuiAgent:
             raise ValueError("WebSocket must be provided in tool context")
 
         websocket = tool_context.invocation_state["websocket"]
-        # Start from the variables the router owns, not the copy the calling LLM
-        # passed: alter_variable mutates this dict and the router sends it back.
         state_variables = tool_context.invocation_state.get("variables")
         if isinstance(state_variables, dict):
             variables = state_variables  # pyright: ignore[reportUnknownVariableType]

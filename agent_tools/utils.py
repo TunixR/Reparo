@@ -2,6 +2,7 @@ from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
+from opentelemetry import trace
 from pydantic import ValidationError
 from pydantic_core import InitErrorDetails
 from strands import ToolContext, tool
@@ -13,19 +14,11 @@ from agent_tools.process_model import (
     describe_model_event,
     enclosing_loops,
 )
+from observability import attributes as attrs
 
 CONTINUATION_STATE_KEY = "continuation"
 # Not "model": Strands puts its own Model object under that key of the state.
 PROCESS_MODEL_STATE_KEY = "process_model"
-
-# Sent back to an agent that reports success without a stored continuation.
-CONTINUATION_REMINDER = (
-    "You reported a successful recovery but haven't set where the robot continues. "
-    "Call `set_continuation` now: with process_finished true if the recovery completed "
-    "the rest of the process, otherwise with the model event id of the task in `model` "
-    "the robot runs next and one 0-based pass per enclosing loop. If it rejects the "
-    "continuation, correct it as its error says and call it again until it returns ok."
-)
 
 
 @dataclass(frozen=True)
@@ -38,31 +31,26 @@ class Continuation:
             when the process is finished.
         loop_iteration: 0-based passes of the loops enclosing that task,
             outermost first.
-        loop_depth_checked: Whether the length of `loop_iteration` was checked
-            against the model. It isn't when the model is not BPMN or its loops
-            can't be read.
     """
 
     process_finished: bool
     model_event_id: str | None
     loop_iteration: tuple[int, ...]
-    loop_depth_checked: bool
 
 
-def stored_continuation(state: MutableMapping[str, Any]) -> Continuation | None:
-    """The continuation `set_continuation` stored in an invocation state, if any."""
+NO_CONTINUATION = Continuation(
+    process_finished=False, model_event_id=None, loop_iteration=()
+)
+
+
+def stored_continuation(state: MutableMapping[str, Any]) -> Continuation:
+    """The continuation in an invocation state; `NO_CONTINUATION` if none was set."""
     continuation = state.get(CONTINUATION_STATE_KEY)
-    return continuation if isinstance(continuation, Continuation) else None
+    return continuation if isinstance(continuation, Continuation) else NO_CONTINUATION
 
 
-def continuation_fields(continuation: Continuation | None) -> dict[str, Any]:
-    """The answer fields for a continuation; `None` is the "no continuation" answer."""
-    if continuation is None:
-        return {
-            "process_finished": False,
-            "continue_from_model_event_id": None,
-            "loop_iteration": [],
-        }
+def continuation_fields(continuation: Continuation) -> dict[str, Any]:
+    """The answer fields of a continuation."""
     return {
         "process_finished": continuation.process_finished,
         "continue_from_model_event_id": continuation.model_event_id,
@@ -117,7 +105,6 @@ def set_continuation(
             process_finished=True,
             model_event_id=None,
             loop_iteration=(),
-            loop_depth_checked=True,
         )
         return "ok: the process is finished; the robot has nothing left to run."
 
@@ -164,8 +151,9 @@ def set_continuation(
         process_finished=False,
         model_event_id=model_event_id,
         loop_iteration=tuple(loop_iteration),
-        loop_depth_checked=loops is not None,
     )
+    if loops is None:
+        trace.get_current_span().add_event(attrs.EVENT_LOOP_DEPTH_UNCHECKED)
 
     event = describe_model_event(model, model_event_id)
     target = (

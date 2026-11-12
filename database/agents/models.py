@@ -15,15 +15,13 @@ from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
 from strands.types.content import Messages
 
-from agent_tools.hooks import AgentLoggingHook, LimitToolCounts, ToolLoggingHook
-from agent_tools.image import screenshot_bytes
-from agent_tools.utils import (
-    CONTINUATION_REMINDER,
-    CONTINUATION_STATE_KEY,
-    continuation_fields,
-    set_continuation,
-    stored_continuation,
+from agent_tools.hooks import (
+    AgentLoggingHook,
+    LimitToolCounts,
+    RequireToolCalls,
+    ToolLoggingHook,
 )
+from agent_tools.image import screenshot_bytes
 from database.agents.tooled_gui_agent import TooledGuiAgent
 from database.provider.models import Router
 from database.tools.models import Tool
@@ -31,11 +29,6 @@ from observability import attributes as attrs
 from observability.events import log_event
 
 logger = logging.getLogger(__name__)
-
-# How many times an agent that reports success without a stored continuation is
-# sent back to call `set_continuation`. Past this, the router's safety net reports
-# the recovery as failed (`missing_continuation`).
-MAX_CONTINUATION_REMINDERS = 3
 
 
 class Argument(SQLModel, table=True):
@@ -284,6 +277,10 @@ class Agent(SQLModel, table=True):
                 tool_limits[sa.child_agent.get_tool_name()] = sa.limit
         return LimitToolCounts(tool_limits)
 
+    def get_required_tools_hook(self) -> RequireToolCalls:
+        """Return a hook that sends the agent back until its required tools are called."""
+        return RequireToolCalls([at.tool.name for at in self.tools if at.required])
+
     def get_logging_hooks(self, invocation_state: dict[str, Any]) -> list[HookProvider]:
         agent_logging_hook = AgentLoggingHook(
             agent_id=self.id,
@@ -528,7 +525,11 @@ class Agent(SQLModel, table=True):
 
         model = self.get_model()
 
-        hooks = [self.get_tool_limiter(), *self.get_logging_hooks(invocation_state)]
+        hooks = [
+            self.get_tool_limiter(),
+            self.get_required_tools_hook(),
+            *self.get_logging_hooks(invocation_state),
+        ]
 
         strands_agent = StrandsAgent(
             model=model,
@@ -538,14 +539,16 @@ class Agent(SQLModel, table=True):
             messages=messages,  # type: ignore This works fine
         )
 
-        # An agent that names the continuation must store a fresh one in this run.
-        names_continuation = any(
-            t.tool_name == set_continuation.tool_name for t in tools
-        )
-        if names_continuation:
-            _ = invocation_state.pop(CONTINUATION_STATE_KEY, None)
+        try:
+            instruction = "\n".join(
+                [f"{arg.name}: {kwargs.get(arg.name)}" for arg in self.arguments]
+            )
 
-        async def report() -> dict[str, Any]:
+            _ = await strands_agent.invoke_async(
+                instruction,
+                invocation_state=invocation_state,
+            )
+
             response: BaseModel | None = (
                 await strands_agent.invoke_async(
                     "Given our conversation so far, please provide a report using structured output with the given tool.",
@@ -557,39 +560,6 @@ class Agent(SQLModel, table=True):
             if response is None:
                 raise ValueError("Agent did not return a structured response.")
             return response.model_dump()
-
-        try:
-            instruction = "\n".join(
-                [f"{arg.name}: {kwargs.get(arg.name)}" for arg in self.arguments]
-            )
-
-            _ = await strands_agent.invoke_async(
-                instruction,
-                invocation_state=invocation_state,
-            )
-            result = await report()
-            if not names_continuation:
-                return result
-
-            # A successful recovery can't end without a validated continuation:
-            # send the agent back, in the same conversation, until it stores one.
-            reminders = 0
-            while (
-                result.get("success") is True
-                and stored_continuation(invocation_state) is None
-                and reminders < MAX_CONTINUATION_REMINDERS
-            ):
-                reminders += 1
-                _ = await strands_agent.invoke_async(
-                    CONTINUATION_REMINDER, invocation_state=invocation_state
-                )
-                result = await report()
-
-            if result.get("success") is not True:
-                # A failed recovery leaves no continuation behind.
-                _ = invocation_state.pop(CONTINUATION_STATE_KEY, None)
-            # The report carries the validated continuation, not the LLM's wording.
-            return result | continuation_fields(stored_continuation(invocation_state))
         finally:
             # Every AgentResult.metrics is this same object; accumulated_usage sums
             # both invocations above, including tokens spent before a failure.

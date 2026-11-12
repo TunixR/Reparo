@@ -1,8 +1,8 @@
 """The answer sent in ``done``: a validated continuation, and variables from code.
 
 The gateway and error agents are real ``Agent`` rows run by real Strands agents
-over scripted models, so ``set_continuation``, the invocation state and the
-"no finishing without a continuation" rule run as they do in production.
+over scripted models, so ``set_continuation``, its required-tool reminders and the
+invocation state run as they do in production.
 """
 
 from __future__ import annotations
@@ -19,9 +19,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from sqlmodel import Session, select
 
 import routers.recovery as recovery_module
-from agent_tools.utils import CONTINUATION_REMINDER, CONTINUATION_STATE_KEY
+from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
 from database.agents.models import (
-    MAX_CONTINUATION_REMINDERS,
     Agent,
     AgentTool,
     AgentType,
@@ -156,7 +155,7 @@ def agents(session: Session, mock_router: Router) -> tuple[Agent, Agent]:
     session.add_all(
         [
             AgentTool(
-                agent_id=error_agent.id, tool_id=tool.id, limit=None, required=False
+                agent_id=error_agent.id, tool_id=tool.id, limit=None, required=True
             ),
             SubAgent(
                 parent_agent_id=gateway.id, child_agent_id=error_agent.id, limit=None
@@ -187,7 +186,6 @@ def script(
         # Agent traces are written through the production engine; not under test.
         monkeypatch.setattr(Agent, "get_logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
         monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
-        # The router passes every payload field; these agents declare only one.
         monkeypatch.setattr(Agent, "validate_input", lambda self, *a, **k: None)  # pyright: ignore[reportUnknownLambdaType]
         return models
 
@@ -241,7 +239,6 @@ def test_invalid_continuation_is_corrected_inside_the_agent_loop(
         gateway_turns=[
             _call_error_agent(),
             "Routed.",
-            # The gateway's own wording of the continuation is ignored.
             _gateway_report(True, continue_from_model_event_id="8"),
         ],
         error_turns=[
@@ -274,7 +271,6 @@ def test_invalid_continuation_is_corrected_inside_the_agent_loop(
     assert turn.attributes["recovery.continue_from_model_event_id"] == "click_approve"
     assert turn.attributes["recovery.loop_iteration"] == (2,)
     assert "recovery.failure_reason" not in turn.attributes
-    assert not [e for e in turn.events if e.name == "loop_depth_unchecked"]
 
 
 def test_success_without_continuation_is_sent_back_to_set_it(
@@ -287,8 +283,6 @@ def test_success_without_continuation_is_sent_back_to_set_it(
         gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(True)],
         error_turns=[
             "Recovered.",
-            _report(True),
-            # After the reminder.
             _continuation(None, [], process_finished=True),
             "Continuation set.",
             _report(True),
@@ -306,12 +300,12 @@ def test_success_without_continuation_is_sent_back_to_set_it(
     }
     prompts = [
         block.get("text")
-        for request in models["UI Exception Handler"].requests
-        for msg in request
+        for msg in models["UI Exception Handler"].requests[-1]
         if msg["role"] == "user"
         for block in msg["content"]
     ]
-    assert CONTINUATION_REMINDER in prompts
+    reminders = [p for p in prompts if p and "`set_continuation`" in p]
+    assert len(reminders) == 1
 
 
 def test_missing_continuation_is_sent_as_a_failure(
@@ -322,17 +316,12 @@ def test_missing_continuation_is_sent_as_a_failure(
     script: Callable[..., dict[str, ScriptedModel]],
     span_exporter: InMemorySpanExporter,
 ):
-    # The error agent never calls the tool, however often it is reminded.
     models = script(
         gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(True)],
         error_turns=[
             "Recovered.",
+            *["Still recovered."] * MAX_REQUIRED_TOOL_REMINDERS,
             _report(True),
-            *[
-                turn
-                for _ in range(MAX_CONTINUATION_REMINDERS)
-                for turn in ("Still recovered.", _report(True))
-            ],
         ],
     )
 
@@ -355,9 +344,7 @@ def test_missing_continuation_is_sent_as_a_failure(
     assert turn.attributes["recovery.failure_reason"] == "missing_continuation"
     assert turn.attributes["recovery.success"] is False
     assert [e.name for e in turn.events].count("missing_continuation") == 1
-    # Reminded up to the limit, then given up on: instruction, report, then
-    # one reminder and one report per round.
-    assert models["UI Exception Handler"].calls == 2 + 2 * MAX_CONTINUATION_REMINDERS
+    assert models["UI Exception Handler"].calls == 1 + MAX_REQUIRED_TOOL_REMINDERS + 1
 
 
 def test_reported_failure_drops_a_stored_continuation(
@@ -382,12 +369,11 @@ def test_reported_failure_drops_a_stored_continuation(
     assert message["content"]["loop_iteration"] == []
 
 
-def test_unchecked_loop_depth_is_sent_as_given_and_traced(
+def test_unchecked_loop_depth_is_sent_as_given(
     client: TestClient,
     robot_key_raw: str,
     valid_recovery_payload: dict[str, Any],
     script: Callable[..., dict[str, ScriptedModel]],
-    span_exporter: InMemorySpanExporter,
 ):
     payload: dict[str, Any] = valid_recovery_payload | {"model": COMPACT_MODEL}
     _ = script(
@@ -404,8 +390,6 @@ def test_unchecked_loop_depth_is_sent_as_given_and_traced(
     assert message["content"]["success"] is True
     assert message["content"]["continue_from_model_event_id"] == "click_approve"
     assert message["content"]["loop_iteration"] == [1, 2]
-    turn = _turn(span_exporter)
-    assert [e.name for e in turn.events].count("loop_depth_unchecked") == 1
 
 
 def test_variables_come_from_code_not_from_the_llm(
@@ -420,11 +404,8 @@ def test_variables_come_from_code_not_from_the_llm(
         _self: Agent, invocation_state: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         assert invocation_state is not None
-        # What alter_variable does to the dict the GUI agents start from...
         invocation_state["variables"]["retry"] = 2
-        # ...while the gateway LLM's own copy is irrelevant.
         kwargs["variables"]["invoice_id"] = "HALLUCINATED"
-        invocation_state[CONTINUATION_STATE_KEY] = None
         return {"success": False, "variables": {"invented": True}}
 
     monkeypatch.setattr(Agent, "__call__", _fake_call)
@@ -432,7 +413,6 @@ def test_variables_come_from_code_not_from_the_llm(
     message = _recover(client, robot_key_raw, valid_recovery_payload)
 
     assert message["content"]["variables"] == {"invoice_id": "INV-100", "retry": 2}
-    # The stored payload is untouched.
     stored = session.exec(select(RobotException)).one()
     assert stored.exception_details["variables"] == {
         "invoice_id": "INV-100",

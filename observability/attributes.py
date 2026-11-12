@@ -86,9 +86,8 @@ EVENT_RECOVERY_NO_GATEWAY_AGENT = "recovery.no_gateway_agent"
 EVENT_RECOVERY_PAYLOAD_INVALID = "recovery.payload_invalid"
 EVENT_RECOVERY_TURN_FAILED = "recovery.turn_failed"
 EVENT_RECOVERY_EVAL_INVALID = "recovery.eval_invalid"
-# Span events on recovery.turn (not log events).
-EVENT_RECOVERY_LOOP_DEPTH_UNCHECKED = "loop_depth_unchecked"
 EVENT_RECOVERY_MISSING_CONTINUATION = "missing_continuation"
+EVENT_LOOP_DEPTH_UNCHECKED = "loop_depth_unchecked"
 
 EVENT_GUI_ACTION_RETRY = "gui.action_retry"
 EVENT_GUI_MAX_ACTIONS_EXCEEDED = "gui.max_actions_exceeded"

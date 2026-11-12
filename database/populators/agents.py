@@ -72,17 +72,24 @@ def _attach_tools(
     agent: Agent,
     tool_names: list[str],
     limits: list[int | None] | None = None,
+    required: list[bool] | None = None,
 ) -> None:
     """
     Attach tools (by name) to an Agent via AgentTool association.
     Skips missing tools but logs a warning.
-    When limits are provided, they must match the number of tools; each tool gets its corresponding limit.
+    When limits or required flags are provided, they must match the number of tools;
+    each tool gets its corresponding value.
     """
 
     if limits is not None and len(tool_names) != len(limits):
         raise ValueError(
             f"[populate_agents] Tools/limits length mismatch for agent '{agent.name}': \
             {len(tool_names)} tools vs {len(limits)} limits."
+        )
+    if required is not None and len(tool_names) != len(required):
+        raise ValueError(
+            f"[populate_agents] Tools/required length mismatch for agent '{agent.name}': "
+            f"{len(tool_names)} tools vs {len(required)} required flags."
         )
 
     for idx, tool_name in enumerate(tool_names):
@@ -104,7 +111,7 @@ def _attach_tools(
                 tool=tool,
                 tool_id=tool.id,
                 limit=(limits[idx] if limits is not None else None),
-                required=False,
+                required=(required[idx] if required is not None else False),
             )
         )
 
@@ -247,7 +254,7 @@ def _load_json_config() -> dict[str, Any]:
           "arguments": [
             {"name": "...", "description": "...", "type": "str", "json_type": "string"}
           ],
-          "tools": {"names": ["take_screenshot"], "limits": [null]}
+          "tools": {"names": ["take_screenshot"], "limits": [null], "required": [false]}
           }
         ],
       "sub_agents": [
@@ -362,8 +369,9 @@ def populate_agents(engine: Engine) -> None:
             tools_cfg = item.get("tools", {})
             tool_names = tools_cfg.get("names", []) or []
             tool_limits = tools_cfg.get("limits", None)
+            tool_required = tools_cfg.get("required", None)
             if tool_names:
-                _attach_tools(session, agent, tool_names, tool_limits)
+                _attach_tools(session, agent, tool_names, tool_limits, tool_required)
         # Sub-agent relationships
         for rel in subs_cfg:
             parent_name = rel["parent"]

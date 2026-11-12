@@ -51,8 +51,7 @@ You are given a series of error recovery modules, made of AI Agents, each with s
    - Capability match score
    - Environment Restrictions
 
-5. **Result**: The module will return a structured response indicating the outcome, you must then report it.
-   Pass `success`, `process_finished`, `continue_from_model_event_id` and `loop_iteration` through unchanged, exactly as the module reported them: never compute, renumber or guess them. If no module recovered the process, report `success` false, `process_finished` false, `continue_from_model_event_id` null and `loop_iteration` [].
+5. **Result**: The module will return a structured response indicating the outcome, you must then report it
 
 ## Input Processing Guidelines:
 

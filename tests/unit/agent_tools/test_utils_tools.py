@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from pydantic import ValidationError
 from strands.types.events import ToolResultEvent
 
@@ -183,7 +184,6 @@ def test_stores_a_task_inside_an_xor_branch_whose_ui_log_ids_differ():
         process_finished=False,
         model_event_id="click_reject",
         loop_iteration=(),
-        loop_depth_checked=True,
     )
 
 
@@ -221,8 +221,29 @@ def test_stores_the_passes_as_given_for_a_compact_model_of_unknown_depth():
         process_finished=False,
         model_event_id="click_approve",
         loop_iteration=(2,),
-        loop_depth_checked=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("model", "loop_iteration", "unchecked"),
+    [(COMPACT_MODEL, [2], True), (SPENDING_APPROVAL_MODEL, [2], False)],
+)
+def test_traces_an_unchecked_loop_depth_on_the_tool_span(
+    model: str, loop_iteration: list[int], unchecked: bool
+):
+    tracer = TracerProvider().get_tracer("tests.set_continuation")
+
+    with tracer.start_as_current_span("execute_tool set_continuation") as span:
+        _ = _call(
+            _state(model),
+            process_finished=False,
+            model_event_id="click_approve",
+            loop_iteration=loop_iteration,
+        )
+
+    assert isinstance(span, ReadableSpan)
+    events = [event.name for event in span.events]
+    assert ("loop_depth_unchecked" in events) is unchecked
 
 
 def test_stores_a_finished_process():
@@ -237,7 +258,6 @@ def test_stores_a_finished_process():
         process_finished=True,
         model_event_id=None,
         loop_iteration=(),
-        loop_depth_checked=True,
     )
 
 

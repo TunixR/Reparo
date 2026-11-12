@@ -18,6 +18,8 @@ from sqlmodel import select
 
 import database.general as database
 from agent_tools.utils import (
+    CONTINUATION_STATE_KEY,
+    NO_CONTINUATION,
     PROCESS_MODEL_STATE_KEY,
     continuation_fields,
     stored_continuation,
@@ -29,7 +31,7 @@ from observability import attributes as attrs
 from observability.instrumentation import recovery as telemetry
 from security.utils import robot_key_hash
 from templates.common import TemplateModel
-from templates.gateway import RecoveryAnswer
+from templates.gateway import ResponseToRPA
 from templates.recovery_payload import RecoveryPayload
 
 router = APIRouter(prefix="/recovery")
@@ -138,32 +140,27 @@ def _persist_exception_with_context(
 
 def _build_answer(
     response: dict[str, Any], invocation_state: dict[str, Any]
-) -> tuple[RecoveryAnswer, str | None]:
-    """Build ``done.content`` from the gateway's report and the invocation state.
-
-    Only ``success`` comes from the LLM. The continuation is the one
-    ``set_continuation`` validated, and the variables are those the recovery left.
+) -> tuple[ResponseToRPA, str | None]:
+    """Build ``done.content``: ``success`` from the gateway, the rest from the state.
 
     Returns:
-        The answer, and why a reported success was turned into a failure
-        (``missing_continuation``), if it was.
+        The answer, and ``missing_continuation`` if a reported success had to be
+        sent as a failure because no continuation was set.
     """
-    variables: dict[str, Any] = invocation_state["variables"]
     continuation = stored_continuation(invocation_state)
-    reported_success = response.get("success") is True
-
-    if not reported_success:
-        return RecoveryAnswer(
-            success=False, variables=variables, **continuation_fields(None)
-        ), None
-    if continuation is None:
-        # Last-resort safety net: the turn ended without a validated continuation.
-        return RecoveryAnswer(
-            success=False, variables=variables, **continuation_fields(None)
-        ), attrs.EVENT_RECOVERY_MISSING_CONTINUATION
-    return RecoveryAnswer(
-        success=True, variables=variables, **continuation_fields(continuation)
-    ), None
+    failure_reason = None
+    success = response.get("success") is True
+    if not success:
+        continuation = NO_CONTINUATION
+    elif continuation == NO_CONTINUATION:
+        success = False
+        failure_reason = attrs.EVENT_RECOVERY_MISSING_CONTINUATION
+    answer = ResponseToRPA(
+        success=success,
+        variables=invocation_state["variables"],
+        **continuation_fields(continuation),
+    )
+    return answer, failure_reason
 
 
 async def _invoke_gateway_agent(
@@ -178,8 +175,7 @@ async def _invoke_gateway_agent(
         "robot_exception_id": exception.id,
         # Read by set_continuation to validate the continuation the error agent names.
         PROCESS_MODEL_STATE_KEY: recovery_context.model,
-        # The variables the GUI agents start from and alter_variable changes; sent
-        # back to the robot, so they never pass through an LLM.
+        CONTINUATION_STATE_KEY: NO_CONTINUATION,
         "variables": copy.deepcopy(recovery_context.variables),
     }
 
@@ -293,11 +289,7 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
                     agent, websocket, exception, recovery_context
                 )
                 answer, failure_reason = _build_answer(response, invocation_state)
-                turn.answered(
-                    answer,
-                    stored_continuation(invocation_state),
-                    failure_reason,
-                )
+                turn.answered(answer, failure_reason)
                 success = answer.success
 
                 await websocket.send_json(
@@ -309,7 +301,6 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
                 )
                 await websocket.close()
 
-                # Always what was sent to the robot.
                 exception.infered_success = success
                 session.add(exception)
                 session.commit()
