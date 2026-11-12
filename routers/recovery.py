@@ -138,6 +138,8 @@ async def _invoke_gateway_agent(
     invocation_state = {
         "websocket": websocket,
         "robot_exception_id": exception.id,
+        # Read by set_continuation to validate the continuation the error agent names.
+        "model": recovery_context.model,
     }
 
     ui_log = [
