@@ -90,7 +90,7 @@ def _run(
     with provider.get_tracer("tests.evals").start_as_current_span("recovery.eval"):
         result = asyncio.run(
             evals_module._run_standalone_recovery(  # pyright: ignore[reportPrivateUsage]
-                websocket=object(),  # pyright: ignore[reportArgumentType]
+                channel=object(),  # pyright: ignore[reportArgumentType]
                 payload=payload,
                 recovery_task="Approve the request",
                 agent=_FakeGuiAgent(),  # pyright: ignore[reportArgumentType]

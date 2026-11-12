@@ -25,12 +25,15 @@ from observability.correlation import get_request_id
 from observability.events import error_type, log_event
 from observability.exceptions import record_exception
 from observability.instrumentation.genai import TracedOpenAIModel
-from observability.instrumentation.recovery import record_answer
+from observability.instrumentation.recovery import record_answer, record_robot_abort
+from robot.channel import AbortedByRobot, RobotChannel, parse_abort
 from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
     ROBOT_KEY_HEADER,
     _build_answer,
     _build_recovery_context_or_raise,
+    _close_after_abort,
     _persist_exception_with_context,
+    _record_abort,
     find_enabled_robot_key,
 )
 from settings import PROVIDER_API_BASE, PROVIDER_API_KEY, PROVIDER_MODEL
@@ -118,7 +121,7 @@ def _validate_payload(data: dict[str, Any]) -> None:
 
 
 async def _run_standalone_recovery(
-    websocket: WebSocket,
+    channel: RobotChannel,
     payload: dict[str, Any],
     recovery_task: str,
     agent: Agent,
@@ -137,7 +140,7 @@ async def _run_standalone_recovery(
         "variables": copy.deepcopy(variables),
     }
     override_invocation_state = {
-        "websocket": websocket,
+        "websocket": channel,
         "robot_exception_id": robot_exception_id,
         "variables": invocation_state["variables"],
     }
@@ -226,9 +229,19 @@ async def handle_recovery_eval(
     ) as span:
         try:
             payload = await websocket.receive_json()
+            abort = parse_abort(payload)
+            if abort is not None:
+                record_robot_abort(span, abort)
+                await _close_after_abort(websocket)
+                return
             _validate_payload(payload)
 
             recovery_task_msg = await websocket.receive_json()
+            abort = parse_abort(recovery_task_msg)
+            if abort is not None:
+                record_robot_abort(span, abort)
+                await _close_after_abort(websocket)
+                return
             recovery_task = recovery_task_msg.get("recovery_task", "")
             if not recovery_task:
                 raise ValueError("recovery_task must be a non-empty string")
@@ -238,9 +251,19 @@ async def handle_recovery_eval(
                 session, payload, robot_key, recovery_context
             )
 
-            result = await _run_standalone_recovery(
-                websocket, payload, recovery_task, agent, str(exception.id)
-            )
+            # As in production, an abort cancels the run and sends no result.
+            try:
+                async with RobotChannel(websocket) as channel:
+                    result = await channel.run_until_aborted(
+                        _run_standalone_recovery(
+                            channel, payload, recovery_task, agent, str(exception.id)
+                        )
+                    )
+            except AbortedByRobot as exc:
+                _record_abort(session, exception, exc.abort)
+                record_robot_abort(span, exc.abort)
+                await _close_after_abort(websocket)
+                return
 
             await websocket.send_json(
                 {

@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+from contextlib import suppress
 from typing import Any
 from uuid import UUID
 
@@ -28,6 +29,13 @@ from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
 from observability.instrumentation import recovery as telemetry
+from robot.channel import (
+    ABORT_CLOSE_CODE,
+    AbortedByRobot,
+    RobotAbort,
+    RobotChannel,
+    parse_abort,
+)
 from security.utils import robot_key_hash
 from templates.common import TemplateModel
 from templates.gateway import ResponseToRPA
@@ -137,6 +145,23 @@ def _persist_exception_with_context(
     return exception
 
 
+def _record_abort(
+    session: database.SessionDep, exception: RobotException, abort: RobotAbort
+) -> None:
+    """Store a robot abort on its recovery, which ends as failed."""
+    exception.abort_code = abort.error_code
+    exception.abort_description = abort.error_description
+    exception.infered_success = False
+    session.add(exception)
+    session.commit()
+
+
+async def _close_after_abort(websocket: WebSocket) -> None:
+    # The robot may already have closed its side after sending the abort.
+    with suppress(RuntimeError, OSError, WebSocketDisconnect):
+        await websocket.close(code=ABORT_CLOSE_CODE)
+
+
 def _build_answer(
     response: dict[str, Any], invocation_state: dict[str, Any]
 ) -> tuple[ResponseToRPA, str | None]:
@@ -164,13 +189,14 @@ def _build_answer(
 
 async def _invoke_gateway_agent(
     agent: Agent,
-    websocket: WebSocket,
+    channel: RobotChannel,
     exception: RobotException,
     recovery_context: RecoveryContext,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the gateway agent; returns its report and the final invocation state."""
     invocation_state: dict[str, Any] = {
-        "websocket": websocket,
+        # The GUI tools read the robot through the channel, never the raw socket.
+        "websocket": channel,
         "robot_exception_id": exception.id,
         # Read by set_continuation to validate the continuation the error agent names.
         PROCESS_MODEL_STATE_KEY: recovery_context.model,
@@ -261,6 +287,12 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
                 # text so the payload size is known without re-serializing it.
                 raw = await websocket.receive_text()
                 data = _decode_payload_or_raise(raw)
+                abort = parse_abort(data)
+                if abort is not None:
+                    # Nothing was instantiated: no record, no answer.
+                    turn.robot_aborted(abort)
+                    await _close_after_abort(websocket)
+                    return
                 turn.payload_received(raw, data)
 
                 # Validate before looking up the gateway, so a malformed payload
@@ -284,9 +316,21 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
                 turn.persisted(exception.id)
 
                 # Strands traces the agent run as a child span of this turn.
-                response, invocation_state = await _invoke_gateway_agent(
-                    agent, websocket, exception, recovery_context
-                )
+                # The robot may abort at any time from here on: the run is
+                # cancelled, the recovery fails with its reason and no
+                # ``done`` is sent.
+                try:
+                    async with RobotChannel(websocket) as channel:
+                        response, invocation_state = await channel.run_until_aborted(
+                            _invoke_gateway_agent(
+                                agent, channel, exception, recovery_context
+                            )
+                        )
+                except AbortedByRobot as exc:
+                    _record_abort(session, exception, exc.abort)
+                    turn.robot_aborted(exc.abort)
+                    await _close_after_abort(websocket)
+                    return
                 answer, failure_reason = _build_answer(response, invocation_state)
                 turn.answered(answer, failure_reason)
                 success = answer.success

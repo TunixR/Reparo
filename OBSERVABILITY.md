@@ -156,14 +156,14 @@ the model's text, so its `gui.action` and `gui.screenshot` spans sit directly un
 
 | Span | Attributes |
 | --- | --- |
-| `recovery.turn` | `robot_key.id`, `agent.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_gateway_agent`, `internal_error`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span event `missing_continuation`. The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
+| `recovery.turn` | `robot_key.id`, `agent.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_gateway_agent`, `internal_error`, `robot_aborted`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span events `missing_continuation`, and `robot_aborted` with `recovery.abort.code` and `recovery.abort.description` (bounded). The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
 | `recovery.persist` | none |
 | `invoke_agent` (Strands) | `agent.id`, `agent_trace.id` (joins the trace to the `AgentTrace` row) |
 | `execute_tool` (GUI agent) | `gui.task.name`, `gui.task.process_model`, `gui.task.ui_log_count`, `gui.task.has_errored_activity`, `gui.task.iterations`, `gui.task.outcome` (`done`, `model_stopped`, `client_disconnected`, `error`; UI-TARS also `max_actions_exceeded`, `unparseable_response`); errors carry a redacted exception |
 | `gui.action` | `gui.action.iteration`, `gui.action.type`, `gui.action.success`; failed actions carry a redacted exception without the action inputs. In `TooledGuiAgent` a failed action is returned to the model as a tool error, so it does not end the task |
 | `gui.screenshot` | `gui.screenshot.width`, `gui.screenshot.height`, `gui.screenshot.size` |
 | `POST /recovery/report_result/{recovery_id}` | `recovery.id`, `robot_key.id`, `recovery.success` |
-| `recovery.eval` (`/evals/recovery/ws`) | `robot_key.id`, `agent.id`, and the answer as on `recovery.turn`: `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` with its span event; unexpected failures carry a redacted exception |
+| `recovery.eval` (`/evals/recovery/ws`) | `robot_key.id`, `agent.id`, and the answer as on `recovery.turn`: `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` with its span event; `recovery.outcome` `robot_aborted` and its span event when the robot aborts; unexpected failures carry a redacted exception |
 
 Log events:
 
