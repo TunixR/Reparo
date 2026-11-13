@@ -58,6 +58,7 @@ You need Docker, [uv](https://docs.astral.sh/uv/) and an OpenAI-compatible LLM e
 | `database/populators/` | Seed data (`agents.json`, `routers.json`) and the code that loads it; run by `populate.py` |
 | `gateway/` | Tools for the gateway agent (human hand-off is a placeholder) |
 | `agent_tools/` | Strands tools and hooks shared by agents: screenshots, tool limits, trace logging |
+| `robot/` | The recovery WebSocket from accept to close: keep-alive, frame routing, `abort` and disconnects |
 | `prompts/`, `templates/` | Agent prompts and the Pydantic models for recovery payloads and agent responses |
 | `security/`, `middlewares/` | Password and robot-key hashing, JWT handling, auth dependencies |
 | `s3/` | S3 client for screenshots |

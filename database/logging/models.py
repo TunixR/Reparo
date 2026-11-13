@@ -240,6 +240,17 @@ class RobotException(SQLModel, table=True):
         default=False
     )  # Whether the robot operator reported a successful recovery
 
+    abort_code: str | None = Field(
+        default=None,
+        nullable=True,
+        description="Error code the robot sent when it aborted the recovery.",
+    )
+    abort_description: str | None = Field(
+        default=None,
+        nullable=True,
+        description="Reason the robot gave when it aborted the recovery.",
+    )
+
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of when the trace was created.",
