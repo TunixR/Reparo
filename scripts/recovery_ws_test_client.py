@@ -31,6 +31,14 @@ def build_parser() -> argparse.ArgumentParser:
     _ = parser.add_argument("--log-json", default=None)
     _ = parser.add_argument("--save-screenshots-dir", default=None)
     _ = parser.add_argument(
+        "--capabilities",
+        default=None,
+        help=(
+            "JSON object sent as the payload's capabilities, e.g. "
+            '\'{"modalities": ["vision"], "ocr": false}\'; replaces any in the payload'
+        ),
+    )
+    _ = parser.add_argument(
         "--eval", action="store_true", help="Enable evaluation mode"
     )
     _ = parser.add_argument(
@@ -83,6 +91,15 @@ def main() -> int:
             print(f"Payload error: {exc}", file=sys.stderr)
             return 2
 
+        if args.capabilities is not None:
+            try:
+                capabilities = json.loads(args.capabilities)
+            except json.JSONDecodeError as exc:
+                parser.error(f"--capabilities is not valid JSON: {exc.msg}")
+            if not isinstance(capabilities, dict):
+                parser.error("--capabilities must be a JSON object")
+            payload = payload | {"capabilities": capabilities}
+
         recovery_task = load_recovery_task(ground_truth_file, args.payload_id)
 
         config = ClientConfig(
@@ -102,7 +119,11 @@ def main() -> int:
         )
 
         runner = RecoveryWsRunner(config=config, payload=payload)
-        status = asyncio.run(runner.run())
+        try:
+            status = asyncio.run(runner.run())
+        except KeyboardInterrupt:
+            # The runner already sent `abort`; the server stops the recovery.
+            status = 130
 
         summary = runner.transcript.summary
         run_output: dict[str, Any] = {
@@ -112,8 +133,14 @@ def main() -> int:
             "actions_failed": summary.actions_failed,
             "recovery_id": summary.recovery_id,
         }
+        if summary.terminal_type == "done" and runner.eval_result is None:
+            # {success, process_finished, continue_from_model_event_id, loop_iteration, variables}
+            run_output["done"] = runner.terminal_content
+        if summary.terminal_type == "error":
+            run_output["error"] = runner.terminal_content
         if runner.eval_result is not None:
             run_output["eval_result"] = runner.eval_result
+        print(json.dumps(run_output, indent=2))
 
         if config.log_json is not None:
             log_transcript = runner.transcript.to_dict()

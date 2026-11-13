@@ -29,6 +29,7 @@ from observability.events import error_type, log_event
 from observability.exceptions import record_exception
 from observability.instrumentation.genai import TracedOpenAIModel
 from observability.instrumentation.recovery import record_answer, record_robot_abort
+from robot.capabilities import CAPABILITIES_STATE_KEY
 from robot.channel import ABORT_CLOSE_CODE, AbortedByRobot, RobotConnection
 from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
     ROBOT_KEY_HEADER,
@@ -145,6 +146,8 @@ async def _run_standalone_recovery(
         "websocket": robot,
         "robot_exception_id": robot_exception_id,
         "variables": invocation_state["variables"],
+        # Validated with the payload; absent means vision only.
+        CAPABILITIES_STATE_KEY: payload.get("capabilities"),
     }
 
     guiagent_result, _ = await agent.as_tool()(

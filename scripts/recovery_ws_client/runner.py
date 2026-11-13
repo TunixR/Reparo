@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -27,6 +28,7 @@ class RecoveryWsRunner:
         self.next_action_at = datetime.now(tz=timezone.utc)
         self.actions_executed = 0
         self.eval_result: dict[str, Any] | None = None
+        self.terminal_content: Any = None
 
     async def _action_worker(self, websocket) -> None:  # pyright: ignore[reportMissingParameterType]
         while not self.stop_event.is_set():
@@ -76,6 +78,95 @@ class RecoveryWsRunner:
                 seconds=self.config.action_delay_seconds
             )
 
+    async def _receive_until_terminal(self, websocket) -> None:  # pyright: ignore[reportMissingParameterType]
+        """Answer the server's requests until it sends a terminal message."""
+        while not self.stop_event.is_set():
+            raw = await websocket.recv()
+            if not isinstance(raw, str):
+                continue
+
+            message = parse_message(raw)
+            msg_type = message_type(message)
+
+            self.transcript.add(
+                TranscriptEvent.create(
+                    direction="inbound",
+                    event_type=msg_type or "unknown",
+                    payload=message,
+                )
+            )
+
+            if msg_type == "ping":
+                continue
+
+            if msg_type == "screenshot":
+                screenshot = capture_screenshot_bytes(
+                    save_dir=self.config.save_screenshots_dir
+                )
+                await websocket.send(screenshot)
+                self.transcript.add(
+                    TranscriptEvent.create(
+                        direction="outbound",
+                        event_type="screenshot_bytes",
+                        payload={"bytes": len(screenshot)},
+                    )
+                )
+                continue
+
+            if msg_type == "action":
+                self.transcript.summary.actions_received += 1
+                await self.action_queue.put(message)
+                continue
+
+            if msg_type == "done":
+                self.transcript.summary.terminal_type = "done"
+                self.terminal_content = message.get("content")
+                recovery_id = message.get("id")
+                if isinstance(recovery_id, str):
+                    self.transcript.summary.recovery_id = recovery_id
+                self.stop_event.set()
+                break
+
+            if msg_type == "eval_result":
+                self.transcript.summary.terminal_type = "done"
+                self.eval_result = message["content"]
+                self.transcript.add(
+                    TranscriptEvent.create(
+                        direction="inbound",
+                        event_type="eval_result",
+                        payload=message,
+                    )
+                )
+                self.stop_event.set()
+                break
+
+            if msg_type == "error":
+                self.transcript.summary.terminal_type = "error"
+                self.terminal_content = {
+                    "code": message.get("code"),
+                    "content": message.get("content"),
+                }
+                self.stop_event.set()
+                break
+
+    async def _send_abort(self, websocket) -> None:  # pyright: ignore[reportMissingParameterType]
+        abort = {
+            "type": "abort",
+            "error_code": "USER_INTERRUPT",
+            "error_description": "Interrupted with Ctrl-C in the recovery test client",
+        }
+        self.transcript.summary.terminal_type = "aborted"
+        self.transcript.add(
+            TranscriptEvent.create(
+                direction="outbound", event_type="abort", payload=abort
+            )
+        )
+        # Best effort: the server may already be gone.
+        with suppress(ConnectionClosed, TimeoutError):
+            await asyncio.wait_for(websocket.send(json.dumps(abort)), timeout=5)
+        if self.config.log_json is not None:
+            write_transcript(self.config.log_json, self.transcript)
+
     async def run(self) -> int:
         pyautogui.FAILSAFE = True
 
@@ -110,74 +201,16 @@ class RecoveryWsRunner:
                     )
 
                 worker = asyncio.create_task(self._action_worker(websocket))
-
-                while not self.stop_event.is_set():
-                    raw = await websocket.recv()
-                    if not isinstance(raw, str):
-                        continue
-
-                    message = parse_message(raw)
-                    msg_type = message_type(message)
-
-                    self.transcript.add(
-                        TranscriptEvent.create(
-                            direction="inbound",
-                            event_type=msg_type or "unknown",
-                            payload=message,
-                        )
-                    )
-
-                    if msg_type == "ping":
-                        continue
-
-                    if msg_type == "screenshot":
-                        screenshot = capture_screenshot_bytes(
-                            save_dir=self.config.save_screenshots_dir
-                        )
-                        await websocket.send(screenshot)
-                        self.transcript.add(
-                            TranscriptEvent.create(
-                                direction="outbound",
-                                event_type="screenshot_bytes",
-                                payload={"bytes": len(screenshot)},
-                            )
-                        )
-                        continue
-
-                    if msg_type == "action":
-                        self.transcript.summary.actions_received += 1
-                        await self.action_queue.put(message)
-                        continue
-
-                    if msg_type == "done":
-                        self.transcript.summary.terminal_type = "done"
-                        recovery_id = message.get("id")
-                        if isinstance(recovery_id, str):
-                            self.transcript.summary.recovery_id = recovery_id
-                        self.stop_event.set()
-                        break
-
-                    if msg_type == "eval_result":
-                        self.transcript.summary.terminal_type = "done"
-                        self.eval_result = message["content"]
-                        self.transcript.add(
-                            TranscriptEvent.create(
-                                direction="inbound",
-                                event_type="eval_result",
-                                payload=message,
-                            )
-                        )
-                        self.stop_event.set()
-                        break
-
-                    if msg_type == "error":
-                        self.transcript.summary.terminal_type = "error"
-                        self.stop_event.set()
-                        break
-
-                self.stop_event.set()
-                worker.cancel()
-                await asyncio.gather(worker, return_exceptions=True)
+                try:
+                    await self._receive_until_terminal(websocket)
+                except asyncio.CancelledError:
+                    # Ctrl-C: tell the server to stop the recovery instead of just hanging up.
+                    await self._send_abort(websocket)
+                    raise
+                finally:
+                    self.stop_event.set()
+                    worker.cancel()
+                    await asyncio.gather(worker, return_exceptions=True)
 
             if self.config.log_json is not None:
                 write_transcript(self.config.log_json, self.transcript)

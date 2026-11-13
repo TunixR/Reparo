@@ -10,6 +10,7 @@ from sqlmodel import Session, select
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agents.models import Agent
 from database.logging.models import RecoveryContext, RobotException
+from robot.capabilities import CAPABILITIES_STATE_KEY
 from templates.recovery_payload import RecoveryPayload
 
 
@@ -105,7 +106,17 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     assert recovery_context.errored_activity.model_event_id == "click_submit"
 
     assert isinstance(captured_from_payload["payload"], RecoveryPayload)
-    assert captured_from_payload["payload"].model_dump() == valid_recovery_payload
+    # The fixture declares no capabilities, so the vision-only default applies.
+    assert (
+        captured_from_payload["payload"].model_dump(exclude={"capabilities"})
+        == valid_recovery_payload
+    )
+    default_capabilities = {"modalities": ["vision"], "ocr": False, "details": {}}
+    assert recovery_context.capabilities == default_capabilities
+    assert (
+        captured_invocation["invocation_state"][CAPABILITIES_STATE_KEY]
+        == default_capabilities
+    )
 
     assert (
         captured_invocation["invocation_state"]["robot_exception_id"]
@@ -160,6 +171,44 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         "errored_act",
         "model",
     }
+
+
+def test_recovery_ws_ingest_stores_declared_capabilities(
+    session: Session,
+    client: TestClient,
+    valid_robot_key_raw: str,
+    valid_recovery_payload: dict[str, Any],
+    gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
+    monkeypatch,  # pyright: ignore[reportMissingParameterType]
+):
+    capabilities = {
+        "modalities": ["dom", "vision"],
+        "ocr": True,
+        "details": {"dom": {"selector_syntax": "css"}},
+    }
+    captured: dict[str, Any] = {}
+
+    async def _fake_call(_self, invocation_state=None, **_kwargs):  # pyright: ignore[reportMissingParameterType]
+        captured["capabilities"] = invocation_state[CAPABILITIES_STATE_KEY]  # pyright: ignore[reportOptionalSubscript]
+        return {"success": False}
+
+    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+
+    headers = {"X-ROBOT-KEY": valid_robot_key_raw}
+    with client.websocket_connect(
+        "/recovery/robot_exception/ws", headers=headers
+    ) as ws:
+        ws.send_json(valid_recovery_payload | {"capabilities": capabilities})
+        message = ws.receive_json()
+
+    assert message["type"] == "done"
+    recovery_context = session.exec(
+        select(RecoveryContext).where(
+            RecoveryContext.robot_exception_id == UUID(message["id"])
+        )
+    ).one()
+    assert recovery_context.capabilities == capabilities
+    assert captured["capabilities"] == capabilities
 
 
 def test_recovery_ws_ingest_rejects_invalid_payload(
