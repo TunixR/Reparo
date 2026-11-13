@@ -28,7 +28,6 @@ class RecoveryWsRunner:
         self.next_action_at = datetime.now(tz=timezone.utc)
         self.actions_executed = 0
         self.eval_result: dict[str, Any] | None = None
-        # The terminal message's content: the answer for `done`, the reason for `error`.
         self.terminal_content: Any = None
 
     async def _action_worker(self, websocket) -> None:  # pyright: ignore[reportMissingParameterType]

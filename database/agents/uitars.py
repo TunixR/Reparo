@@ -60,13 +60,14 @@ from strands import Agent, ToolContext, tool
 from strands.types.content import ContentBlock, Messages
 
 from agent_tools.hooks import AgentLoggingHook
-from agent_tools.image import capture_screenshot, require_vision
+from agent_tools.image import capture_screenshot
 from config import Config
 from observability.instrumentation.genai import TracedOpenAIModel
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
 from prompts.gui_agent import (
     STANDALONE_COMPUTER_USE_DOUBAO,
 )
+from robot.capabilities import require_vision
 from settings import (
     PROVIDER_API_BASE,
     PROVIDER_API_KEY,

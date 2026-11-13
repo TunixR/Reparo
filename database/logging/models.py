@@ -342,7 +342,6 @@ class RecoveryContext(SQLModel, table=True):
     os: str = Field(default="")
     variables: dict[str, Any] = Field(default_factory=dict, sa_type=JSONB)
     model: str = Field(default="")
-    # The robot's RecoveryCapabilities, defaults filled in.
     capabilities: dict[str, Any] = Field(
         default_factory=lambda: RecoveryCapabilities().model_dump(), sa_type=JSONB
     )

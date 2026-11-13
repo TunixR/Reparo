@@ -14,7 +14,6 @@ from strands import Agent as StrandsAgent
 
 import database.general as database
 from agent_tools.hooks import RequireToolCalls
-from agent_tools.image import CAPABILITIES_STATE_KEY
 from agent_tools.utils import (
     CONTINUATION_STATE_KEY,
     NO_CONTINUATION,
@@ -30,6 +29,7 @@ from observability.events import error_type, log_event
 from observability.exceptions import record_exception
 from observability.instrumentation.genai import TracedOpenAIModel
 from observability.instrumentation.recovery import record_answer, record_robot_abort
+from robot.capabilities import CAPABILITIES_STATE_KEY
 from robot.channel import ABORT_CLOSE_CODE, AbortedByRobot, RobotConnection
 from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
     ROBOT_KEY_HEADER,

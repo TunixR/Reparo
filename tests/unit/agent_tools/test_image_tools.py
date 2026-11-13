@@ -2,9 +2,7 @@ import pytest
 
 # Import the functions under test
 from agent_tools.image import (
-    CAPABILITIES_STATE_KEY,
     request_remote_screenshot,
-    require_vision,
     take_screenshot,
 )
 from tests.unit.shared.fake_websocket import FakeWebSocket, make_test_image_bytes
@@ -137,23 +135,3 @@ async def test_take_screenshot_error_propagation_runtime():
     with pytest.raises(Exception) as e:
         _ = await take_screenshot(ctx)  # pyright: ignore[reportArgumentType]
     assert "Error taking screenshot" in str(e.value)
-
-
-@pytest.mark.parametrize(
-    "state",
-    [
-        {},
-        {CAPABILITIES_STATE_KEY: None},
-        {CAPABILITIES_STATE_KEY: {"modalities": ["dom", "vision"], "ocr": False}},
-    ],
-    ids=["undeclared", "none", "vision-not-first"],
-)
-def test_require_vision_accepts_robots_that_support_vision(state: dict[str, object]):
-    require_vision(state)
-
-
-def test_require_vision_rejects_robots_without_vision():
-    state = {CAPABILITIES_STATE_KEY: {"modalities": ["dom", "a11y"], "ocr": True}}
-
-    with pytest.raises(ValueError, match="only dom, a11y"):
-        require_vision(state)

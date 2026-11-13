@@ -7,8 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from agent_tools.image import CAPABILITIES_STATE_KEY
 from database.agents.tooled_gui_agent import TooledGuiAgent
+from robot.capabilities import CAPABILITIES_STATE_KEY
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
 from tests.unit.shared.tooled_gui_fakes import GUI_TASK_INPUT, make_robot, patch_gui_io
 

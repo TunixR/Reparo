@@ -29,8 +29,9 @@ from strands.types.content import ContentBlock, Messages
 from strands.types.tools import ToolResult, ToolUse
 
 from agent_tools.hooks import AgentLoggingHook, MaxGuiImagesHook
-from agent_tools.image import capture_screenshot, require_vision
+from agent_tools.image import capture_screenshot
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
+from robot.capabilities import require_vision
 
 
 class TooledGuiAgent:
