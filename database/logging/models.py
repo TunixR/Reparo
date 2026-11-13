@@ -14,7 +14,7 @@ from sqlmodel import (
 from database.keys.models import RobotKey
 from database.tools.models import Tool
 from s3 import S3Client
-from templates.recovery_payload import RecoveryPayload
+from templates.recovery_payload import RecoveryCapabilities, RecoveryPayload
 
 
 class AgentTrace(SQLModel, table=True):
@@ -342,6 +342,10 @@ class RecoveryContext(SQLModel, table=True):
     os: str = Field(default="")
     variables: dict[str, Any] = Field(default_factory=dict, sa_type=JSONB)
     model: str = Field(default="")
+    # The robot's RecoveryCapabilities, defaults filled in.
+    capabilities: dict[str, Any] = Field(
+        default_factory=lambda: RecoveryCapabilities().model_dump(), sa_type=JSONB
+    )
 
     ui_log_entries: list[RecoveryUiLogEntry] = Relationship(
         back_populates="recovery_context",
@@ -383,6 +387,7 @@ class RecoveryContext(SQLModel, table=True):
             os=parsed_payload.os,
             variables=parsed_payload.variables,
             model=parsed_payload.model,
+            capabilities=parsed_payload.capabilities.model_dump(),
         )
 
         for position, entry in enumerate(parsed_payload.ui_log):

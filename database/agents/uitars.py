@@ -60,7 +60,7 @@ from strands import Agent, ToolContext, tool
 from strands.types.content import ContentBlock, Messages
 
 from agent_tools.hooks import AgentLoggingHook
-from agent_tools.image import capture_screenshot
+from agent_tools.image import capture_screenshot, require_vision
 from config import Config
 from observability.instrumentation.genai import TracedOpenAIModel
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
@@ -740,6 +740,7 @@ Model Context: {model}
 
     if "websocket" not in tool_context.invocation_state:
         raise ValueError("WebSocket must be provided in tool context")
+    require_vision(tool_context.invocation_state)
     websocket = tool_context.invocation_state["websocket"]
 
     telemetry = GuiTaskTelemetry(

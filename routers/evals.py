@@ -14,6 +14,7 @@ from strands import Agent as StrandsAgent
 
 import database.general as database
 from agent_tools.hooks import RequireToolCalls
+from agent_tools.image import CAPABILITIES_STATE_KEY
 from agent_tools.utils import (
     CONTINUATION_STATE_KEY,
     NO_CONTINUATION,
@@ -145,6 +146,8 @@ async def _run_standalone_recovery(
         "websocket": robot,
         "robot_exception_id": robot_exception_id,
         "variables": invocation_state["variables"],
+        # Validated with the payload; absent means vision only.
+        CAPABILITIES_STATE_KEY: payload.get("capabilities"),
     }
 
     guiagent_result, _ = await agent.as_tool()(

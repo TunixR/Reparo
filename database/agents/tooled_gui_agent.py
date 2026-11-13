@@ -29,7 +29,7 @@ from strands.types.content import ContentBlock, Messages
 from strands.types.tools import ToolResult, ToolUse
 
 from agent_tools.hooks import AgentLoggingHook, MaxGuiImagesHook
-from agent_tools.image import capture_screenshot
+from agent_tools.image import capture_screenshot, require_vision
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
 
 
@@ -488,6 +488,7 @@ class TooledGuiAgent:
 
         if "websocket" not in tool_context.invocation_state:
             raise ValueError("WebSocket must be provided in tool context")
+        require_vision(tool_context.invocation_state)
 
         websocket = tool_context.invocation_state["websocket"]
         state_variables = tool_context.invocation_state.get("variables")

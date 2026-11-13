@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
@@ -96,6 +96,35 @@ class RecoveryErroredAct(TemplateModel):
         return _normalize_optional_id(value)
 
 
+Modality = Literal["vision", "dom", "a11y"]
+"""How a GUI agent observes and targets the robot's UI."""
+
+
+class RecoveryCapabilities(TemplateModel):
+    """What the robot can observe and act through.
+
+    `modalities` lists the modalities the robot supports, most preferred first.
+    `details` carries modality-specific settings, e.g.
+    `{"dom": {"selector_syntax": "css"}}`. Until GUI agents support other
+    modalities, they only use `vision`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    modalities: list[Modality] = Field(default_factory=lambda: ["vision"])
+    ocr: bool = False
+    details: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("modalities")
+    @classmethod
+    def validate_modalities(cls, value: list[Modality]) -> list[Modality]:
+        if not value:
+            raise ValueError("modalities must list at least one modality")
+        if len(set(value)) != len(value):
+            raise ValueError("modalities must not repeat a modality")
+        return value
+
+
 class RecoveryPayload(TemplateModel):
     """The one message a robot sends to start a recovery.
 
@@ -114,6 +143,7 @@ class RecoveryPayload(TemplateModel):
     ui_log: list[RecoveryUiLogEntry]
     errored_act: RecoveryErroredAct
     model: str
+    capabilities: RecoveryCapabilities = Field(default_factory=RecoveryCapabilities)
 
     @field_validator("model")
     @classmethod
@@ -124,6 +154,8 @@ class RecoveryPayload(TemplateModel):
 
 
 __all__ = [
+    "Modality",
+    "RecoveryCapabilities",
     "RecoveryErroredAct",
     "RecoveryPayload",
     "RecoveryUiLogEntry",

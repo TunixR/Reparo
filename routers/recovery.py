@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from sqlmodel import select
 
 import database.general as database
+from agent_tools.image import CAPABILITIES_STATE_KEY
 from agent_tools.utils import (
     CONTINUATION_STATE_KEY,
     NO_CONTINUATION,
@@ -197,6 +198,8 @@ async def _invoke_gateway_agent(
         PROCESS_MODEL_STATE_KEY: recovery_context.model,
         CONTINUATION_STATE_KEY: NO_CONTINUATION,
         "variables": copy.deepcopy(recovery_context.variables),
+        # Read by the GUI tools, which need the robot to support vision.
+        CAPABILITIES_STATE_KEY: recovery_context.capabilities,
     }
 
     ui_log = [

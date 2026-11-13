@@ -1,6 +1,8 @@
 import asyncio
 import base64
+from collections.abc import Mapping
 from io import BytesIO
+from typing import Any
 
 import cv2
 import numpy as np
@@ -11,8 +13,37 @@ from strands import ToolContext, tool
 
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
 from robot.channel import RobotIO
+from templates.recovery_payload import RecoveryCapabilities
 
 IMAGE_SIMILARITY_THRESHOLD = 0.95  # Threshold for image similarity (0 to 1)
+
+CAPABILITIES_STATE_KEY = "capabilities"
+"""Invocation state key holding the robot's capabilities, as stored on its recovery."""
+
+
+def require_vision(invocation_state: Mapping[str, Any]) -> None:
+    """Fail unless the robot can be driven through screenshots.
+
+    GUI agents only implement the ``vision`` modality for now, so a robot whose
+    capabilities leave it out can't be served by any of them. A state without
+    capabilities means the robot declared none, which defaults to ``vision``.
+
+    Raises:
+        ValueError: If the robot's capabilities don't include ``vision``.
+    """
+    raw = invocation_state.get(CAPABILITIES_STATE_KEY)
+    capabilities = (
+        RecoveryCapabilities()
+        if raw is None
+        else RecoveryCapabilities.model_validate(raw)
+    )
+    if "vision" not in capabilities.modalities:
+        modalities = ", ".join(capabilities.modalities)
+        raise ValueError(
+            "This robot can't be driven through screenshots: its capabilities "
+            f"list only {modalities}, and GUI agents support only vision. "
+            "Don't retry a GUI agent for this recovery."
+        )
 
 
 @tool(description="Convert an image file to a base64-encoded string.")
