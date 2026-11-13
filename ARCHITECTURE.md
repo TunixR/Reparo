@@ -36,7 +36,7 @@ sequenceDiagram
 
     R->>WS: connect with X-ROBOT-KEY
     WS->>WS: check robot key
-    R->>WS: recovery payload (task, UI log, failed activity, variables)
+    R->>WS: recovery payload (task, UI log, failed activity, variables, model, capabilities)
     WS->>DB: save robot exception + recovery context
     WS->>G: invoke with the recovery context
     G->>S: delegate (agents exposed as tools)
@@ -47,9 +47,10 @@ sequenceDiagram
         R-->>S: action result
     end
     S-->>G: structured report
-    G-->>WS: structured response (success, where to continue)
-    WS->>R: done (response + recovery id)
+    G-->>WS: structured response (success)
+    WS->>R: done (success, continuation, variables + recovery id)
     Note over S,DB: every agent, tool and GUI step is traced to the exception
+    Note over R,WS: at any point the robot may send abort instead, ending the recovery as failed
     R->>WS: later: POST /recovery/report_result/{id} (final outcome)
     WS->>DB: store outcome
 ```
@@ -59,25 +60,79 @@ sequenceDiagram
    periodic pings while the recovery runs.
 2. **Submit.** The robot sends one recovery payload. It is validated against the payload model
    (`templates/recovery_payload.py`) and normalised into a recovery context: the task, platform, the
-   ordered UI log, the failed activity and the variables.
+   ordered UI log, the failed activity, the variables, the process model and the robot's
+   capabilities (see [Robot protocol](#robot-protocol)).
 3. **Persist.** The raw payload is saved as a robot exception together with its recovery context
    (`database/logging/models.py`). The exception id is the recovery id used everywhere afterwards.
 4. **Run the gateway.** The backend loads the agent of type `GatewayAgent` and invokes it with the
    recovery context. The WebSocket and the exception id travel in the Strands invocation state, so
    every nested agent and tool can reach the robot and attach its traces to the right recovery.
 5. **Delegate.** Agents call sub-agents as tools. In the seeded configuration the gateway hands UI
-   errors to an error agent, which in turn uses a GUI agent to act on the desktop and then works out
-   which of the remaining activities the recovery already completed (`agent_tools/utils.py`).
+   errors to an error agent, which in turn uses a GUI agent to act on the desktop and then names the
+   task of the process model the robot should run next. It can only do so through the
+   `set_continuation` tool (`agent_tools/utils.py`), which checks the task against the model and the
+   loop passes against the loops enclosing it (`agent_tools/process_model.py`). A wrong guess comes
+   back to the agent as a correction, so it is fixed inside the agent loop instead of failing the
+   recovery.
 6. **Drive the desktop.** A GUI agent asks the robot for screenshots and sends it UI actions
    (click, type, scroll...) over the same WebSocket; the robot executes them and replies. This is the
    robot-side contract implemented by the test client in `scripts/recovery_ws_client/`.
-7. **Finish.** The gateway's structured response is sent to the robot in a `done` message with the
-   recovery id, and the inferred success is stored on the exception. `done` is sent only for a
-   recovery that was persisted and run; every other ending (an invalid payload, a server without a
-   gateway agent, an unexpected failure) is an `error` message with a machine-readable code, and the
-   socket is closed.
+7. **Finish.** The robot gets a `done` message with the recovery id. Only `success` comes from the
+   gateway's answer; the continuation is the one `set_continuation` stored, and the variables are the
+   payload's, as changed by the GUI agents. A reported success without a stored continuation is sent
+   as a failure. The success sent is stored on the exception. `done` is sent only for a recovery that
+   was persisted and run; every other ending (an invalid payload, a server without a gateway agent,
+   an unexpected failure) is an `error` message with a machine-readable code, and the socket is
+   closed. The robot can also end the recovery itself with `abort`.
 8. **Report.** Once the robot (or its orchestrator) knows whether the process really continued, it
    reports the outcome through the report-result endpoint, authenticated with the same robot key.
+
+### Robot protocol
+
+The robot speaks first and once: the recovery payload. After that it only answers the server's
+requests, except for `abort`, which it can send at any time. `robot/channel.py` owns the socket
+from accept to close: it sends keep-alive pings, routes `abort` away from the frames the GUI tools
+wait for, and closes the socket. The exact fields are in the models named below and in `/scalar`.
+
+**The payload** (`RecoveryPayload`) describes the failed run. Three kinds of id appear in it, and
+they mean different things:
+
+- `model` is the **process model**, in BPMN 2.0 XML or another textual format (such as the
+  Playwright bridge's compact outline). Its task ids are **model event ids**: stable across runs and
+  loop passes.
+- Each UI log entry and the failed activity have an `event_id`, which only identifies that
+  **occurrence** in this run (a task done three times in a loop has three), and an optional
+  `model_event_id` naming the task it performed. When `model_event_id` is missing, agents fall back
+  to matching `event_name` against task names.
+- `activity_id` groups events semantically and is never a continuation target.
+
+`capabilities` says how the robot can be observed and driven: the modalities it supports (`vision`,
+`dom`, `a11y`), most preferred first, whether it can do OCR, and per-modality details. A robot that
+sends none supports `vision` only. It is stored with the recovery context. For now GUI agents use
+`vision` only, and refuse to act for a robot that leaves it out.
+
+**During the recovery** the server sends `ping`, `screenshot` (the robot answers with one binary JPEG
+frame) and `action` (the robot answers with a JSON result: `success`, `action_type` and, on failure,
+`error`, which the GUI agent sees as a tool error).
+
+**The recovery ends** in exactly one of these ways:
+
+| Ending | Sent by | Message | Socket close |
+| --- | --- | --- | --- |
+| The recovery ran | server | `done`: the recovery `id` and `ResponseToRPA` (`templates/gateway.py`) | 1000 |
+| The payload is not JSON or not valid | server | `error`, `INVALID_RECOVERY_PAYLOAD` | 1003 |
+| No gateway agent is configured | server | `error`, `NO_GATEWAY_AGENT` | 1011 |
+| Anything unexpected | server | `error`, `INTERNAL_ERROR` | 1011 |
+| The robot gives up | robot | `abort`, with its own `error_code` and `error_description` | 1000, no `done` |
+
+`done.content` tells the robot whether the recovery worked and where to resume: `success`;
+`process_finished` when the agents completed the rest of the process themselves;
+`continue_from_model_event_id`, the task to run next (naming the failed task means "retry it", an
+earlier one means "go back"); `loop_iteration`, one 0-based pass per loop enclosing that task,
+outermost first; and `variables`, the payload's variables as the recovery left them. Without
+success there is no continuation. An `abort` cancels the agents and stores the robot's reason on
+the exception, which counts as a failed recovery; an abort sent before the payload just closes the
+socket.
 
 ## 3. Agents
 
@@ -154,7 +209,8 @@ in [`OBSERVABILITY.md`](OBSERVABILITY.md).
 gateway routes errors correctly (`run_filter_eval.py`), whether a sensible recovery task is generated
 (`run_task_eval.py`), and end-to-end recovery against a running server (`run_recovery_eval.py`).
 `routers/evals.py` exposes an eval WebSocket that runs a chosen GUI agent on a given recovery task
-and infers where the robot should continue.
+and infers where the robot should continue, with the same `set_continuation` tool and answer as
+production.
 
 ## 10. Roadmap / not yet implemented
 
