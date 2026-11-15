@@ -132,6 +132,10 @@ class RecoveryPayload(TemplateModel):
     entries and the errored activity name the task they performed through
     `model_event_id`, while their `event_id` only identifies the occurrence in
     this run.
+
+    `recovery_task` is the process author's description of what recovering the
+    failing activity should achieve. For now only evals use it; the recovery
+    endpoint accepts it and ignores it.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -144,6 +148,14 @@ class RecoveryPayload(TemplateModel):
     errored_act: RecoveryErroredAct
     model: str
     capabilities: RecoveryCapabilities = Field(default_factory=RecoveryCapabilities)
+    recovery_task: str | None = None
+
+    @field_validator("recovery_task")
+    @classmethod
+    def normalize_blank_recovery_task(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return value
 
     @field_validator("model")
     @classmethod

@@ -304,8 +304,7 @@ def test_eval_abort_mid_run_cancels_it_and_sends_no_result(
         "/evals/recovery/ws",
         headers={"X-ROBOT-KEY": robot_key_raw, "X-AGENT-ID": str(gui_agent.id)},
     ) as ws:
-        ws.send_json(valid_recovery_payload)
-        ws.send_json({"recovery_task": "Approve the request"})
+        ws.send_json(valid_recovery_payload | {"recovery_task": "Approve the request"})
         assert started.wait(timeout=5)
         ws.send_json(ABORT)
         closed = _receive_skipping_pings(ws)

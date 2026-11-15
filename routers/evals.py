@@ -116,9 +116,9 @@ def _get_valid_agent(
     return agent
 
 
-def _validate_payload(data: dict[str, Any]) -> None:
+def _validate_payload(data: dict[str, Any]) -> RecoveryPayload:
     try:
-        _ = RecoveryPayload.model_validate(data)
+        return RecoveryPayload.model_validate(data)
     except ValidationError as exc:
         raise ValueError(f"Invalid recovery payload: {exc}") from exc
 
@@ -251,11 +251,8 @@ async def _run_eval_turn(
     exception: RobotException | None = None
     try:
         payload = await robot.receive_json()
-        _validate_payload(payload)
-
-        recovery_task_msg = await robot.receive_json()
-        recovery_task = recovery_task_msg.get("recovery_task", "")
-        if not recovery_task:
+        recovery_task = _validate_payload(payload).recovery_task
+        if recovery_task is None:
             raise ValueError("recovery_task must be a non-empty string")
 
         recovery_context = _build_recovery_context_or_raise(payload)

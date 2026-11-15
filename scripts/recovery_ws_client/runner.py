@@ -167,6 +167,12 @@ class RecoveryWsRunner:
         if self.config.log_json is not None:
             write_transcript(self.config.log_json, self.transcript)
 
+    def initial_payload(self) -> dict[str, Any]:
+        """The recovery payload, carrying the recovery task in eval mode."""
+        if self.config.eval and self.config.recovery_task:
+            return self.payload | {"recovery_task": self.config.recovery_task}
+        return self.payload
+
     async def run(self) -> int:
         pyautogui.FAILSAFE = True
 
@@ -179,26 +185,17 @@ class RecoveryWsRunner:
                 },
                 max_size=None,
             ) as websocket:
-                await websocket.send(json.dumps(self.payload))
+                await websocket.send(json.dumps(self.initial_payload()))
+                initial_event: dict[str, Any] = {"payload_id": self.config.payload_id}
+                if self.config.eval and self.config.recovery_task:
+                    initial_event["recovery_task"] = self.config.recovery_task
                 self.transcript.add(
                     TranscriptEvent.create(
                         direction="outbound",
                         event_type="initial_payload",
-                        payload={"payload_id": self.config.payload_id},
+                        payload=initial_event,
                     )
                 )
-
-                if self.config.eval and self.config.recovery_task:
-                    await websocket.send(
-                        json.dumps({"recovery_task": self.config.recovery_task})
-                    )
-                    self.transcript.add(
-                        TranscriptEvent.create(
-                            direction="outbound",
-                            event_type="recovery_task",
-                            payload={"recovery_task": self.config.recovery_task},
-                        )
-                    )
 
                 worker = asyncio.create_task(self._action_worker(websocket))
                 try:
