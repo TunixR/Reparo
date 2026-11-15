@@ -111,6 +111,10 @@ they mean different things:
 sends none supports `vision` only. It is stored with the recovery context. For now GUI agents use
 `vision` only, and refuse to act for a robot that leaves it out.
 
+`recovery_task`, optional, is the process author's description of what recovering the failed
+activity should achieve. For now only the eval WebSocket uses it (as the task its GUI agent runs);
+the recovery endpoint accepts it and ignores it, so the agents behave as if it were absent.
+
 **During the recovery** the server sends `ping`, `screenshot` (the robot answers with one binary JPEG
 frame) and `action` (the robot answers with a JSON result: `success`, `action_type` and, on failure,
 `error`, which the GUI agent sees as a tool error).
@@ -208,9 +212,9 @@ in [`OBSERVABILITY.md`](OBSERVABILITY.md).
 `evals/` holds offline runners that benchmark parts of the pipeline against a dataset: whether the
 gateway routes errors correctly (`run_filter_eval.py`), whether a sensible recovery task is generated
 (`run_task_eval.py`), and end-to-end recovery against a running server (`run_recovery_eval.py`).
-`routers/evals.py` exposes an eval WebSocket that runs a chosen GUI agent on a given recovery task
-and infers where the robot should continue, with the same `set_continuation` tool and answer as
-production.
+`routers/evals.py` exposes an eval WebSocket that runs a chosen GUI agent on the payload's
+`recovery_task` (older clients send it as a second message instead) and infers where the robot
+should continue, with the same `set_continuation` tool and answer as production.
 
 ## 10. Roadmap / not yet implemented
 

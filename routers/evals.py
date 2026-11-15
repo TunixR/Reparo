@@ -116,11 +116,27 @@ def _get_valid_agent(
     return agent
 
 
-def _validate_payload(data: dict[str, Any]) -> None:
+def _validate_payload(data: dict[str, Any]) -> RecoveryPayload:
     try:
-        _ = RecoveryPayload.model_validate(data)
+        return RecoveryPayload.model_validate(data)
     except ValidationError as exc:
         raise ValueError(f"Invalid recovery payload: {exc}") from exc
+
+
+async def _receive_recovery_task(
+    robot: RobotConnection, payload: RecoveryPayload
+) -> str:
+    """The recovery task: the payload's, else a second ``{"recovery_task"}`` message.
+
+    The second message is the legacy way for clients that predate the field.
+    """
+    if payload.recovery_task is not None:
+        return payload.recovery_task
+    recovery_task_msg = await robot.receive_json()
+    recovery_task = recovery_task_msg.get("recovery_task", "")
+    if not isinstance(recovery_task, str) or not recovery_task.strip():
+        raise ValueError("recovery_task must be a non-empty string")
+    return recovery_task
 
 
 async def _run_standalone_recovery(
@@ -251,12 +267,7 @@ async def _run_eval_turn(
     exception: RobotException | None = None
     try:
         payload = await robot.receive_json()
-        _validate_payload(payload)
-
-        recovery_task_msg = await robot.receive_json()
-        recovery_task = recovery_task_msg.get("recovery_task", "")
-        if not recovery_task:
-            raise ValueError("recovery_task must be a non-empty string")
+        recovery_task = await _receive_recovery_task(robot, _validate_payload(payload))
 
         recovery_context = _build_recovery_context_or_raise(payload)
         exception = _persist_exception_with_context(

@@ -248,3 +248,20 @@ def test_payload_rejects_invalid_capabilities(capabilities: dict[str, Any]):
 
     with pytest.raises(ValidationError):
         _ = RecoveryPayload.model_validate(payload)
+
+
+def test_payload_recovery_task_defaults_to_none():
+    assert RecoveryPayload.model_validate(_valid_payload()).recovery_task is None
+
+
+def test_payload_accepts_recovery_task():
+    payload = _valid_payload() | {"recovery_task": "Submit the invoice"}
+
+    assert RecoveryPayload.model_validate(payload).recovery_task == "Submit the invoice"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", None])
+def test_payload_normalizes_blank_recovery_task_to_none(blank: str | None):
+    payload = _valid_payload() | {"recovery_task": blank}
+
+    assert RecoveryPayload.model_validate(payload).recovery_task is None

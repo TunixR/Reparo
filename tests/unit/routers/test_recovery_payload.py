@@ -106,9 +106,12 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     assert recovery_context.errored_activity.model_event_id == "click_submit"
 
     assert isinstance(captured_from_payload["payload"], RecoveryPayload)
-    # The fixture declares no capabilities, so the vision-only default applies.
+    # The fixture declares no capabilities, so the vision-only default applies,
+    # and no recovery task.
+    parsed_payload = captured_from_payload["payload"]
+    assert parsed_payload.recovery_task is None
     assert (
-        captured_from_payload["payload"].model_dump(exclude={"capabilities"})
+        parsed_payload.model_dump(exclude={"capabilities", "recovery_task"})
         == valid_recovery_payload
     )
     default_capabilities = {"modalities": ["vision"], "ocr": False, "details": {}}
@@ -209,6 +212,42 @@ def test_recovery_ws_ingest_stores_declared_capabilities(
     ).one()
     assert recovery_context.capabilities == capabilities
     assert captured["capabilities"] == capabilities
+
+
+def test_recovery_ws_accepts_recovery_task_and_does_not_pass_it_to_the_agent(
+    client: TestClient,
+    valid_robot_key_raw: str,
+    valid_recovery_payload: dict[str, Any],
+    gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
+    monkeypatch,  # pyright: ignore[reportMissingParameterType]
+):
+    calls: list[dict[str, Any]] = []
+
+    async def _fake_call(_self, invocation_state=None, **kwargs):  # pyright: ignore[reportMissingParameterType]
+        calls.append({"invocation_state": invocation_state, "kwargs": kwargs})
+        return {"success": False}
+
+    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+
+    headers = {"X-ROBOT-KEY": valid_robot_key_raw}
+    messages: list[dict[str, Any]] = []
+    for payload in (
+        valid_recovery_payload,
+        valid_recovery_payload | {"recovery_task": "Approve the request"},
+    ):
+        with client.websocket_connect(
+            "/recovery/robot_exception/ws", headers=headers
+        ) as ws:
+            ws.send_json(payload)
+            messages.append(ws.receive_json())
+
+    assert [message["type"] for message in messages] == ["done", "done"]
+    without_task, with_task = calls
+    # Ignored for now: the gateway gets exactly what it gets without the field.
+    assert with_task["kwargs"] == without_task["kwargs"]
+    assert "recovery_task" not in with_task["kwargs"]
+    assert "Approve the request" not in repr(with_task["kwargs"])
+    assert "Approve the request" not in repr(with_task["invocation_state"])
 
 
 def test_recovery_ws_ingest_rejects_invalid_payload(
