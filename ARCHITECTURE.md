@@ -213,8 +213,8 @@ in [`OBSERVABILITY.md`](OBSERVABILITY.md).
 gateway routes errors correctly (`run_filter_eval.py`), whether a sensible recovery task is generated
 (`run_task_eval.py`), and end-to-end recovery against a running server (`run_recovery_eval.py`).
 `routers/evals.py` exposes an eval WebSocket that runs a chosen GUI agent on the payload's
-`recovery_task` (older clients send it as a second message instead) and infers where the robot
-should continue, with the same `set_continuation` tool and answer as production.
+`recovery_task`, which it requires, and infers where the robot should continue, with the same
+`set_continuation` tool and answer as production.
 
 ## 10. Roadmap / not yet implemented
 

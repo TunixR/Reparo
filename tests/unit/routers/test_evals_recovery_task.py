@@ -1,4 +1,4 @@
-"""Where ``WS /evals/recovery/ws`` takes the recovery task from: the payload, else a second message."""
+"""``WS /evals/recovery/ws`` takes the recovery task from the payload, and only from there."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def _connect(client: TestClient, robot_key_raw: str, gui_agent: Agent) -> Any:
     )
 
 
-def test_eval_uses_the_payload_recovery_task_without_a_second_message(
+def test_eval_uses_the_payload_recovery_task(
     client: TestClient,
     robot_key_raw: str,
     gui_agent: Agent,
@@ -85,23 +85,7 @@ def test_eval_uses_the_payload_recovery_task_without_a_second_message(
     assert seen_tasks == ["Approve the request"]
 
 
-def test_eval_still_accepts_the_legacy_second_message(
-    client: TestClient,
-    robot_key_raw: str,
-    gui_agent: Agent,
-    valid_recovery_payload: dict[str, Any],
-    seen_tasks: list[str],
-) -> None:
-    with _connect(client, robot_key_raw, gui_agent) as ws:
-        ws.send_json(valid_recovery_payload)
-        ws.send_json({"recovery_task": "Approve the request"})
-        message = _receive_skipping_pings(ws)
-
-    assert message["type"] == "eval_result"
-    assert seen_tasks == ["Approve the request"]
-
-
-@pytest.mark.parametrize("payload_task", [None, "  "])
+@pytest.mark.parametrize("payload_task", [None, "", "  "])
 def test_eval_without_a_recovery_task_is_rejected(
     client: TestClient,
     robot_key_raw: str,
@@ -112,7 +96,6 @@ def test_eval_without_a_recovery_task_is_rejected(
 ) -> None:
     with _connect(client, robot_key_raw, gui_agent) as ws:
         ws.send_json(valid_recovery_payload | {"recovery_task": payload_task})
-        ws.send_json({"recovery_task": ""})
         message = _receive_skipping_pings(ws)
 
     assert message == {
