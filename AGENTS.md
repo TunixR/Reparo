@@ -96,6 +96,8 @@ uv run alembic downgrade -1
 uv run alembic revision --autogenerate -m "your message"
 ```
 Note: `migrations/env.py` imports models via wildcard to register tables with `SQLModel.metadata`.
+Note: `migrations/versions/` is git-ignored, so `upgrade head` creates nothing on a fresh clone.
+`uv run python populate.py` creates the tables (`create_db_and_tables()`) and the S3 bucket before seeding.
 
 7) “Full verification” (recommended before PR)
 ```

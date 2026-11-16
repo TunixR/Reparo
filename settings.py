@@ -13,7 +13,10 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 
 POSTGRES_URL = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
-PROVIDER = os.getenv("PROVIDER", "")
+# LLM provider routers, seeded by populate.py from database/populators/routers.json.
+# PROVIDER (openrouter, openai or vllm), PROVIDER_API_BASE and PROVIDER_API_KEY are the defaults
+# for every router role; ROUTER_<ROLE>_PROVIDER / _API_BASE / _API_KEY (below) override them.
+PROVIDER = os.getenv("PROVIDER") or "openrouter"
 PROVIDER_API_KEY = os.getenv("PROVIDER_API_KEY", "")
 FREE_PROVIDER_API_KEY = os.getenv("FREE_PROVIDER_API_KEY", "")
 PROVIDER_API_BASE = os.getenv("PROVIDER_API_BASE", "")
@@ -24,6 +27,35 @@ PROVIDER_GROUNDING_MODEL = os.getenv("PROVIDER_GROUNDING_MODEL", "")
 PROVIDER_GROUNDING_MODEL_BACKBONE = os.getenv("PROVIDER_GROUNDING_MODEL_BACKBONE", "")
 MAX_GUI_IMAGES = int(os.getenv("MAX_GUI_IMAGES", "5"))
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+
+
+def _router_setting(role: str, setting: str, default: str) -> str:
+    """ROUTER_<ROLE>_<SETTING> from the environment, or the provider-wide default."""
+    return os.getenv(f"ROUTER_{role}_{setting}") or default
+
+
+# One provider, endpoint and key per router role in database/populators/routers.json.
+ROUTER_TEXT_PROVIDER = _router_setting("TEXT", "PROVIDER", PROVIDER)
+ROUTER_TEXT_API_BASE = _router_setting("TEXT", "API_BASE", PROVIDER_API_BASE)
+ROUTER_TEXT_API_KEY = _router_setting("TEXT", "API_KEY", PROVIDER_API_KEY)
+ROUTER_GROUNDING_PROVIDER = _router_setting("GROUNDING", "PROVIDER", PROVIDER)
+ROUTER_GROUNDING_API_BASE = _router_setting("GROUNDING", "API_BASE", PROVIDER_API_BASE)
+ROUTER_GROUNDING_API_KEY = _router_setting("GROUNDING", "API_KEY", PROVIDER_API_KEY)
+ROUTER_UITARS_PROVIDER = _router_setting("UITARS", "PROVIDER", PROVIDER)
+ROUTER_UITARS_API_BASE = _router_setting("UITARS", "API_BASE", PROVIDER_API_BASE)
+ROUTER_UITARS_API_KEY = _router_setting("UITARS", "API_KEY", PROVIDER_API_KEY)
+ROUTER_VISION_PROVIDER = _router_setting("VISION", "PROVIDER", PROVIDER)
+ROUTER_VISION_API_BASE = _router_setting("VISION", "API_BASE", PROVIDER_API_BASE)
+ROUTER_VISION_API_KEY = _router_setting(
+    "VISION", "API_KEY", FREE_PROVIDER_API_KEY or PROVIDER_API_KEY
+)
+ROUTER_VISION_TOOL_PROVIDER = _router_setting("VISION_TOOL", "PROVIDER", PROVIDER)
+ROUTER_VISION_TOOL_API_BASE = _router_setting(
+    "VISION_TOOL", "API_BASE", PROVIDER_API_BASE
+)
+ROUTER_VISION_TOOL_API_KEY = _router_setting(
+    "VISION_TOOL", "API_KEY", FREE_PROVIDER_API_KEY or PROVIDER_API_KEY
+)
 
 
 S3_URL = os.getenv("S3_URL", "http://localhost:8333")

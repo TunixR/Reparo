@@ -1,41 +1,46 @@
 {
   "routers": [
     {
+      "role": "text",
       "model_name": "$PROVIDER_MODEL",
-      "api_key": "$PROVIDER_API_KEY",
-      "api_endpoint": "$PROVIDER_API_BASE",
-      "provider_type": "OPENROUTER",
+      "provider_type": "$ROUTER_TEXT_PROVIDER",
+      "api_endpoint": "$ROUTER_TEXT_API_BASE",
+      "api_key": "$ROUTER_TEXT_API_KEY",
       "capabilities": ["TEXT"]
     },
     {
+      "role": "vision",
       "model_name": "$PROVIDER_VISION_MODEL",
-      "api_key": "$FREE_PROVIDER_API_KEY",
-      "api_endpoint": "$PROVIDER_API_BASE",
-      "provider_type": "OPENROUTER",
+      "provider_type": "$ROUTER_VISION_PROVIDER",
+      "api_endpoint": "$ROUTER_VISION_API_BASE",
+      "api_key": "$ROUTER_VISION_API_KEY",
       "capabilities": ["TEXT", "VISION"],
       "vision_backbone": "OTHER"
     },
     {
+      "role": "vision_tool",
       "model_name": "$PROVIDER_VISION_TOOL_MODEL",
-      "api_key": "$FREE_PROVIDER_API_KEY",
-      "api_endpoint": "$PROVIDER_API_BASE",
-      "provider_type": "OPENROUTER",
+      "provider_type": "$ROUTER_VISION_TOOL_PROVIDER",
+      "api_endpoint": "$ROUTER_VISION_TOOL_API_BASE",
+      "api_key": "$ROUTER_VISION_TOOL_API_KEY",
       "capabilities": ["TEXT", "VISION"],
       "vision_backbone": "OTHER"
     },
     {
+      "role": "uitars",
       "model_name": "bytedance/ui-tars-1.5-7b",
-      "api_key": "$PROVIDER_API_KEY",
-      "api_endpoint": "$PROVIDER_API_BASE",
-      "provider_type": "OPENROUTER",
+      "provider_type": "$ROUTER_UITARS_PROVIDER",
+      "api_endpoint": "$ROUTER_UITARS_API_BASE",
+      "api_key": "$ROUTER_UITARS_API_KEY",
       "capabilities": ["TEXT", "VISION"],
-      "vision_backbone": "QWEN2_5"
+      "vision_backbone": "QWEN2.5"
     },
     {
+      "role": "grounding",
       "model_name": "$PROVIDER_GROUNDING_MODEL",
-      "api_key": "$PROVIDER_API_KEY",
-      "api_endpoint": "$PROVIDER_API_BASE",
-      "provider_type": "OPENROUTER",
+      "provider_type": "$ROUTER_GROUNDING_PROVIDER",
+      "api_endpoint": "$ROUTER_GROUNDING_API_BASE",
+      "api_key": "$ROUTER_GROUNDING_API_KEY",
       "capabilities": ["TEXT", "VISION"],
       "vision_backbone": "$PROVIDER_GROUNDING_MODEL_BACKBONE"
     }
