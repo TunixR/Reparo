@@ -1,6 +1,7 @@
 import uuid
 
 import aioboto3
+from botocore.exceptions import ClientError
 
 from settings import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, S3_URL
 
@@ -16,6 +17,27 @@ class S3Client:
             aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
             region_name="us-east-1",
         )
+
+    @staticmethod
+    async def ensure_bucket(bucket: str = S3_BUCKET) -> bool:
+        """
+        Create the bucket if it doesn't exist.
+
+        Returns:
+            bool: True if the bucket was created, False if it already existed.
+        """
+        async with S3Client._client() as s3_client:  # pyright: ignore[reportGeneralTypeIssues]
+            try:
+                await s3_client.head_bucket(Bucket=bucket)
+                return False
+            except ClientError as exc:
+                if exc.response.get("Error", {}).get("Code") not in (
+                    "404",
+                    "NoSuchBucket",
+                ):
+                    raise
+            await s3_client.create_bucket(Bucket=bucket)
+        return True
 
     @staticmethod
     async def upload_bytes(

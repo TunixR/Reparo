@@ -13,7 +13,10 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 
 POSTGRES_URL = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 
-PROVIDER = os.getenv("PROVIDER", "")
+# LLM provider routers, seeded by populate.py from database/populators/routers.json.
+# PROVIDER (openrouter, openai or vllm), PROVIDER_API_BASE and PROVIDER_API_KEY are the defaults
+# for every router role; ROUTER_<ROLE>_PROVIDER / _API_BASE / _API_KEY override them per role.
+PROVIDER = os.getenv("PROVIDER") or "openrouter"
 PROVIDER_API_KEY = os.getenv("PROVIDER_API_KEY", "")
 FREE_PROVIDER_API_KEY = os.getenv("FREE_PROVIDER_API_KEY", "")
 PROVIDER_API_BASE = os.getenv("PROVIDER_API_BASE", "")
@@ -24,6 +27,14 @@ PROVIDER_GROUNDING_MODEL = os.getenv("PROVIDER_GROUNDING_MODEL", "")
 PROVIDER_GROUNDING_MODEL_BACKBONE = os.getenv("PROVIDER_GROUNDING_MODEL_BACKBONE", "")
 MAX_GUI_IMAGES = int(os.getenv("MAX_GUI_IMAGES", "5"))
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+ROUTER_ROLES = ("TEXT", "VISION", "VISION_TOOL", "UITARS", "GROUNDING")
+ROUTER_OVERRIDES: dict[str, dict[str, str]] = {
+    role: {
+        setting: os.getenv(f"ROUTER_{role}_{setting}", "")
+        for setting in ("PROVIDER", "API_BASE", "API_KEY")
+    }
+    for role in ROUTER_ROLES
+}
 
 
 S3_URL = os.getenv("S3_URL", "http://localhost:8333")

@@ -160,7 +160,7 @@ inputs, runs it, and asks for a structured response using the configured Pydanti
 - **Prompts and responses.** An agent's prompt is part of its row; response and payload models live
   in `templates/`. A prompt names only the tools the agent is given and leaves the response layout
   to the response model. Prompts used only by the evals live in `evals/`.
-- **Seeding.** `populate.py` loads the default agents, sub-agent links, tools, provider routers and
+- **Seeding.** `populate.py` creates the tables and the S3 bucket, then loads the default agents, sub-agent links, tools, provider routers and
   the admin user from `database/populators/` (`agents.json`, `routers.json`, and the default agent
   prompts in `default_prompts/`). Seeding only creates what is missing, so a changed default prompt
   reaches fresh databases only. After that, agents and routers can be changed at runtime through
@@ -178,8 +178,11 @@ and registering it (see `database/populators/tools.py`).
 A provider router (`database/provider/models.py`) names an OpenAI-compatible backend (OpenAI,
 OpenRouter, vLLM), a model, an API key, its capabilities (text, vision) and, for vision models, the
 backbone used to map coordinates. Every agent points at one router; an agent that takes images needs
-a vision-capable router. Routers are seeded from the `PROVIDER_*` settings and managed through
-`routers/provider.py`. The router also prices a conversation from its token usage.
+a vision-capable router. Routers are seeded per role (`text`, `grounding`, ...) from
+`routers.json`, and agents name the role they use. Each role's model comes from the `PROVIDER_*`
+settings, and its provider, endpoint and key come from `ROUTER_<ROLE>_*` or the `PROVIDER*` defaults.
+Routers are managed through `routers/provider.py`. OpenRouter routers also price a conversation from
+its token usage; other providers report the cost as unknown (-1).
 
 ## 6. Trace logging and artifacts
 

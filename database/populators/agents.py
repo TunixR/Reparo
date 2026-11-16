@@ -7,7 +7,7 @@ from a JSON file. Tool populators and router populators remain unchanged.
 Notes:
 - Idempotent: existing agents are matched by name and their argument contracts are kept in sync.
 - Tools must have been populated previously (populate_tools) or they will be skipped.
-- Routers must exist for the specified model names in the JSON (use populate_routers first).
+- Each agent names a router role from routers.json (`router`); populate_routers must run first.
 - Prompts are read from Markdown files in `default_prompts/`, named by each agent's `prompt_file`.
 - Response model paths are stored as import strings for dynamic loading at runtime.
 - Supports sub-agent relationships and tool attachments via JSON.
@@ -29,27 +29,9 @@ from database.agents.models import (
     Argument,
     SubAgent,
 )
+from database.populators.routers import find_router
 from database.provider.models import Router
 from database.tools.models import Tool
-from settings import (
-    PROVIDER_GROUNDING_MODEL,
-    PROVIDER_MODEL,
-    PROVIDER_VISION_MODEL,
-    PROVIDER_VISION_TOOL_MODEL,
-)
-
-
-def _get_router_by_model(session: Session, model_name: str) -> Router:
-    """
-    Return an existing Router for the given model_name or panics.
-    """
-    router = session.exec(select(Router).where(Router.model_name == model_name)).first()
-    if router:
-        return router
-    else:
-        raise ValueError(
-            f"[populate_agents] Error: No Router found for model '{model_name}'. Please create it first."
-        )
 
 
 def _argument(
@@ -245,7 +227,7 @@ def _load_json_config() -> dict[str, Any]:
           "description": "...",
           "prompt_file": "agent_name.md",  // in default_prompts/
           "response_model": "package.module.ClassName" | null,
-          "router_model": "gpt-4o-mini" | "$PROVIDER_MODEL" | "$PROVIDER_VISION_MODEL" | "$PROVIDER_VISION_TOOL_MODEL" | "$PROVIDER_GROUNDING_MODEL",
+          "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
           "agent_type": "GatewayAgent" | "ErrorAgent" | "GuiAgent",
           "input_type": "TEXT" | "IMAGETEXT",
           "enabled": true,
@@ -269,20 +251,6 @@ def _load_json_config() -> dict[str, Any]:
         )
     with cfg_path.open("r", encoding="utf-8") as f:
         return json.load(f)
-
-
-def _resolve_router_model(model_token: str) -> str:
-    """
-    Translate special tokens into configured model names,
-    otherwise pass through literal model names.
-    """
-    token_map = {
-        "$PROVIDER_MODEL": PROVIDER_MODEL,
-        "$PROVIDER_VISION_MODEL": PROVIDER_VISION_MODEL,
-        "$PROVIDER_VISION_TOOL_MODEL": PROVIDER_VISION_TOOL_MODEL,
-        "$PROVIDER_GROUNDING_MODEL": PROVIDER_GROUNDING_MODEL,
-    }
-    return token_map.get(model_token, model_token)
 
 
 DEFAULT_PROMPTS_DIR = Path(__file__).parent / "default_prompts"
@@ -323,9 +291,7 @@ def populate_agents(engine: Engine) -> None:
             prompt = _read_prompt(name, item.get("prompt_file"))
 
             response_model = item.get("response_model")
-            router_model_token = item.get("router_model", "$PROVIDER_MODEL")
-            router_model_name = _resolve_router_model(router_model_token)
-            router = _get_router_by_model(session, router_model_name)
+            router = find_router(session, item.get("router", "text"))
 
             agent_type = _resolve_agent_type(item["agent_type"])
             input_type = _resolve_input_type(item.get("input_type"))
