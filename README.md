@@ -1,6 +1,6 @@
-# R2Framework backend
+# Reparo backend
 
-R2Framework recovers failed RPA runs. When a software robot hits an exception, it opens a
+Reparo recovers failed RPA runs. When a software robot hits an exception, it opens a
 WebSocket to this FastAPI backend and sends what it knows: the task, the UI log up to the failure,
 the failed activity and the process variables. LLM agents built on
 [Strands](https://strandsagents.com) analyse the failure and, when they can, take over the robot's
@@ -24,7 +24,7 @@ endpoint (OpenRouter, OpenAI, vLLM...). The full development stack uses about 2 
 
    ```bash
    curl -X POST localhost:8080/api/v1/register -H 'Content-Type: application/json' \
-     -d '{"name":"Admin","orgName":"r2framework","email":"admin@example.com","password":"<password>"}'
+     -d '{"name":"Admin","orgName":"reparo","email":"admin@example.com","password":"<password>"}'
    ```
 
    Until it exists, `signoz-collector` stays unhealthy, `up --wait` fails and the otel-agent

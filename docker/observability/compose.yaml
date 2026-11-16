@@ -214,18 +214,18 @@ services:
 
 volumes:
   signoz-keeper-data:
-    name: r2framework-signoz-keeper-data
+    name: reparo-signoz-keeper-data
   signoz-clickhouse-data:
-    name: r2framework-signoz-clickhouse-data
+    name: reparo-signoz-clickhouse-data
   signoz-clickhouse-scripts:
-    name: r2framework-signoz-clickhouse-scripts
+    name: reparo-signoz-clickhouse-scripts
   signoz-metastore-data:
-    name: r2framework-signoz-metastore-data
+    name: reparo-signoz-metastore-data
   otel-agent-data:
-    name: r2framework-otel-agent-data
+    name: reparo-otel-agent-data
 
 networks:
   telemetry:
-    name: r2framework-telemetry
+    name: reparo-telemetry
   backend:
-    name: r2framework-backend
+    name: reparo-backend

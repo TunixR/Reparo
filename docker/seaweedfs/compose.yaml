@@ -92,12 +92,12 @@ services:
 
 volumes:
   seaweedfs-master-data:
-    name: r2framework-seaweedfs-master-data
+    name: reparo-seaweedfs-master-data
   seaweedfs-volume-data:
-    name: r2framework-seaweedfs-volume-data
+    name: reparo-seaweedfs-volume-data
   seaweedfs-filer-data:
-    name: r2framework-seaweedfs-filer-data
+    name: reparo-seaweedfs-filer-data
 
 networks:
   backend:
-    name: r2framework-backend
+    name: reparo-backend

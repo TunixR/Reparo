@@ -18,7 +18,7 @@ def test_resource_uses_settings() -> None:
 
     assert resource.attributes["service.name"] == "svc"
     assert resource.attributes["deployment.environment"] == "test"
-    assert resource.attributes["service.namespace"] == "r2framework"
+    assert resource.attributes["service.namespace"] == "reparo"
 
 
 def test_provider_exports_spans() -> None:

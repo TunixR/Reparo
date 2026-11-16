@@ -1,4 +1,4 @@
-"""Custom evaluators for R2Framework RecoveryBench."""
+"""Custom evaluators for Reparo RecoveryBench."""
 
 from __future__ import annotations
 

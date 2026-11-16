@@ -3,7 +3,7 @@
 # reachable on the internal networks only.
 #
 #   docker compose -f docker/compose.prod.yaml up -d --build
-name: r2framework
+name: reparo
 
 include:
   - postgres/compose.yaml

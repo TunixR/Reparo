@@ -76,7 +76,7 @@ uv run pytest tests/integration -q
   - `postgres/`: version, schema vs. models, a rolled-back write, the read-only monitoring role.
   - `s3/`: object round trips through the SeaweedFS S3 gateway.
   - `observability/`: the framework's traces and logs in SigNoz (collector on `:4318`, ClickHouse via
-    `docker exec r2framework-signoz-clickhouse-1` or `SIGNOZ_CLICKHOUSE_URL`); deletes the data it exports.
+    `docker exec reparo-signoz-clickhouse-1` or `SIGNOZ_CLICKHOUSE_URL`); deletes the data it exports.
     See `OBSERVABILITY.md` → Tests.
   - `interoperability/`: calls to Postgres and S3 show up in SigNoz through the otel-agent (logs and
     metrics); waits up to one scrape interval (~2.5 min for the folder).

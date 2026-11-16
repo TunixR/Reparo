@@ -95,7 +95,7 @@ class RedactingLogRecordProcessor(LogRecordProcessor):
 class RedactingSpanProcessor(SpanProcessor):
     """Route finished spans through a redaction step before exporting them.
 
-    TODO(privacy, TunixR/R2Framework#202): not implemented yet; spans are
+    TODO(privacy, TunixR/Reparo#202): not implemented yet; spans are
     forwarded unchanged. Strands exports prompts and completions (task, UI
     log, variables, user-typed input) as ``gen_ai.*`` span data, so those
     currently reach SigNoz in clear text. Implement here by exporting a

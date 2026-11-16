@@ -160,7 +160,7 @@ def main() -> int:
         ws_url = f"ws://{args.host}:{args.port}/evals/recovery/ws"
 
         client_cmd = [
-            "C:\\Code\\R2Framework\\backend\\.venv\\Scripts\\python.exe",
+            sys.executable,
             "-m",
             "scripts.recovery_ws_test_client",
             "--ws-url",

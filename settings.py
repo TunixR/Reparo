@@ -7,7 +7,7 @@ _ = dotenv.load_dotenv()
 
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
-POSTGRES_DB = os.getenv("POSTGRES_DB", "gateway")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "reparo")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "user")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 
@@ -59,7 +59,7 @@ ROUTER_VISION_TOOL_API_KEY = _router_setting(
 
 
 S3_URL = os.getenv("S3_URL", "http://localhost:8333")
-S3_BUCKET = os.getenv("S3_BUCKET", "gateway")
+S3_BUCKET = os.getenv("S3_BUCKET", "reparo")
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "your_access_key")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "your_secret_key")
 
@@ -75,8 +75,8 @@ OBSERVABILITY_ENABLED = (
     os.getenv("OBSERVABILITY_ENABLED", "true").lower() == "true"
     and os.getenv("OTEL_SDK_DISABLED", "false").lower() != "true"
 )
-OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", "r2framework-api")
-OTEL_SERVICE_NAMESPACE = os.getenv("OTEL_SERVICE_NAMESPACE", "r2framework")
+OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", "reparo-api")
+OTEL_SERVICE_NAMESPACE = os.getenv("OTEL_SERVICE_NAMESPACE", "reparo")
 DEPLOYMENT_ENVIRONMENT = os.getenv("DEPLOYMENT_ENVIRONMENT", "development")
 OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318"
@@ -100,6 +100,6 @@ TELEMETRY_MAX_TEXT_LENGTH = int(os.getenv("TELEMETRY_MAX_TEXT_LENGTH", "120"))
 # SigNoz access for tests/integration/observability (not used by the app)
 SIGNOZ_CLICKHOUSE_URL = os.getenv("SIGNOZ_CLICKHOUSE_URL") or None
 SIGNOZ_CLICKHOUSE_CONTAINER = os.getenv(
-    "SIGNOZ_CLICKHOUSE_CONTAINER", "r2framework-signoz-clickhouse-1"
+    "SIGNOZ_CLICKHOUSE_CONTAINER", "reparo-signoz-clickhouse-1"
 )
 SIGNOZ_POLL_TIMEOUT = float(os.getenv("SIGNOZ_POLL_TIMEOUT", "60"))

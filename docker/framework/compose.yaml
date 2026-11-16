@@ -1,11 +1,11 @@
-# The R2Framework API, built from framework/Dockerfile (production only;
+# The Reparo API, built from framework/Dockerfile (production only;
 # in development it runs on the host, see docker/README.md).
 services:
   framework:
     build:
       context: ../..
       dockerfile: docker/framework/Dockerfile
-    image: r2framework:${FRAMEWORK_VERSION:-latest}
+    image: reparo:${FRAMEWORK_VERSION:-latest}
     restart: unless-stopped
     # Application settings (provider keys, SECRET_KEY, admin user...): the same
     # variables as the repository's .env.example.
@@ -17,7 +17,7 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      POSTGRES_DB: ${POSTGRES_DB:-gateway}
+      POSTGRES_DB: ${POSTGRES_DB:-reparo}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in docker/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/.env}
       S3_URL: http://seaweedfs-s3:8333
@@ -41,6 +41,6 @@ services:
 
 networks:
   backend:
-    name: r2framework-backend
+    name: reparo-backend
   telemetry:
-    name: r2framework-telemetry
+    name: reparo-telemetry

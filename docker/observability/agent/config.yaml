@@ -162,7 +162,7 @@ processors:
   resource/common:
     attributes:
       - key: service.namespace
-        value: r2framework
+        value: reparo
         action: upsert
       - key: deployment.environment
         value: ${env:DEPLOYMENT_ENVIRONMENT}

@@ -1,5 +1,5 @@
 """
-Authentication and authorization models for the R2Framework.
+Authentication and authorization models for Reparo.
 
 This module defines:
 - User: Main user model with credentials and roles
