@@ -1,1 +1,1 @@
-"""Middlewares for the R2Framework."""
+"""Middlewares for Reparo."""

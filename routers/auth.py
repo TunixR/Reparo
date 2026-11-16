@@ -1,5 +1,5 @@
 """
-Authentication and authorization endpoints for the R2Framework.
+Authentication and authorization endpoints for Reparo.
 
 This module provides endpoints for:
 - User authentication (login, logout)

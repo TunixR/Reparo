@@ -1,5 +1,5 @@
 """
-Authentication and authorization middleware for the R2Framework.
+Authentication and authorization middleware for Reparo.
 
 This module provides:
 - Authentication dependencies for endpoints

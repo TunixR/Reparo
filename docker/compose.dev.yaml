@@ -3,7 +3,7 @@
 #   Postgres 5432, S3 8333, SeaweedFS filer 8888, OTLP 4317/4318, SigNoz UI 8080.
 #
 #   docker compose -f docker/compose.dev.yaml up -d
-name: r2framework
+name: reparo
 
 include:
   - path: [postgres/compose.yaml, postgres/compose.dev.yaml]

@@ -2,9 +2,9 @@
 # Runs once, when the data volume is first initialised: seeds the server from
 # the dumps in /dumps (docker/postgres/dumps, mounted by postgres/compose.dev.yaml).
 # Each file is restored into the database named after it, created if missing:
-#   gateway.dump    pg_dump custom format (pg_dump -Fc)
-#   gateway.sql     plain SQL
-#   gateway.sql.gz  gzipped plain SQL
+#   reparo.dump    pg_dump custom format (pg_dump -Fc)
+#   reparo.sql     plain SQL
+#   reparo.sql.gz  gzipped plain SQL
 # Ownership and grants are dropped: objects belong to POSTGRES_USER.
 #
 # The image's entrypoint may source this file instead of executing it, so it

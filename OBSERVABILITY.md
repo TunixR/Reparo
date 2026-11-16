@@ -28,8 +28,8 @@ Export always uses OTLP over HTTP/protobuf.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OBSERVABILITY_ENABLED` | `true` | Master switch for span/log export |
-| `OTEL_SERVICE_NAME` | `r2framework-api` | Resource `service.name` |
-| `OTEL_SERVICE_NAMESPACE` | `r2framework` | Resource `service.namespace` |
+| `OTEL_SERVICE_NAME` | `reparo-api` | Resource `service.name` |
+| `OTEL_SERVICE_NAMESPACE` | `reparo` | Resource `service.namespace` |
 | `DEPLOYMENT_ENVIRONMENT` | `development` | Resource `deployment.environment` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` | SigNoz collector base URL |
 | `OTEL_TRACES_SAMPLER_ARG` | `1.0` | Trace sample ratio (clamped to `0.0`–`1.0`) |
@@ -275,13 +275,13 @@ explorer, open its trace, and use the related-logs view to see every event logge
 
 ## Containerized backend
 
-`docker/compose.prod.yaml` runs the API in the stack on the internal `r2framework-telemetry`
+`docker/compose.prod.yaml` runs the API in the stack on the internal `reparo-telemetry`
 network with `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-collector:4318`; nothing else changes.
 
 ## Infrastructure telemetry
 
 The `otel-agent` (`docker/observability/agent/config.yaml`) forwards to `signoz-collector`, under
-`service.namespace=r2framework`:
+`service.namespace=reparo`:
 
 | Service | Metrics | Logs |
 | --- | --- | --- |
@@ -318,7 +318,7 @@ websocket turn (websocket span → `recovery.turn` → `recovery.persist` and a 
 joined to the `RobotException` row), and a GUI task whose spans all have their parent in the trace
 (`execute_tool finished` included), with the conversation on its `chat` spans.
 
-Each run exports under a unique `service.name` (`r2framework-it-<random>`). At the end the suite
+Each run exports under a unique `service.name` (`reparo-it-<random>`). At the end the suite
 waits for ingestion to settle, deletes that service's rows from ClickHouse (SigNoz has no delete
 API) and asserts nothing is left. Attribute autocomplete metadata is left to retention.
 The tests are skipped when SigNoz is not reachable.
@@ -328,12 +328,12 @@ The tests export to `OTEL_EXPORTER_OTLP_ENDPOINT`. Their SigNoz access is also s
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SIGNOZ_CLICKHOUSE_URL` | unset | ClickHouse HTTP endpoint; when unset, `docker exec` is used |
-| `SIGNOZ_CLICKHOUSE_CONTAINER` | `r2framework-signoz-clickhouse-1` | Container for `docker exec` |
+| `SIGNOZ_CLICKHOUSE_CONTAINER` | `reparo-signoz-clickhouse-1` | Container for `docker exec` |
 | `SIGNOZ_POLL_TIMEOUT` | `60` | Seconds to wait for ingested rows |
 
 ## Privacy
 
-Redaction is a known gap, tracked in [#202](https://github.com/TunixR/R2Framework/issues/202). Today:
+Redaction is a known gap, tracked in [#202](https://github.com/TunixR/Reparo/issues/202). Today:
 
 - Regex redaction misses quoted keys, e.g. `{"password": "..."}` in JSON or Python reprs.
 - Strands exports prompts and completions as `gen_ai.*` span attributes. They include the task,

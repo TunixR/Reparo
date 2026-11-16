@@ -6,7 +6,7 @@ services:
     image: postgres:${POSTGRES_VERSION:-18.6-trixie}
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-gateway}
+      POSTGRES_DB: ${POSTGRES_DB:-reparo}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in docker/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/.env}
       # Read-only role the otel-agent's postgresql receiver connects with.
@@ -51,8 +51,8 @@ services:
 
 volumes:
   postgres-data:
-    name: r2framework-postgres-data
+    name: reparo-postgres-data
 
 networks:
   backend:
-    name: r2framework-backend
+    name: reparo-backend

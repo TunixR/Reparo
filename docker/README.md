@@ -1,6 +1,6 @@
 # Docker stack
 
-Everything R2Framework runs on, as one Compose project (`r2framework`) with two entry points:
+Everything Reparo runs on, as one Compose project (`reparo`) with two entry points:
 
 | File | Runs | Use |
 | --- | --- | --- |
@@ -10,7 +10,7 @@ Everything R2Framework runs on, as one Compose project (`r2framework`) with two 
 ## Architecture
 
 ```
-                         ┌──────────────────────────── r2framework-backend ───────────────────────────┐
+                         ┌────────────────────────────── reparo-backend ──────────────────────────────┐
                          │                                                                            │
   clients ──:8000──▶ framework ──SQL──▶ postgres                                                      │
   (prod only)            │   └──S3──▶ seaweedfs-s3 ──▶ seaweedfs-filer ──▶ seaweedfs-master           │
@@ -19,7 +19,7 @@ Everything R2Framework runs on, as one Compose project (`r2framework`) with two 
                          │                 otel-agent ◀── metrics: postgresql receiver, Prometheus ───┘
                          │                    │       ◀── logs: Docker json-file logs (host mount)
                          │ OTLP               │ OTLP
-  ┌──────────────────────▼────────────────────▼───────── r2framework-telemetry ────────────────────────┐
+  ┌──────────────────────▼────────────────────▼─────────── reparo-telemetry ────────────────────────────┐
   │                 signoz-collector ──▶ signoz-clickhouse ◀── signoz ◀──:8080── browser                │
   │                   (ingest)               │      ▲            │                                      │
   │                                   signoz-keeper │      signoz-metastore (Postgres)                  │
@@ -32,7 +32,7 @@ need both (the framework and the otel-agent) join both.
 
 | Group | Directory | Services | Role |
 | --- | --- | --- | --- |
-| Database | `postgres/` | `postgres` | The framework's relational store (`gateway` database) |
+| Database | `postgres/` | `postgres` | The framework's relational store (`reparo` database) |
 | Object storage | `seaweedfs/` | `seaweedfs-master`, `-volume`, `-filer`, `-s3` | S3-compatible storage for screenshots and artifacts |
 | Observability | `observability/` | `signoz`, `signoz-collector`, `signoz-clickhouse`, `signoz-keeper`, `signoz-metastore`, `signoz-migrator`, `signoz-clickhouse-scripts`, `otel-agent` | Traces, logs and metrics for the framework and the infrastructure |
 | Application | `framework/` | `framework` (built from `framework/Dockerfile`) | The API (production only) |
@@ -109,7 +109,7 @@ dump in `postgres/dumps/` (git- and docker-ignored) into the database named afte
 `postgres/dumps/README.md`. For example, from a local server:
 
 ```bash
-pg_dump -h localhost -U postgres -d gateway -Fc -f docker/postgres/dumps/gateway.dump
+pg_dump -h localhost -U postgres -d reparo -Fc -f docker/postgres/dumps/reparo.dump
 ```
 
 **Create the SigNoz admin account once, on a fresh install.** Until SigNoz has an organisation,
@@ -119,7 +119,7 @@ fail. Open http://localhost:8080 and sign up, or headless:
 
 ```bash
 curl -X POST localhost:8080/api/v1/register -H 'Content-Type: application/json' \
-  -d '{"name":"Admin","orgName":"r2framework","email":"admin@example.com","password":"<password>"}'
+  -d '{"name":"Admin","orgName":"reparo","email":"admin@example.com","password":"<password>"}'
 docker compose -f docker/compose.dev.yaml up -d --wait
 ```
 
@@ -202,15 +202,15 @@ What can run as more than one instance today, and what needs work first.
 
 | Volume | Holds |
 | --- | --- |
-| `r2framework-postgres-data` | Postgres (18+ layout, mounted at `/var/lib/postgresql`) |
-| `r2framework-seaweedfs-volume-data` | SeaweedFS object data |
-| `r2framework-seaweedfs-filer-data` | SeaweedFS filer metadata (directory tree, buckets) |
-| `r2framework-seaweedfs-master-data` | SeaweedFS master state (rebuilt from the volume server) |
-| `r2framework-signoz-clickhouse-data` | Traces, logs, metrics |
-| `r2framework-signoz-metastore-data` | SigNoz users, dashboards, alerts |
-| `r2framework-signoz-keeper-data` | ClickHouse coordination |
-| `r2framework-signoz-clickhouse-scripts` | `histogramQuantile` UDF binary (re-downloadable) |
-| `r2framework-otel-agent-data` | Log read offsets |
+| `reparo-postgres-data` | Postgres (18+ layout, mounted at `/var/lib/postgresql`) |
+| `reparo-seaweedfs-volume-data` | SeaweedFS object data |
+| `reparo-seaweedfs-filer-data` | SeaweedFS filer metadata (directory tree, buckets) |
+| `reparo-seaweedfs-master-data` | SeaweedFS master state (rebuilt from the volume server) |
+| `reparo-signoz-clickhouse-data` | Traces, logs, metrics |
+| `reparo-signoz-metastore-data` | SigNoz users, dashboards, alerts |
+| `reparo-signoz-keeper-data` | ClickHouse coordination |
+| `reparo-signoz-clickhouse-scripts` | `histogramQuantile` UDF binary (re-downloadable) |
+| `reparo-otel-agent-data` | Log read offsets |
 
 `docker compose down` keeps the volumes; `-v` deletes them.
 

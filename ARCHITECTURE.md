@@ -1,6 +1,6 @@
 # Architecture
 
-How the R2Framework backend is put together today. This document explains concepts and how they
+How the Reparo backend is put together today. This document explains concepts and how they
 connect, and points to the code for detail. It does not list endpoints, fields or tables: the code
 and the OpenAPI reference (`/scalar`) are the source of truth for those. What is implemented versus
 planned is tracked in [`REQUIREMENTS.md`](REQUIREMENTS.md).

@@ -99,7 +99,7 @@ def _routes(app: FastAPI) -> None:
 
 @pytest.fixture(scope="session")
 def signoz() -> SignozClickHouse:
-    client = SignozClickHouse(f"r2framework-it-{uuid.uuid4().hex[:12]}")
+    client = SignozClickHouse(f"reparo-it-{uuid.uuid4().hex[:12]}")
     if not _collector_reachable():
         pytest.skip(f"SigNoz collector not reachable at {OTLP_ENDPOINT}")
     try:

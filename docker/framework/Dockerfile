@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# R2Framework API image, used by docker/compose.prod.yaml.
+# Reparo API image, used by docker/compose.prod.yaml.
 # Build context is the repository root:
 #   docker build -f docker/framework/Dockerfile .
 # Ignore rules: Dockerfile.dockerignore next to this file.

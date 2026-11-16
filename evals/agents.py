@@ -1,4 +1,4 @@
-"""Task functions that wire R2Framework agents to Strands Evals.
+"""Task functions that wire Reparo agents to Strands Evals.
 
 Each function creates a real Strands Agent with the original system prompt,
 invokes it with the test case input, and returns a dict that includes both
