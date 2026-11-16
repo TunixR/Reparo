@@ -47,7 +47,7 @@ endpoint (OpenRouter, OpenAI, vLLM...). The full development stack uses about 2 
    cp .env.example .env
    ```
 
-3. Install dependencies. Then create the tables and the S3 bucket, and seed the default agents,
+3. Install dependencies. Then apply the database migrations, create the S3 bucket, and seed the default agents,
    tools, provider routers and admin user. `populate.py` is safe to rerun.
 
    ```bash

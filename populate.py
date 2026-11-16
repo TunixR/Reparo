@@ -1,6 +1,6 @@
-"""Prepare a fresh environment: create the tables and the S3 bucket, then seed the database.
+"""Prepare a fresh environment: migrate the database, create the S3 bucket, then seed it.
 
-Safe to rerun: existing tables, the bucket and seeded rows are kept.
+Safe to rerun: applied migrations, the bucket and seeded rows are kept.
 """
 
 import asyncio

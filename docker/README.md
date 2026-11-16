@@ -130,9 +130,10 @@ docker compose -f docker/compose.dev.yaml up -d --wait
 docker compose -f docker/compose.dev.yaml up -d --wait postgres seaweedfs-s3
 ```
 
-**Schema, bucket and seed data.** `uv run python populate.py` creates the tables
+**Schema, bucket and seed data.** `uv run python populate.py` applies the Alembic migrations
 (`create_db_and_tables()`), creates `S3_BUCKET`, and seeds the agents, routers and admin. It is
-safe to rerun.
+safe to rerun. A database restored from a dump without an Alembic revision is refused; if its
+schema matches the models, record it with `uv run alembic stamp head`.
 
 ### Production
 
@@ -145,10 +146,10 @@ stack overrides service addresses and shared credentials, so they cannot drift.
 `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are required. Seed dumps are not mounted in
 production; restore with `pg_restore` through `docker compose exec postgres`.
 
-**Schema.** The API does not create its tables on startup, and `migrations/versions/` is
-git-ignored, so a new production database needs its schema from a dump or from
-`populate.py`, which runs `database.general.create_db_and_tables()`. Committed Alembic migrations, run once per deploy,
-are pending work.
+**Schema.** The API does not create or migrate its tables on startup. Apply the committed
+Alembic migrations once per deploy, before starting the new version, with `uv run alembic upgrade
+head` (or `populate.py`, which runs it). Alembic reads the database from the same `POSTGRES_*`
+settings as the framework.
 
 ### Integration tests
 
