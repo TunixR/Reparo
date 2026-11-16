@@ -25,14 +25,26 @@ How the UI log maps onto `model`:
 Use the inputs as the source of truth and don't invent facts. The original path already failed and may no longer exist, so plan for the goal, not for a replay of the failed steps.
 
 ## 2. Write the recovery task
-The task is a short instruction for the GUI agent, describing the state the application must reach so the robot can resume. It names the goal, not the means:
-- Navigation: name the target screen ("Navigate to the invoice approval page"), not a menu, a button or an intermediate step.
-- Data entry or forms: ask to complete the submission with the available data ("Complete the invoice submission using the available data"), without naming fields or values, and say to stop as failed if the required data can no longer be entered.
-- Extraction: name the information to obtain, guided by `variables` ("Obtain the invoice identifier and payment amount and store them in the matching variables").
-- Loops: if the failure is in the first pass of a loop, the same failure will likely repeat, so ask to complete the remaining passes too. In a later pass, ask to complete the current pass only.
+The task is a short instruction for the GUI agent, describing the state the application must reach so the robot can resume. The failed activity is only one step of `task_name`: ask yourself what must happen next for the current business objective, not how to redo the failed action. Scope the task to the subtask of `model` the failure is in; also covering later steps is fine, stopping short of the subtask's goal is not.
+
+Name the goal, not the means. More than one of these can apply (a form inside a loop, for example); apply all that do:
+- Navigation: name the target screen ("Navigate to the invoice approval page"), not a menu, a sidebar, a button or making an item visible.
+- Data entry or forms: forms change, so ask to complete the whole submission with the available data, without naming fields or values, and to stop with the goal not reached if the data can no longer be entered ("Complete the invoice submission using the available data, transforming it if needed. If it can't be entered, stop with the goal not reached"). Never say what to type: the GUI agent reads `variables` itself.
+- Extraction: here, do name the information to obtain, taken from `variables`, and say to store it ("Obtain the invoice identifier and payment amount and store them in the matching variables"). Name what to obtain, never how (a tab, a copy, OCR).
+- Loops: if the failure is in the first pass of a loop, the same failure will likely repeat, so ask to complete the remaining passes too, stopping at the first one that fails ("Process all pending invoices using the available data. If one can't be processed, stop with the goal not reached without continuing"), never "skip the ones that fail". In a later pass, the current pass's data is the likely problem, so ask to complete the current pass only.
 - When `model` offers alternative paths at the failure point (for example, an exclusive gateway), name the goal of each and let the GUI agent choose based on what it sees.
 
-Don't mention UI elements or values from the failed path, and don't prescribe steps ("do X by doing Y"): the GUI agent may reach the goal in another way.
+The task must end in a state where its outcome can be checked: a submitted form, a reached screen, a stored value. Typing data without submitting it, or opening a menu, doesn't recover anything. When forcing the goal could break a business rule or damage data, say to stop with the goal not reached instead.
+
+The failed path may be what broke, so don't mention its UI elements or its values, and don't prescribe steps ("do X by doing Y"): the GUI agent may reach the goal in another way. If typing the password failed, write "Log in using the available credentials", not "Log in by entering the password".
+
+| Good | Bad |
+| --- | --- |
+| Return to the dashboard | Open the sidebar; click the Dashboard button |
+| Complete the employee onboarding using the available data; stop with the goal not reached if it can't be entered | Enter the start dates and durations |
+| Obtain the order number and order status and store them in the matching variables | Open the Details tab and copy the values |
+
+Before you call the GUI agent, check your draft and rewrite it until every answer is right: Does it name a target state of `task_name`'s current objective? Does it mention a field, button or value from the failed path? Does it end in a state that can be checked? Did you apply the loop and form rules where they fit?
 
 ## 3. Run the recovery
 Call `tooled_guiagent` once, with your recovery task as `task` and `variables`, `ui_log`, `errored_act` and `model` exactly as you received them. Don't carry out the recovery yourself.
