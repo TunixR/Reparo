@@ -36,7 +36,11 @@ TOOL_NAME = "set_continuation"
 
 
 def _call(state: dict[str, Any], **tool_input: Any) -> ToolResultEvent:
-    """Call the tool as an agent would and return its result event."""
+    """Call the tool as an agent would and return its result event.
+
+    ``recovered`` defaults to true: most tests name a continuation.
+    """
+    tool_input = {"recovered": True} | tool_input
 
     async def run() -> ToolResultEvent:
         last: Any = None
@@ -292,9 +296,57 @@ def test_fails_without_a_model_in_the_invocation_state():
 
 
 @pytest.mark.parametrize(
-    "field", ["process_finished", "model_event_id", "loop_iteration"]
+    "field", ["recovered", "process_finished", "model_event_id", "loop_iteration"]
 )
 def test_every_argument_is_required(field: str):
     schema = set_continuation.tool_spec["inputSchema"]["json"]
 
     assert field in schema["required"]
+
+
+def test_stores_a_failed_recovery_without_reading_the_model():
+    # No model in the state: a failed recovery names no task to check.
+    state: dict[str, Any] = {"agent": MagicMock()}
+
+    result = _call(
+        state,
+        recovered=False,
+        process_finished=False,
+        model_event_id=None,
+        loop_iteration=[],
+    )
+
+    assert result.tool_result["status"] == "success"
+    assert "not repaired" in _text(result)
+    assert CONTINUATION_STATE_KEY in state
+    assert state[CONTINUATION_STATE_KEY] is None
+
+
+def test_a_failed_recovery_ignores_the_continuation_arguments():
+    state = _state(SPENDING_APPROVAL_MODEL)
+
+    result = _call(
+        state,
+        recovered=False,
+        process_finished=False,
+        model_event_id="not_a_task",
+        loop_iteration=[-1],
+    )
+
+    assert result.tool_result["status"] == "success"
+    assert state[CONTINUATION_STATE_KEY] is None
+
+
+def test_a_later_call_replaces_a_failed_recovery():
+    state = _state(SPENDING_APPROVAL_MODEL)
+    _ = _call(
+        state,
+        recovered=False,
+        process_finished=False,
+        model_event_id=None,
+        loop_iteration=[],
+    )
+
+    _ = _call(state, process_finished=True, model_event_id=None, loop_iteration=[])
+
+    assert state[CONTINUATION_STATE_KEY] == Continuation(process_finished=True)

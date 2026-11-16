@@ -3,8 +3,7 @@
     {
       "name": "Gateway Orchestrator",
       "description": "Central orchestrator that standardizes and routes external RPA error notifications.",
-      "prompt": null,
-      "prompt_import": "prompts.gateway:GATEWAY_ORCHESTRATOR_PROMPT",
+      "prompt_file": "gateway.md",
       "response_model": "templates.gateway.ResponseToRPA",
       "router_model": "$PROVIDER_MODEL",
       "agent_type": "GatewayAgent",
@@ -63,8 +62,7 @@
     {
       "name": "UI Exception Handler",
       "description": "Module responsible for managing UI-related errors. This module has access to the current UI state via screenshots and is provided with visual information about the moment where execution failed. It specializes in identifying and resolving issues related to user interface interactions, element detection, and visual validation failures.",
-      "prompt": null,
-      "prompt_import": "prompts.error_handler:UI_EXCEPTION_HANDLER",
+      "prompt_file": "ui_exception_handler.md",
       "response_model": "templates.error_handler.UiExceptionReport",
       "router_model": "$PROVIDER_MODEL",
       "agent_type": "ErrorAgent",
@@ -122,145 +120,9 @@
       }
     },
     {
-      "name": "UI Direct Recovery",
-      "description": "Performs immediate direct UI recovery using vision and tool models.",
-      "prompt": null,
-      "prompt_import": "prompts.gui_agent:RECOVERY_DIRECT_PROMPT",
-      "response_model": "templates.gui_agent.RecoveryDirectReport",
-      "router_model": "$PROVIDER_VISION_TOOL_MODEL",
-      "agent_type": "GuiAgent",
-      "input_type": "IMAGETEXT",
-      "enabled": false,
-      "arguments": [
-        {
-          "name": "task",
-          "description": "Task description at failure time.",
-          "type": "str",
-          "json_type": "string"
-        },
-        {
-          "name": "action_history",
-          "description": "Prior executed actions.",
-          "type": "list",
-          "json_type": "array"
-        },
-        {
-          "name": "failed_activity",
-          "description": "Failed action structure.",
-          "type": "dict",
-          "json_type": "object"
-        },
-        {
-          "name": "variables",
-          "description": "Execution variables.",
-          "type": "dict",
-          "json_type": "object"
-        }
-      ],
-      "tools": {
-        "names": ["take_screenshot"],
-        "limits": [null]
-      }
-    },
-    {
-      "name": "UI Recovery Planner",
-      "description": "Generates a multi-step recovery plan for a UI failure.",
-      "prompt": null,
-      "prompt_import": "prompts.gui_agent:RECOVERY_PLANNER_PROMPT",
-      "response_model": "templates.gui_agent.RecoveryPlannerReport",
-      "router_model": "$PROVIDER_VISION_MODEL",
-      "agent_type": "GuiAgent",
-      "input_type": "IMAGETEXT",
-      "enabled": false,
-      "arguments": [
-        {
-          "name": "task",
-          "description": "Task description at failure time.",
-          "type": "str",
-          "json_type": "string"
-        },
-        {
-          "name": "action_history",
-          "description": "Prior executed actions.",
-          "type": "list",
-          "json_type": "array"
-        },
-        {
-          "name": "failed_activity",
-          "description": "Failed action structure.",
-          "type": "dict",
-          "json_type": "object"
-        },
-        {
-          "name": "future_activities",
-          "description": "Upcoming planned actions.",
-          "type": "list",
-          "json_type": "array"
-        },
-        {
-          "name": "variables",
-          "description": "Execution variables.",
-          "type": "dict",
-          "json_type": "object"
-        }
-      ],
-      "tools": {
-        "names": ["take_screenshot"],
-        "limits": [null]
-      }
-    },
-    {
-      "name": "UI Step Executor",
-      "description": "Executes individual planned recovery steps and validates outcomes.",
-      "prompt": null,
-      "prompt_import": "prompts.gui_agent:RECOVERY_STEP_EXECUTION_PROMPT",
-      "response_model": "templates.gui_agent.RecoveryStepExecutionResult",
-      "router_model": "$PROVIDER_VISION_TOOL_MODEL",
-      "agent_type": "GuiAgent",
-      "input_type": "IMAGETEXT",
-      "enabled": false,
-      "arguments": [
-        {
-          "name": "step",
-          "description": "Current recovery step to execute.",
-          "type": "str",
-          "json_type": "string"
-        },
-        {
-          "name": "step_history",
-          "description": "Previously executed recovery steps.",
-          "type": "list",
-          "json_type": "array"
-        },
-        {
-          "name": "process_goal",
-          "description": "Overall goal of the process.",
-          "type": "str",
-          "json_type": "string"
-        },
-        {
-          "name": "variables",
-          "description": "Execution variables.",
-          "type": "dict",
-          "json_type": "object"
-        },
-        {
-          "name": "is_final",
-          "description": "Whether this is the final step.",
-          "type": "bool",
-          "json_type": "boolean"
-        }
-      ],
-      "tools": {
-        "names": ["take_screenshot"],
-        "limits": [null]
-      }
-    },
-    {
-      "name": "UI UITARS Grounding",
-      "description": "Grounds UI actions using UITARS model and executes them.",
-      "prompt": "Ground and execute UI actions using provided context and screenshots.",
-      "prompt_import": null,
+      "name": "UI Standalone UITARS",
+      "description": "Recovers the UI by acting on the robot's desktop through action tools, each returning a fresh screenshot.",
+      "prompt_file": "gui_agent_tooled.md",
       "response_model": null,
       "router_model": "$PROVIDER_GROUNDING_MODEL",
       "agent_type": "GuiAgent",
@@ -274,39 +136,44 @@
           "json_type": "string"
         },
         {
-          "name": "step_history",
-          "description": "Previously executed steps.",
-          "type": "list",
-          "json_type": "array"
-        },
-        {
           "name": "variables",
           "description": "Execution variables.",
           "type": "dict",
           "json_type": "object"
         },
         {
-          "name": "expect_ui_change",
-          "description": "Whether an observable UI change is expected.",
-          "type": "bool",
-          "json_type": "boolean"
+          "name": "ui_log",
+          "description": "Ordered UI execution history leading up to the failure.",
+          "type": "list",
+          "json_type": "array"
+        },
+        {
+          "name": "errored_act",
+          "description": "Structured information about the action that failed.",
+          "type": "dict",
+          "json_type": "object"
+        },
+        {
+          "name": "model",
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
+          "type": "str",
+          "json_type": "string"
         }
       ],
       "tools": {
-        "names": ["take_screenshot"],
-        "limits": [null]
+        "names": [],
+        "limits": []
       }
     },
     {
-      "name": "UI Standalone UITARS",
-      "description": "Executes recovery directly via iterative UITARS grounding without planning.",
-      "prompt": null,
-      "prompt_import": "prompts.gui_agent:STANDALONE_COMPUTER_USE_DOUBAO",
+      "name": "UI-TARS GUI Agent",
+      "description": "Text-based GUI agent that writes UI-TARS actions for the standalone UI-TARS loop (database/agents/uitars.py). Disabled: GUI agents are run through the tool-based loop, which this prompt doesn't fit.",
+      "prompt_file": "gui_agent_text.md",
       "response_model": null,
       "router_model": "$PROVIDER_GROUNDING_MODEL",
       "agent_type": "GuiAgent",
       "input_type": "IMAGETEXT",
-      "enabled": true,
+      "enabled": false,
       "arguments": [
         {
           "name": "task",
@@ -349,31 +216,6 @@
     {
       "parent": "Gateway Orchestrator",
       "child": "UI Exception Handler",
-      "limit": 1
-    },
-    {
-      "parent": "UI Exception Handler",
-      "child": "UI Direct Recovery",
-      "limit": 1
-    },
-    {
-      "parent": "UI Exception Handler",
-      "child": "UI Recovery Planner",
-      "limit": 1
-    },
-    {
-      "parent": "UI Exception Handler",
-      "child": "UI Step Executor",
-      "limit": 1
-    },
-    {
-      "parent": "UI Direct Recovery",
-      "child": "UI UITARS Grounding",
-      "limit": 1
-    },
-    {
-      "parent": "UI Step Executor",
-      "child": "UI UITARS Grounding",
       "limit": 1
     },
     {

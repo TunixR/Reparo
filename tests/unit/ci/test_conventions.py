@@ -186,7 +186,7 @@ def test_vocabulary_is_consistent_across_config() -> None:
 def test_issue_labels_keep_dominant_areas_only() -> None:
     body = (
         "`database/agents/models.py`, `database/agents/base.py`, `gateway/agent.py`, "
-        "`prompts/gui_agent.py` and, once, `evals/run_recovery_eval.py`. See ARCHITECTURE.md "
+        "`database/populators/default_prompts/gui_agent_tooled.md` and, once, `evals/run_recovery_eval.py`. See ARCHITECTURE.md "
         "and OBSERVABILITY.md."
     )
     assert conventions.issue_labels(body, [], AREAS) == {"area: agents"}

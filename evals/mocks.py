@@ -18,7 +18,7 @@ class GatewayMocks:
     """Mock tools for Gateway Orchestrator (Contribution 1: Error Filtering).
 
     Provides:
-    - ui_error_handler: mock that captures when gateway routes to UI module
+    - ui_exception_handler: mock that captures when gateway routes to UI module
     - route_to_human: mock that captures when gateway escalates to human
     """
 
@@ -31,7 +31,7 @@ class GatewayMocks:
         capture = self
 
         @tool(
-            name="ui_error_handler",
+            name="ui_exception_handler",
             description="Handle UI-related errors with screenshot analysis and recovery.",
             context=True,
         )
@@ -106,7 +106,7 @@ class HandlerMocks:
             return (
                 "Recovery completed successfully in test environment. "
                 "The rest of the process was completed during recovery. "
-                "Use set_continuation with process_finished set to true."
+                "Use set_continuation with recovered and process_finished set to true."
             )
 
         @tool(
@@ -114,12 +114,14 @@ class HandlerMocks:
             description=set_continuation.tool_spec["description"],
         )
         def mock_set_continuation(
+            recovered: bool,
             process_finished: bool,
             model_event_id: str | None,
             loop_iteration: list[int],
         ) -> str:
             capture.continuation_calls.append(
                 {
+                    "recovered": recovered,
                     "process_finished": process_finished,
                     "model_event_id": model_event_id,
                     "loop_iteration": loop_iteration,

@@ -89,6 +89,7 @@ EVENT_RECOVERY_PAYLOAD_INVALID = "recovery.payload_invalid"
 EVENT_RECOVERY_TURN_FAILED = "recovery.turn_failed"
 EVENT_RECOVERY_EVAL_INVALID = "recovery.eval_invalid"
 EVENT_RECOVERY_MISSING_CONTINUATION = "missing_continuation"
+EVENT_RECOVERY_NOT_RECOVERED = "not_recovered"
 EVENT_LOOP_DEPTH_UNCHECKED = "loop_depth_unchecked"
 EVENT_ROBOT_ABORTED = "robot_aborted"
 

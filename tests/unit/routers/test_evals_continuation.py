@@ -31,10 +31,12 @@ def _continuation(
     model_event_id: str | None,
     loop_iteration: list[int],
     process_finished: bool = False,
+    recovered: bool = True,
 ) -> ToolCall:
     return ToolCall(
         "set_continuation",
         {
+            "recovered": recovered,
             "process_finished": process_finished,
             "model_event_id": model_event_id,
             "loop_iteration": loop_iteration,
@@ -193,6 +195,22 @@ def test_missing_continuation_is_scored_as_a_failure(
     assert span.attributes is not None
     assert span.attributes["recovery.failure_reason"] == "missing_continuation"
     assert [e.name for e in span.events] == ["missing_continuation"]
+
+
+def test_unfulfilled_task_is_scored_as_a_failure(
+    monkeypatch: pytest.MonkeyPatch, exporter: InMemorySpanExporter
+):
+    result, scripted, span = _run(
+        monkeypatch,
+        exporter,
+        [_continuation(None, [], recovered=False), "Not fulfilled.", _report(False)],
+    )
+
+    assert result["success"] is False
+    assert result["continue_from_model_event_id"] is None
+    assert scripted.calls == 3
+    assert span.attributes is not None
+    assert "recovery.failure_reason" not in span.attributes
 
 
 def test_reported_failure_drops_a_stored_continuation(

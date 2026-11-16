@@ -8,13 +8,13 @@ Notes:
 - Idempotent: existing agents are matched by name and their argument contracts are kept in sync.
 - Tools must have been populated previously (populate_tools) or they will be skipped.
 - Routers must exist for the specified model names in the JSON (use populate_routers first).
+- Prompts are read from Markdown files in `default_prompts/`, named by each agent's `prompt_file`.
 - Response model paths are stored as import strings for dynamic loading at runtime.
 - Supports sub-agent relationships and tool attachments via JSON.
 """
 
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -120,7 +120,7 @@ def _create_agent(
     session: Session,
     name: str,
     description: str,
-    prompt: str | None,
+    prompt: str,
     response_model: str | None,
     args: list[Argument],
     router: Router,
@@ -243,8 +243,7 @@ def _load_json_config() -> dict[str, Any]:
         {
           "name": "...",
           "description": "...",
-          "prompt": "..." | null,
-          "prompt_import": "package.module:CONST_OR_FUNC" | null,
+          "prompt_file": "agent_name.md",  // in default_prompts/
           "response_model": "package.module.ClassName" | null,
           "router_model": "gpt-4o-mini" | "$PROVIDER_MODEL" | "$PROVIDER_VISION_MODEL" | "$PROVIDER_VISION_TOOL_MODEL" | "$PROVIDER_GROUNDING_MODEL",
           "agent_type": "GatewayAgent" | "ErrorAgent" | "GuiAgent",
@@ -258,7 +257,7 @@ def _load_json_config() -> dict[str, Any]:
           }
         ],
       "sub_agents": [
-        {"parent": "UI Exception Handler", "child": "UI Direct Recovery", "limit": 1}
+        {"parent": "UI Exception Handler", "child": "UI Standalone UITARS", "limit": 1}
       ]
     }
     """
@@ -286,21 +285,20 @@ def _resolve_router_model(model_token: str) -> str:
     return token_map.get(model_token, model_token)
 
 
-def _import_prompt(prompt_import: str) -> str:
-    """
-    Import prompt from 'package.module:ATTRIBUTE_OR_CALLABLE'.
-    If callable, call it without args to get the prompt string.
-    """
-    module_name, _, attr = prompt_import.partition(":")
-    if not module_name or not attr:
+DEFAULT_PROMPTS_DIR = Path(__file__).parent / "default_prompts"
+
+
+def _read_prompt(agent_name: str, prompt_file: str | None) -> str:
+    """Read an agent's prompt from its file in ``default_prompts/``."""
+    if not prompt_file:
+        raise ValueError(f"[populate_agents] Agent '{agent_name}' has no prompt_file.")
+    path = DEFAULT_PROMPTS_DIR / prompt_file
+    if path.parent != DEFAULT_PROMPTS_DIR:
         raise ValueError(
-            f"Invalid prompt_import '{prompt_import}'. Expected 'module:attr'"
+            f"[populate_agents] prompt_file '{prompt_file}' of agent '{agent_name}' "
+            f"must be a file name in {DEFAULT_PROMPTS_DIR}."
         )
-    module = importlib.import_module(module_name)
-    obj = getattr(module, attr)
-    if callable(obj):
-        raise ValueError("Prompt import functions are not supported in this context.")
-    return str(obj)
+    return path.read_text(encoding="utf-8")
 
 
 def populate_agents(engine: Engine) -> None:
@@ -322,10 +320,7 @@ def populate_agents(engine: Engine) -> None:
         for item in agents_cfg:
             name = item["name"]
             description = item.get("description", "") or ""
-            prompt: str | None = item.get("prompt", None)
-            prompt_import = item.get("prompt_import")
-            if prompt_import and not prompt:
-                prompt = _import_prompt(prompt_import)
+            prompt = _read_prompt(name, item.get("prompt_file"))
 
             response_model = item.get("response_model")
             router_model_token = item.get("router_model", "$PROVIDER_MODEL")

@@ -21,12 +21,12 @@ PROCESS_MODEL_STATE_KEY = "process_model"
 
 
 class Continuation(BaseModel):
-    """Where the robot continues after the recovery, as validated by `set_continuation`.
+    """Where the robot continues after a repaired recovery, as validated by `set_continuation`.
 
     Attributes:
         process_finished: The recovery completed the rest of the process.
         continue_from_model_event_id: The task of the model the robot runs next;
-            `None` when the process is finished or no continuation was set.
+            `None` when the process is finished.
         loop_iteration: 0-based passes of the loops enclosing that task,
             outermost first.
     """
@@ -38,13 +38,20 @@ class Continuation(BaseModel):
     loop_iteration: list[int] = Field(default_factory=list)
 
 
-NO_CONTINUATION = Continuation()
+# `set_continuation` stores under CONTINUATION_STATE_KEY a `Continuation` when the
+# recovery was repaired, or `None` when it wasn't; the key is absent until it is called.
 
 
-def stored_continuation(state: MutableMapping[str, Any]) -> Continuation:
-    """The continuation in an invocation state; `NO_CONTINUATION` if none was set."""
+def stored_continuation(state: MutableMapping[str, Any]) -> Continuation | None:
+    """The continuation `set_continuation` accepted; `None` if it wasn't called or the
+    recovery wasn't repaired (see `declared_not_recovered`)."""
     continuation = state.get(CONTINUATION_STATE_KEY)
-    return continuation if isinstance(continuation, Continuation) else NO_CONTINUATION
+    return continuation if isinstance(continuation, Continuation) else None
+
+
+def declared_not_recovered(state: MutableMapping[str, Any]) -> bool:
+    """Whether `set_continuation` was called with `recovered` false."""
+    return CONTINUATION_STATE_KEY in state and state[CONTINUATION_STATE_KEY] is None
 
 
 def _invalid(field: str, value: object, message: str) -> ValidationError:
@@ -67,8 +74,12 @@ def _describe_loops(loops: list[Loop]) -> str:
 @tool(
     context=True,
     description=(
-        "Set where the RPA robot continues after the recovery. This is the only way to "
-        "name the continuation, and it must succeed before you finish.\n"
+        "State whether the recovery repaired the process and, if it did, where the RPA "
+        "robot continues. This is the only way to name the continuation, and it must "
+        "succeed before you finish.\n"
+        "- recovered: false if the recovery failed and the process was not repaired; "
+        "pass process_finished false, model_event_id null and loop_iteration []; they "
+        "are ignored and the robot is told the recovery failed.\n"
         "- process_finished: true if the recovery completed the rest of the process, so "
         "the robot has nothing left to run; model_event_id and loop_iteration are then "
         "ignored.\n"
@@ -82,12 +93,19 @@ def _describe_loops(loops: list[Loop]) -> str:
     ),
 )
 def set_continuation(
+    recovered: bool,
     process_finished: bool,
     model_event_id: str | None,
     loop_iteration: list[int],
     tool_context: ToolContext,
 ) -> str:
     state = tool_context.invocation_state
+
+    if not recovered:
+        state[CONTINUATION_STATE_KEY] = None
+        return (
+            "ok: the recovery failed; the robot is told the process was not repaired."
+        )
 
     if process_finished:
         state[CONTINUATION_STATE_KEY] = Continuation(process_finished=True)
