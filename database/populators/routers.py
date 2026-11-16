@@ -4,10 +4,10 @@ JSON-driven populator for the LLM provider routers.
 Each entry of `routers.json` is a router *role* (`text`, `grounding`, ...). Agents name the role
 they run on (`agents.json` → `router`), so they never depend on which model a role resolves to.
 
-A role's provider, endpoint and key come from, in order:
-1. `ROUTER_<ROLE>_PROVIDER` / `ROUTER_<ROLE>_API_BASE` / `ROUTER_<ROLE>_API_KEY` in the environment;
-2. the entry's `provider_type` / `api_endpoint` / `api_key` (`$TOKEN`s are resolved from settings);
-3. `PROVIDER` / `PROVIDER_API_BASE` / `PROVIDER_API_KEY`.
+Every value may be a `$NAME` token, resolved from the setting of that name in `settings.py`. The
+shipped entries take their provider, endpoint and key from `$ROUTER_<ROLE>_PROVIDER`,
+`$ROUTER_<ROLE>_API_BASE` and `$ROUTER_<ROLE>_API_KEY`, which default to `PROVIDER`,
+`PROVIDER_API_BASE` and `PROVIDER_API_KEY`.
 
 Roles that resolve to the same model on the same endpoint share one Router row, with the union of
 their capabilities.
@@ -23,26 +23,15 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
+import settings
 from database.provider.models import Router
-from settings import (
-    FREE_PROVIDER_API_KEY,
-    PROVIDER,
-    PROVIDER_API_BASE,
-    PROVIDER_API_KEY,
-    PROVIDER_GROUNDING_MODEL,
-    PROVIDER_GROUNDING_MODEL_BACKBONE,
-    PROVIDER_MODEL,
-    PROVIDER_VISION_MODEL,
-    PROVIDER_VISION_TOOL_MODEL,
-    ROUTER_OVERRIDES,
-)
 
 CONFIG_PATH = Path(__file__).parent / "routers.json"
 
 
 @dataclass
 class RouterSpec:
-    """A router role from `routers.json`, with every token and override resolved."""
+    """A router role from `routers.json`, with every token resolved."""
 
     roles: list[str]
     model_name: str
@@ -63,11 +52,11 @@ def _load_json_config() -> dict[str, Any]:
     {
       "routers": [
         {
-          "role": "grounding",  // unique; agents reference it, ROUTER_<ROLE>_* override it
+          "role": "grounding",  // unique; agents reference it
           "model_name": "$PROVIDER_GROUNDING_MODEL" | "literal-model-name",
-          "api_key": "$PROVIDER_API_KEY",  // optional, defaults to PROVIDER_API_KEY
-          "api_endpoint": "$PROVIDER_API_BASE",  // optional, defaults to PROVIDER_API_BASE
-          "provider_type": "VLLM",  // optional, defaults to PROVIDER
+          "provider_type": "$ROUTER_GROUNDING_PROVIDER" | "openrouter" | "openai" | "vllm",
+          "api_endpoint": "$ROUTER_GROUNDING_API_BASE" | "http://localhost:8000/v1",
+          "api_key": "$ROUTER_GROUNDING_API_KEY" | "literal-api-key",
           "capabilities": ["TEXT", "VISION"],  // optional, defaults to ["TEXT"]
           "vision_backbone": "QWEN3.5"  // optional, defaults to OTHER for vision routers
         }
@@ -84,21 +73,16 @@ def _load_json_config() -> dict[str, Any]:
 
 def _resolve_token(value: str | None) -> str:
     """
-    Resolve known tokens to values from settings, otherwise return the literal.
+    Resolve a `$NAME` token to the setting of that name, otherwise return the literal.
     """
-    if value is None:
+    if not value:
         return ""
-    token_map = {
-        "$FREE_PROVIDER_API_KEY": FREE_PROVIDER_API_KEY,
-        "$PROVIDER_API_KEY": PROVIDER_API_KEY,
-        "$PROVIDER_API_BASE": PROVIDER_API_BASE,
-        "$PROVIDER_MODEL": PROVIDER_MODEL,
-        "$PROVIDER_VISION_MODEL": PROVIDER_VISION_MODEL,
-        "$PROVIDER_VISION_TOOL_MODEL": PROVIDER_VISION_TOOL_MODEL,
-        "$PROVIDER_GROUNDING_MODEL": PROVIDER_GROUNDING_MODEL,
-        "$PROVIDER_GROUNDING_MODEL_BACKBONE": PROVIDER_GROUNDING_MODEL_BACKBONE,
-    }
-    return token_map.get(value, value)
+    if not value.startswith("$"):
+        return value
+    resolved = getattr(settings, value[1:], None)
+    if not isinstance(resolved, str):
+        raise ValueError(f"[populate_routers] Unknown setting token '{value}'.")
+    return resolved
 
 
 def _resolve_provider_type(name: str) -> Router.Provider:
@@ -141,42 +125,22 @@ def _resolve_vision_backbone(name: str | None) -> Router.VisionBackbone | None:
 def _resolve_spec(item: dict[str, Any]) -> RouterSpec:
     """Resolve one `routers.json` entry into a RouterSpec."""
     role = str(item["role"]).lower()
-    overrides = ROUTER_OVERRIDES.get(role.upper(), {})
 
-    model_name = _resolve_token(item["model_name"])
-    if not model_name:
-        raise ValueError(
-            f"[populate_routers] Router role '{role}' has no model: set the variable "
-            f"behind '{item['model_name']}' in .env."
-        )
-
-    provider_name = (
-        overrides.get("PROVIDER")
-        or _resolve_token(item.get("provider_type"))
-        or PROVIDER
-    )
-    api_endpoint = (
-        overrides.get("API_BASE")
-        or _resolve_token(item.get("api_endpoint"))
-        or PROVIDER_API_BASE
-    )
-    api_key = (
-        overrides.get("API_KEY")
-        or _resolve_token(item.get("api_key"))
-        or PROVIDER_API_KEY
-    )
-    if not api_endpoint:
-        raise ValueError(
-            f"[populate_routers] Router role '{role}' has no endpoint: set PROVIDER_API_BASE "
-            f"or ROUTER_{role.upper()}_API_BASE in .env."
-        )
+    def required(key: str) -> str:
+        value = _resolve_token(item.get(key))
+        if not value:
+            raise ValueError(
+                f"[populate_routers] Router role '{role}' has no {key}: set the variable "
+                f"behind '{item.get(key)}' in .env."
+            )
+        return value
 
     return RouterSpec(
         roles=[role],
-        model_name=model_name,
-        api_endpoint=api_endpoint,
-        api_key=api_key,
-        provider_type=_resolve_provider_type(provider_name),
+        model_name=required("model_name"),
+        api_endpoint=required("api_endpoint"),
+        api_key=_resolve_token(item.get("api_key")),
+        provider_type=_resolve_provider_type(required("provider_type")),
         capabilities=_resolve_capabilities(item.get("capabilities")),
         vision_backbone=_resolve_vision_backbone(
             _resolve_token(item.get("vision_backbone"))

@@ -10,7 +10,8 @@ import pytest
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
-from database.populators import routers
+import database.populators.routers as routers
+import settings
 from database.provider.models import Router
 
 SETTINGS = {
@@ -24,23 +25,46 @@ SETTINGS = {
     "PROVIDER_GROUNDING_MODEL": "grounding-model",
     "PROVIDER_GROUNDING_MODEL_BACKBONE": "QWEN3.5",
 }
+ROLES = ("TEXT", "GROUNDING", "UITARS", "VISION", "VISION_TOOL")
 
 
 @pytest.fixture
 def configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    """Point the populator at a routers.json and settings of the test's choosing."""
+    """Point the populator at a routers.json, environment and settings of the test's choosing.
+
+    The ROUTER_<ROLE>_* settings are derived from `env` the way settings.py derives them.
+    """
 
     def _configure(
         entries: list[dict[str, Any]],
-        overrides: dict[str, dict[str, str]] | None = None,
-        **settings: str,
+        env: dict[str, str] | None = None,
+        **overrides: str,
     ) -> None:
         config = tmp_path / "routers.json"
         _ = config.write_text(json.dumps({"routers": entries}), encoding="utf-8")
         monkeypatch.setattr(routers, "CONFIG_PATH", config)
-        for name, value in {**SETTINGS, **settings}.items():
-            monkeypatch.setattr(routers, name, value)
-        monkeypatch.setattr(routers, "ROUTER_OVERRIDES", overrides or {})
+        values = {**SETTINGS, **overrides}
+        for name, value in values.items():
+            monkeypatch.setattr(settings, name, value)
+        for role in ROLES:
+            for setting in ("PROVIDER", "API_BASE", "API_KEY"):
+                monkeypatch.delenv(f"ROUTER_{role}_{setting}", raising=False)
+        for name, value in (env or {}).items():
+            monkeypatch.setenv(name, value)
+        key_default = values["PROVIDER_API_KEY"]
+        free_default = values["FREE_PROVIDER_API_KEY"] or key_default
+        for role in ROLES:
+            defaults = {
+                "PROVIDER": values["PROVIDER"],
+                "API_BASE": values["PROVIDER_API_BASE"],
+                "API_KEY": free_default if role.startswith("VISION") else key_default,
+            }
+            for setting, default in defaults.items():
+                monkeypatch.setattr(
+                    settings,
+                    f"ROUTER_{role}_{setting}",
+                    settings._router_setting(role, setting, default),  # pyright: ignore[reportPrivateUsage]
+                )
 
     return _configure
 
@@ -83,12 +107,10 @@ def test_an_unknown_backbone_names_the_allowed_values():
 def test_a_role_override_sets_its_provider_endpoint_and_key(configure):
     configure(
         _shipped_entries(),
-        overrides={
-            "GROUNDING": {
-                "PROVIDER": "vllm",
-                "API_BASE": "http://gpu.test:8000/v1",
-                "API_KEY": "",
-            }
+        env={
+            "ROUTER_GROUNDING_PROVIDER": "vllm",
+            "ROUTER_GROUNDING_API_BASE": "http://gpu.test:8000/v1",
+            "ROUTER_GROUNDING_API_KEY": "",
         },
     )
 
@@ -119,7 +141,7 @@ def test_an_unknown_provider_names_the_allowed_values(configure):
 def test_a_role_without_a_model_says_which_variable_to_set(configure):
     configure(_shipped_entries(), PROVIDER_GROUNDING_MODEL="")
 
-    with pytest.raises(ValueError, match=r"\$PROVIDER_GROUNDING_MODEL"):
+    with pytest.raises(ValueError, match=r"no model_name.*\$PROVIDER_GROUNDING_MODEL"):
         _ = routers.resolve_router_specs()
 
 
@@ -141,7 +163,7 @@ def test_roles_on_the_same_model_merge_capabilities_and_keep_the_specific_backbo
 def test_roles_on_the_same_model_with_different_keys_are_rejected(configure):
     configure(
         _shipped_entries(),
-        overrides={"GROUNDING": {"API_KEY": "other-key"}},
+        env={"ROUTER_GROUNDING_API_KEY": "other-key"},
         PROVIDER_GROUNDING_MODEL="text-model",
     )
 
@@ -180,6 +202,35 @@ def test_populate_rerun_adds_missing_capabilities_to_an_existing_router(
     text = routers.find_router(session, "text")
     assert text.supports_capabilities(Router.Capability.VISION)
     assert text.vision_backbone == Router.VisionBackbone.QWEN3_5
+
+
+def test_an_unknown_token_is_rejected(configure):
+    configure([{**_shipped_entries()[0], "api_endpoint": "$NOT_A_SETTING"}])
+
+    with pytest.raises(ValueError, match="Unknown setting token"):
+        _ = routers.resolve_router_specs()
+
+
+def test_literal_values_are_used_as_is(configure):
+    configure(
+        [
+            {
+                "role": "text",
+                "model_name": "my-model",
+                "provider_type": "vllm",
+                "api_endpoint": "http://localhost:8001/v1",
+                "api_key": "",
+            }
+        ]
+    )
+
+    spec = routers.resolve_router_specs()["text"]
+
+    assert (spec.provider_type, spec.api_endpoint, spec.api_key) == (
+        Router.Provider.VLLM,
+        "http://localhost:8001/v1",
+        "",
+    )
 
 
 def test_find_router_rejects_an_unknown_role(configure, session: Session):

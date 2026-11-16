@@ -12,7 +12,6 @@ import database.general  # noqa: F401 - registers every table on SQLModel.metada
 from database.keys.models import RobotKey
 
 MIN_SERVER_VERSION = 180000  # docker/postgres pins Postgres 18
-# docker/postgres/compose.yaml creates the role from POSTGRES_MONITOR_USER in docker/.env.
 MONITOR_USER = os.getenv("POSTGRES_MONITOR_USER", "otel_monitor")
 
 

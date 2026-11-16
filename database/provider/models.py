@@ -181,7 +181,6 @@ class Router(SQLModel, table=True):
                         return (prompt_cost, completion_cost)
             return (-1.0, -1.0)
 
-        # OpenAI and self-hosted (vLLM) endpoints publish no per-model pricing API.
         return (-1.0, -1.0)
 
     def get_conversation_cost(self, input_tokens: int, output_tokens: int) -> float:

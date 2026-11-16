@@ -92,9 +92,10 @@ run on (`agents.json` → `router`).
 | `uitars` | `bytedance/ui-tars-1.5-7b` | UI Standalone UITARS (disabled) |
 | `vision`, `vision_tool` | `PROVIDER_VISION_MODEL`, `PROVIDER_VISION_TOOL_MODEL` | Not used by the default agents |
 
-Each role takes its provider, endpoint and key from `ROUTER_<ROLE>_PROVIDER`,
-`ROUTER_<ROLE>_API_BASE` and `ROUTER_<ROLE>_API_KEY` when they are set, and otherwise from
-`PROVIDER`, `PROVIDER_API_BASE` and `PROVIDER_API_KEY`. For example, to keep the text agents on
+Each `routers.json` entry names its settings directly: `"provider_type": "$ROUTER_<ROLE>_PROVIDER"`,
+`"api_endpoint": "$ROUTER_<ROLE>_API_BASE"` and `"api_key": "$ROUTER_<ROLE>_API_KEY"`. A literal
+value works too. In `settings.py` those settings default to `PROVIDER`, `PROVIDER_API_BASE` and
+`PROVIDER_API_KEY` when unset. For example, to keep the text agents on
 OpenRouter and run grounding on your own vLLM server:
 
 ```bash
