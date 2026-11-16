@@ -32,12 +32,15 @@ from agent_tools.hooks import AgentLoggingHook, MaxGuiImagesHook
 from agent_tools.image import capture_screenshot
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
 
+MAX_ACTIONS = 40
+
 
 class TooledGuiAgent:
     def __init__(self, agent: Agent):
         self.agent = agent
         self.relative_dim = agent.router.relative_dim
         self.original_coords = agent.router.original_coords
+        self.actions = 0
 
     def _box_to_coords(self, box: list[float]) -> tuple[float, float]:
         if len(box) == 2:
@@ -59,7 +62,15 @@ class TooledGuiAgent:
         Raises:
             WebSocketDisconnect: propagated as-is when the client disconnects.
             RuntimeError: when the client reports action failure.
+            RuntimeError: when the action limit is exceeded.
         """
+        if self.actions >= MAX_ACTIONS:
+            raise RuntimeError(
+                "too many actions, must finish. If you did not manage to reach your goal, finish with success=false"
+            )
+
+        self.actions += 1
+
         state = tool_context.invocation_state
         websocket = state["websocket"]
         hook: AgentLoggingHook = state["hook"]
