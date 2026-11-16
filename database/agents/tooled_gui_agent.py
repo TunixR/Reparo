@@ -33,6 +33,9 @@ from agent_tools.image import capture_screenshot
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
 from robot.capabilities import require_vision
 
+TOOL_NAME = "tooled_guiagent"
+"""The tool name every GUI agent is exposed as to its parent agent."""
+
 
 class TooledGuiAgent:
     def __init__(self, agent: Agent):
@@ -427,7 +430,7 @@ class TooledGuiAgent:
     # ---------------------------------------------------------------------------
 
     @tool(
-        name="tooled_guiagent",
+        name=TOOL_NAME,
         description="A element and action ground model for UI tasks.",
         context=True,
     )
@@ -466,7 +469,7 @@ class TooledGuiAgent:
                         "errored_act": errored_act,
                         "model": model,
                     },
-                    name="tooled_guiagent",
+                    name=TOOL_NAME,
                     toolUseId="MANUAL",
                     reasoningSignature="",
                 ),

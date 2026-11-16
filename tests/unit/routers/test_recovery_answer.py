@@ -71,10 +71,12 @@ def _continuation(
     model_event_id: str | None,
     loop_iteration: list[int],
     process_finished: bool = False,
+    recovered: bool = True,
 ) -> ToolCall:
     return ToolCall(
         "set_continuation",
         {
+            "recovered": recovered,
             "process_finished": process_finished,
             "model_event_id": model_event_id,
             "loop_iteration": loop_iteration,
@@ -345,6 +347,64 @@ def test_missing_continuation_is_sent_as_a_failure(
     assert turn.attributes["recovery.success"] is False
     assert [e.name for e in turn.events].count("missing_continuation") == 1
     assert models["UI Exception Handler"].calls == 1 + MAX_REQUIRED_TOOL_REMINDERS + 1
+
+
+def test_success_after_a_declared_failure_is_sent_as_a_failure(
+    client: TestClient,
+    robot_key_raw: str,
+    spending_payload: dict[str, Any],
+    script: Callable[..., dict[str, ScriptedModel]],
+    span_exporter: InMemorySpanExporter,
+):
+    # The agent said the process wasn't repaired, then reported a success anyway.
+    _ = script(
+        gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(True)],
+        error_turns=[
+            _continuation(None, [], recovered=False),
+            "Not repaired.",
+            _report(True),
+        ],
+    )
+
+    message = _recover(client, robot_key_raw, spending_payload)
+
+    assert message["content"] == {
+        "success": False,
+        "process_finished": False,
+        "continue_from_model_event_id": None,
+        "loop_iteration": [],
+        "variables": spending_payload["variables"],
+    }
+    turn = _turn(span_exporter)
+    assert turn.attributes is not None
+    assert turn.attributes["recovery.failure_reason"] == "not_recovered"
+
+
+def test_declared_failure_is_sent_without_a_failure_reason(
+    client: TestClient,
+    robot_key_raw: str,
+    spending_payload: dict[str, Any],
+    script: Callable[..., dict[str, ScriptedModel]],
+    span_exporter: InMemorySpanExporter,
+):
+    models = script(
+        gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(False)],
+        error_turns=[
+            _continuation(None, [], recovered=False),
+            "Not repaired.",
+            _report(False),
+        ],
+    )
+
+    message = _recover(client, robot_key_raw, spending_payload)
+
+    assert message["content"]["success"] is False
+    assert message["content"]["continue_from_model_event_id"] is None
+    turn = _turn(span_exporter)
+    assert turn.attributes is not None
+    assert "recovery.failure_reason" not in turn.attributes
+    # The required tool was called, so the agent is not sent back.
+    assert models["UI Exception Handler"].calls == 3
 
 
 def test_reported_failure_drops_a_stored_continuation(

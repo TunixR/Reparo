@@ -25,8 +25,6 @@ PROVIDER_GROUNDING_MODEL_BACKBONE = os.getenv("PROVIDER_GROUNDING_MODEL_BACKBONE
 MAX_GUI_IMAGES = int(os.getenv("MAX_GUI_IMAGES", "5"))
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
-UI_ERROR_PLANNING = os.getenv("UI_ERROR_PLANNING", "false").lower() == "true"
-UI_MID_AGENT = os.getenv("UI_MID_AGENT", "false").lower() == "true"
 
 S3_URL = os.getenv("S3_URL", "http://localhost:8333")
 S3_BUCKET = os.getenv("S3_BUCKET", "gateway")

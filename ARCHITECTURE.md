@@ -68,9 +68,9 @@ sequenceDiagram
    recovery context. The WebSocket and the exception id travel in the Strands invocation state, so
    every nested agent and tool can reach the robot and attach its traces to the right recovery.
 5. **Delegate.** Agents call sub-agents as tools. In the seeded configuration the gateway hands UI
-   errors to an error agent, which in turn uses a GUI agent to act on the desktop and then names the
-   task of the process model the robot should run next. It can only do so through the
-   `set_continuation` tool (`agent_tools/utils.py`), which checks the task against the model and the
+   errors to an error agent, which in turn uses a GUI agent to act on the desktop and then states
+   whether the process was repaired and, if so, names the task of the process model the robot should
+   run next. It can only do so through the `set_continuation` tool (`agent_tools/utils.py`), which checks the task against the model and the
    loop passes against the loops enclosing it (`agent_tools/process_model.py`). A wrong guess comes
    back to the agent as a correction, so it is fixed inside the agent loop instead of failing the
    recovery.
@@ -79,8 +79,8 @@ sequenceDiagram
    robot-side contract implemented by the test client in `scripts/recovery_ws_client/`.
 7. **Finish.** The robot gets a `done` message with the recovery id. Only `success` comes from the
    gateway's answer; the continuation is the one `set_continuation` stored, and the variables are the
-   payload's, as changed by the GUI agents. A reported success without a stored continuation is sent
-   as a failure. The success sent is stored on the exception. `done` is sent only for a recovery that
+   payload's, as changed by the GUI agents. A reported success without a stored continuation, or
+   after `set_continuation` declared the recovery failed, is sent as a failure. The success sent is stored on the exception. `done` is sent only for a recovery that
    was persisted and run; every other ending (an invalid payload, a server without a gateway agent,
    an unexpected failure) is an `error` message with a machine-readable code, and the socket is
    closed. The robot can also end the recovery itself with `abort`.
@@ -151,15 +151,20 @@ inputs, runs it, and asks for a structured response using the configured Pydanti
 - **Composition.** Sub-agents are exposed to their parent as tools, so delegation is just a tool
   call. Each tool or sub-agent link can carry a call limit, enforced by a hook
   (`agent_tools/hooks.py`). Disabled agents are left out.
-- **GUI agents.** GUI agents work from screenshots and emit UI actions. The tool-based GUI agent
-  (`database/agents/tooled_gui_agent.py`) gives a grounding model one tool per action; a standalone
-  UI-TARS loop (`database/agents/uitars.py`) parses actions from the model's text output. A hook caps
-  how many screenshots stay in the conversation.
-- **Prompts and responses.** Prompts live in `prompts/`; response and payload models in
-  `templates/`. Some prompt variants are chosen by feature flags in `settings.py`.
+- **GUI agents.** GUI agents work from screenshots and emit UI actions. Every GUI agent runs through
+  the tool-based loop (`database/agents/tooled_gui_agent.py`), which gives a grounding model one
+  tool per action and is exposed to its parent as `tooled_guiagent`. A standalone UI-TARS loop
+  (`database/agents/uitars.py`), which parses actions from the model's text output, is kept for a
+  future rework; its text-based prompt is seeded with a disabled agent. A hook caps how many
+  screenshots stay in the conversation.
+- **Prompts and responses.** An agent's prompt is part of its row; response and payload models live
+  in `templates/`. A prompt names only the tools the agent is given and leaves the response layout
+  to the response model. Prompts used only by the evals live in `evals/`.
 - **Seeding.** `populate.py` loads the default agents, sub-agent links, tools, provider routers and
-  the admin user from `database/populators/` (`agents.json`, `routers.json`). After that, agents and
-  routers can be changed at runtime through the API without a deploy.
+  the admin user from `database/populators/` (`agents.json`, `routers.json`, and the default agent
+  prompts in `default_prompts/`). Seeding only creates what is missing, so a changed default prompt
+  reaches fresh databases only. After that, agents and routers can be changed at runtime through
+  the API without a deploy.
 
 ## 4. Tools
 

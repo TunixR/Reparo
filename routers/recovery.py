@@ -18,9 +18,8 @@ from sqlmodel import select
 
 import database.general as database
 from agent_tools.utils import (
-    CONTINUATION_STATE_KEY,
-    NO_CONTINUATION,
     PROCESS_MODEL_STATE_KEY,
+    declared_not_recovered,
     stored_continuation,
 )
 from database.agents.models import Agent, AgentType
@@ -163,22 +162,28 @@ def _build_answer(
 ) -> tuple[ResponseToRPA, str | None]:
     """Build ``done.content``: ``success`` from the gateway, the rest from the state.
 
+    A success needs both the gateway's report and a continuation from
+    `set_continuation`; a failure carries no continuation.
+
     Returns:
-        The answer, and ``missing_continuation`` if a reported success had to be
-        sent as a failure because no continuation was set.
+        The answer, and why a reported success had to be sent as a failure:
+        ``missing_continuation`` if `set_continuation` was never called, or
+        ``not_recovered`` if it was called with ``recovered`` false.
     """
     continuation = stored_continuation(invocation_state)
     failure_reason = None
     success = response.get("success") is True
-    if not success:
-        continuation = NO_CONTINUATION
-    elif continuation == NO_CONTINUATION:
+    if success and continuation is None:
         success = False
-        failure_reason = attrs.EVENT_RECOVERY_MISSING_CONTINUATION
+        failure_reason = (
+            attrs.EVENT_RECOVERY_NOT_RECOVERED
+            if declared_not_recovered(invocation_state)
+            else attrs.EVENT_RECOVERY_MISSING_CONTINUATION
+        )
     answer = ResponseToRPA(
         success=success,
         variables=invocation_state["variables"],
-        **continuation.model_dump(),
+        **(continuation.model_dump() if success and continuation else {}),
     )
     return answer, failure_reason
 
@@ -196,7 +201,6 @@ async def _invoke_gateway_agent(
         "robot_exception_id": exception.id,
         # Read by set_continuation to validate the continuation the error agent names.
         PROCESS_MODEL_STATE_KEY: recovery_context.model,
-        CONTINUATION_STATE_KEY: NO_CONTINUATION,
         "variables": copy.deepcopy(recovery_context.variables),
         CAPABILITIES_STATE_KEY: recovery_context.capabilities,
     }

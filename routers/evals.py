@@ -15,8 +15,6 @@ from strands import Agent as StrandsAgent
 import database.general as database
 from agent_tools.hooks import RequireToolCalls
 from agent_tools.utils import (
-    CONTINUATION_STATE_KEY,
-    NO_CONTINUATION,
     PROCESS_MODEL_STATE_KEY,
     set_continuation,
 )
@@ -70,7 +68,7 @@ You are a very knowledgeable BPM expert. You are provided with a process model a
 
 This recovery most likely does not cover the entirety of the process, and has left it with some tasks still pending.
 
-Your task is to analyse the following information, decide whether the recovery task was fulfilled and, if it was, tell the robot where to continue by calling the `set_continuation` tool.
+Your task is to analyse the following information, decide whether the recovery task was fulfilled, and state it by calling the `set_continuation` tool: with `recovered` false if it wasn't, or with `recovered` true and where the robot continues if it was.
 
 The recovery will most likely not line up with the process model exactly, as the original process had failed. To determine the next task, you must identify or infer the state of the process the recovery has left it in. For example, after the submission of a specific form or after having reached a certain screen in the software.
 
@@ -80,7 +78,7 @@ You will be provided with:
 3. The error information from the failed activity, with its `model_event_id` (the task of the model it performed) when the robot sent it
 4. The process model, whose task ids are model event ids
 
-How to name the continuation with `set_continuation`:
+How to name the continuation with `set_continuation(recovered=true, ...)`:
 - `model_event_id` is the id of the task in the process model the robot runs next, exactly as the model writes it (e.g. the `id` attribute of a BPMN task). It is never a UI log `event_id`, which counts occurrences in this run, nor a position in the model.
 - Naming the errored task means "retry it"; naming an earlier one means "go back".
 - `loop_iteration` has one 0-based pass per loop enclosing that task, outermost first, and is [] when the task is in no loop. Read the current passes off the errored entry: a ` #<n>` suffix on its `event_name` per enclosing loop, outermost first. If the recovery moved on to the next pass of a loop, count it.
@@ -88,12 +86,12 @@ How to name the continuation with `set_continuation`:
 - If the tool rejects the continuation, correct it as its error says and call it again until it returns `ok`. Only `set_continuation` decides the continuation; your report can't change it.
 
 For example, in a process that loops over pending requests (loop `each_request`) and clicks Approve (task `click_approve`) for each, a robot that failed clicking Approve on the third request (`event_name` "Click Approve #2"):
-- couldn't click Approve, the robot should retry it: `set_continuation(process_finished=false, model_event_id="click_approve", loop_iteration=[2])`;
-- clicked Approve, the robot continues after it with `back_to_list`: `set_continuation(process_finished=false, model_event_id="back_to_list", loop_iteration=[2])`;
-- approved and went back to the list, the robot opens the next request: `set_continuation(process_finished=false, model_event_id="open_request", loop_iteration=[3])`;
-- finished every remaining request itself: `set_continuation(process_finished=true, model_event_id=null, loop_iteration=[])`.
+- couldn't click Approve, the robot should retry it: `set_continuation(recovered=true, process_finished=false, model_event_id="click_approve", loop_iteration=[2])`;
+- clicked Approve, the robot continues after it with `back_to_list`: `set_continuation(recovered=true, process_finished=false, model_event_id="back_to_list", loop_iteration=[2])`;
+- approved and went back to the list, the robot opens the next request: `set_continuation(recovered=true, process_finished=false, model_event_id="open_request", loop_iteration=[3])`;
+- finished every remaining request itself: `set_continuation(recovered=true, process_finished=true, model_event_id=null, loop_iteration=[])`.
 
-If the recovery task has NOT been fulfilled, don't call `set_continuation`; report `success` false.
+If the recovery task has NOT been fulfilled, call `set_continuation(recovered=false, process_finished=false, model_event_id=null, loop_iteration=[])` and report `success` false.
 
 You can't report `success` true without a continuation accepted by `set_continuation`."""
 
@@ -139,7 +137,6 @@ async def _run_standalone_recovery(
     # this copy; only `set_continuation` writes the continuation.
     invocation_state: dict[str, Any] = {
         PROCESS_MODEL_STATE_KEY: model,
-        CONTINUATION_STATE_KEY: NO_CONTINUATION,
         "variables": copy.deepcopy(variables),
     }
     override_invocation_state = {

@@ -22,6 +22,7 @@ from agent_tools.hooks import (
     ToolLoggingHook,
 )
 from agent_tools.image import screenshot_bytes
+from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
 from database.agents.tooled_gui_agent import TooledGuiAgent
 from database.provider.models import Router
 from database.tools.models import Tool
@@ -242,7 +243,9 @@ class Agent(SQLModel, table=True):
     # }
 
     def get_tool_name(self) -> str:
-        """Return the name of the agent as a valid tool name."""
+        """Return the name of the tool this agent is exposed as (see `as_tool`)."""
+        if self.type == AgentType.GuiAgent:
+            return GUI_AGENT_TOOL_NAME
         return self.name.lower().replace(" ", "_")
 
     def get_tools(self) -> list[Tool]:

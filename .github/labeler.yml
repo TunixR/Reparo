@@ -21,7 +21,7 @@
       - any-glob-to-any-file:
           - database/agents/**
           - gateway/**
-          - prompts/**
+          - database/populators/default_prompts/**
           - templates/**
           - modules/**
           - tests/unit/templates/**
@@ -31,8 +31,7 @@
       - any-glob-to-any-file:
           - database/agents/uitars.py
           - database/agents/tooled_gui_agent.py
-          - prompts/gui_agent.py
-          - templates/gui_agent.py
+          - database/populators/default_prompts/gui_agent_*.md
           - agent_tools/image.py
 
 "area: tools":

@@ -62,16 +62,19 @@ from strands.types.content import ContentBlock, Messages
 from agent_tools.hooks import AgentLoggingHook
 from agent_tools.image import capture_screenshot
 from config import Config
+from database.populators.agents import DEFAULT_PROMPTS_DIR
 from observability.instrumentation.genai import TracedOpenAIModel
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
-from prompts.gui_agent import (
-    STANDALONE_COMPUTER_USE_DOUBAO,
-)
 from robot.capabilities import require_vision
 from settings import (
     PROVIDER_API_BASE,
     PROVIDER_API_KEY,
     PROVIDER_GROUNDING_MODEL,
+)
+
+# The prompt of the seeded, disabled "UI-TARS GUI Agent".
+STANDALONE_COMPUTER_USE_DOUBAO = (DEFAULT_PROMPTS_DIR / "gui_agent_text.md").read_text(
+    encoding="utf-8"
 )
 
 IMAGE_FACTOR = 28
