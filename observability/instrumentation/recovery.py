@@ -26,8 +26,44 @@ if TYPE_CHECKING:
     from starlette.datastructures import Address
 
     from database.logging.models import RecoveryContext
+    from robot.channel import RobotAbort
+    from templates.gateway import ResponseToRPA
 
 logger = logging.getLogger(__name__)
+
+
+def record_answer(
+    span: Span, answer: ResponseToRPA, failure_reason: str | None
+) -> None:
+    """Put an answer's continuation, and why it had to fail if it did, on a span."""
+    span.set_attributes(
+        {
+            attrs.RECOVERY_PROCESS_FINISHED: answer.process_finished,
+            attrs.RECOVERY_LOOP_ITERATION: answer.loop_iteration,
+        }
+    )
+    if answer.continue_from_model_event_id is not None:
+        span.set_attribute(
+            attrs.RECOVERY_CONTINUE_FROM_MODEL_EVENT_ID,
+            brief(answer.continue_from_model_event_id),
+        )
+    if failure_reason is not None:
+        span.set_attribute(attrs.RECOVERY_FAILURE_REASON, failure_reason)
+        span.add_event(failure_reason)
+
+
+def record_robot_abort(span: Span, abort: RobotAbort) -> None:
+    """Mark a span's recovery as aborted by the robot, with a bounded reason."""
+    span.set_attributes(
+        {attrs.RECOVERY_SUCCESS: False, attrs.RECOVERY_OUTCOME: "robot_aborted"}
+    )
+    span.add_event(
+        attrs.EVENT_ROBOT_ABORTED,
+        {
+            attrs.RECOVERY_ABORT_CODE: brief(abort.error_code),
+            attrs.RECOVERY_ABORT_DESCRIPTION: brief(abort.error_description),
+        },
+    )
 
 
 def auth_failed(client: Address | None) -> None:
@@ -126,11 +162,18 @@ class RecoveryTurnTelemetry:
             }
         )
 
+    def answered(self, answer: ResponseToRPA, failure_reason: str | None) -> None:
+        record_answer(self.span, answer, failure_reason)
+
     # --- Failures ------------------------------------------------------------
 
     def no_gateway_agent(self) -> None:
         log_event(logger, attrs.EVENT_RECOVERY_NO_GATEWAY_AGENT, None, logging.ERROR)
         self._fail("no_gateway_agent")
+
+    def robot_aborted(self, abort: RobotAbort) -> None:
+        """The robot gave up; not a server error, so the span status stays unset."""
+        record_robot_abort(self.span, abort)
 
     def client_disconnected(self) -> None:
         self.span.set_attribute(attrs.RECOVERY_OUTCOME, "client_disconnected")

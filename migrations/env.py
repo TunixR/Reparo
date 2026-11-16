@@ -9,10 +9,15 @@ from database.auth.models import *  # noqa: F403
 from database.logging.models import *  # noqa: F403
 from database.provider.models import *  # noqa: F403
 from database.tools.models import *  # noqa: F403
+from settings import POSTGRES_URL
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Migrate the database the framework uses (POSTGRES_* in .env), not the URL in alembic.ini.
+# "%" is escaped because the config is interpolated like an .ini file.
+config.set_main_option("sqlalchemy.url", POSTGRES_URL.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

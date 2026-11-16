@@ -14,7 +14,7 @@ from sqlmodel import (
 from database.keys.models import RobotKey
 from database.tools.models import Tool
 from s3 import S3Client
-from templates.recovery_payload import RecoveryPayload
+from templates.recovery_payload import RecoveryCapabilities, RecoveryPayload
 
 
 class AgentTrace(SQLModel, table=True):
@@ -240,6 +240,17 @@ class RobotException(SQLModel, table=True):
         default=False
     )  # Whether the robot operator reported a successful recovery
 
+    abort_code: str | None = Field(
+        default=None,
+        nullable=True,
+        description="Error code the robot sent when it aborted the recovery.",
+    )
+    abort_description: str | None = Field(
+        default=None,
+        nullable=True,
+        description="Reason the robot gave when it aborted the recovery.",
+    )
+
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of when the trace was created.",
@@ -268,6 +279,7 @@ class RecoveryUiLogEntry(SQLModel, table=True):
     activity_id: str | None = Field(default=None)
     event_id: str = Field(default="")
     event_name: str | None = Field(default=None)
+    model_event_id: str | None = Field(default=None)
     activity_name: str | None = Field(default=None)
     action_type: str = Field(default="")
     application: str | None = Field(default=None)
@@ -302,6 +314,7 @@ class RecoveryErroredActivity(SQLModel, table=True):
     activity_id: str | None = Field(default=None)
     event_id: str = Field(default="")
     event_name: str | None = Field(default=None)
+    model_event_id: str | None = Field(default=None)
     activity_name: str | None = Field(default=None)
     action_type: str = Field(default="")
     application: str | None = Field(default=None)
@@ -329,6 +342,9 @@ class RecoveryContext(SQLModel, table=True):
     os: str = Field(default="")
     variables: dict[str, Any] = Field(default_factory=dict, sa_type=JSONB)
     model: str = Field(default="")
+    capabilities: dict[str, Any] = Field(
+        default_factory=lambda: RecoveryCapabilities().model_dump(), sa_type=JSONB
+    )
 
     ui_log_entries: list[RecoveryUiLogEntry] = Relationship(
         back_populates="recovery_context",
@@ -370,6 +386,7 @@ class RecoveryContext(SQLModel, table=True):
             os=parsed_payload.os,
             variables=parsed_payload.variables,
             model=parsed_payload.model,
+            capabilities=parsed_payload.capabilities.model_dump(),
         )
 
         for position, entry in enumerate(parsed_payload.ui_log):

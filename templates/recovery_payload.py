@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
 from templates.common import TemplateModel
+
+
+def _normalize_optional_id(value: str | int | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, str):
+        return value if value.strip() else None
+    raise ValueError("optional id fields must be str, int, or null")
 
 
 class RecoveryUiLogEntry(TemplateModel):
@@ -16,6 +26,7 @@ class RecoveryUiLogEntry(TemplateModel):
     activity_name: str | None
     event_id: str
     event_name: str | None
+    model_event_id: str | None = None
     action_type: str
     application: str | None
     input: str | None
@@ -34,18 +45,12 @@ class RecoveryUiLogEntry(TemplateModel):
             if not value.strip():
                 raise ValueError("id fields must be non-empty")
             return value
-        raise TypeError("id fields must be str or int")
+        raise ValueError("id fields must be str or int")
 
-    @field_validator("activity_id", mode="before")
+    @field_validator("activity_id", "model_event_id", mode="before")
     @classmethod
     def normalize_optional_id(cls, value: str | int | None) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str):
-            return value if value.strip() else None
-        raise TypeError("activity_id must be str, int, or null")
+        return _normalize_optional_id(value)
 
     @field_validator("timestamp")
     @classmethod
@@ -67,6 +72,7 @@ class RecoveryErroredAct(TemplateModel):
     activity_name: str | None
     event_id: str
     event_name: str | None
+    model_event_id: str | None = None
     action_type: str
     application: str | None
     input: str | None
@@ -82,21 +88,56 @@ class RecoveryErroredAct(TemplateModel):
             if not value.strip():
                 raise ValueError("id fields must be non-empty")
             return value
-        raise TypeError("id fields must be str or int")
+        raise ValueError("id fields must be str or int")
 
-    @field_validator("activity_id", mode="before")
+    @field_validator("activity_id", "model_event_id", mode="before")
     @classmethod
     def normalize_optional_id(cls, value: str | int | None) -> str | None:
-        if value is None:
-            return None
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str):
-            return value if value.strip() else None
-        raise TypeError("activity_id must be str, int, or null")
+        return _normalize_optional_id(value)
+
+
+Modality = Literal["vision", "dom", "a11y"]
+"""How a GUI agent observes and targets the robot's UI."""
+
+
+class RecoveryCapabilities(TemplateModel):
+    """What the robot can observe and act through.
+
+    `modalities` lists the modalities the robot supports, most preferred first.
+    `details` carries modality-specific settings, e.g.
+    `{"dom": {"selector_syntax": "css"}}`. Until GUI agents support other
+    modalities, they only use `vision`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    modalities: list[Modality] = Field(default_factory=lambda: ["vision"])
+    ocr: bool = False
+    details: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("modalities")
+    @classmethod
+    def validate_modalities(cls, value: list[Modality]) -> list[Modality]:
+        if not value:
+            raise ValueError("modalities must list at least one modality")
+        if len(set(value)) != len(value):
+            raise ValueError("modalities must not repeat a modality")
+        return value
 
 
 class RecoveryPayload(TemplateModel):
+    """The one message a robot sends to start a recovery.
+
+    `model` is the process model; its task ids are model event ids. UI log
+    entries and the errored activity name the task they performed through
+    `model_event_id`, while their `event_id` only identifies the occurrence in
+    this run.
+
+    `recovery_task` is the process author's description of what recovering the
+    failing activity should achieve. For now only evals use it; the recovery
+    endpoint accepts it and ignores it.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     task_name: str
@@ -106,6 +147,15 @@ class RecoveryPayload(TemplateModel):
     ui_log: list[RecoveryUiLogEntry]
     errored_act: RecoveryErroredAct
     model: str
+    capabilities: RecoveryCapabilities = Field(default_factory=RecoveryCapabilities)
+    recovery_task: str | None = None
+
+    @field_validator("recovery_task")
+    @classmethod
+    def normalize_blank_recovery_task(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return value
 
     @field_validator("model")
     @classmethod
@@ -116,6 +166,8 @@ class RecoveryPayload(TemplateModel):
 
 
 __all__ = [
+    "Modality",
+    "RecoveryCapabilities",
     "RecoveryErroredAct",
     "RecoveryPayload",
     "RecoveryUiLogEntry",

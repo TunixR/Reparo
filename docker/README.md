@@ -112,7 +112,28 @@ dump in `postgres/dumps/` (git- and docker-ignored) into the database named afte
 pg_dump -h localhost -U postgres -d gateway -Fc -f docker/postgres/dumps/gateway.dump
 ```
 
-The first time SigNoz opens (http://localhost:8080), it asks you to create the admin account.
+**Create the SigNoz admin account once, on a fresh install.** Until SigNoz has an organisation,
+`signoz-collector` can't get its configuration and stays unhealthy ("cannot create agent without
+orgId"). `up --wait` then fails, the otel-agent doesn't start, and the framework's OTLP exports
+fail. Open http://localhost:8080 and sign up, or headless:
+
+```bash
+curl -X POST localhost:8080/api/v1/register -H 'Content-Type: application/json' \
+  -d '{"name":"Admin","orgName":"r2framework","email":"admin@example.com","password":"<password>"}'
+docker compose -f docker/compose.dev.yaml up -d --wait
+```
+
+**Without observability** (less RAM, no SigNoz): start only Postgres and S3, and set
+`OBSERVABILITY_ENABLED=false` in the repository's `.env`:
+
+```bash
+docker compose -f docker/compose.dev.yaml up -d --wait postgres seaweedfs-s3
+```
+
+**Schema, bucket and seed data.** `uv run python populate.py` applies the Alembic migrations
+(`create_db_and_tables()`), creates `S3_BUCKET`, and seeds the agents, routers and admin. It is
+safe to rerun. A database restored from a dump without an Alembic revision is refused; if its
+schema matches the models, record it with `uv run alembic stamp head`.
 
 ### Production
 
@@ -125,10 +146,10 @@ stack overrides service addresses and shared credentials, so they cannot drift.
 `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are required. Seed dumps are not mounted in
 production; restore with `pg_restore` through `docker compose exec postgres`.
 
-**Schema.** The API does not create its tables on startup, and `migrations/versions/` is
-git-ignored, so a new production database needs its schema from a dump or from
-`database.general.create_db_and_tables()`. Committed Alembic migrations, run once per deploy,
-are pending work.
+**Schema.** The API does not create or migrate its tables on startup. Apply the committed
+Alembic migrations once per deploy, before starting the new version, with `uv run alembic upgrade
+head` (or `populate.py`, which runs it). Alembic reads the database from the same `POSTGRES_*`
+settings as the framework.
 
 ### Integration tests
 

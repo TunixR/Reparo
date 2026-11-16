@@ -37,7 +37,7 @@ cross-cutting. The authoritative paths are the globs in `.github/labeler.yml`.
 | Area / scope | Covers |
 | --- | --- |
 | `recovery` | recovery lifecycle and WS protocol: `routers/recovery.py`, `templates/recovery_payload.py` |
-| `agents` | agent model, gateway, error agent, sub-agent wiring, prompts: `database/agents/`, `gateway/`, `prompts/`, `templates/` |
+| `agents` | agent model, gateway, error agent, sub-agent wiring, prompts: `database/agents/`, `gateway/`, `database/populators/default_prompts/`, `templates/` |
 | `gui-agent` | GUI agents (Tooled GUI, UI-TARS loop) and their action set |
 | `tools` | Strands tools, hooks, call limits: `agent_tools/`, `database/tools/` |
 | `providers` | LLM provider routers and backbones: `database/provider/` |

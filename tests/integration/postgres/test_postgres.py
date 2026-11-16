@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 
 from sqlalchemy import Engine, inspect, text
@@ -11,6 +12,7 @@ import database.general  # noqa: F401 - registers every table on SQLModel.metada
 from database.keys.models import RobotKey
 
 MIN_SERVER_VERSION = 180000  # docker/postgres pins Postgres 18
+MONITOR_USER = os.getenv("POSTGRES_MONITOR_USER", "otel_monitor")
 
 
 def test_server_is_the_pinned_major_version(pg_engine: Engine) -> None:
@@ -49,11 +51,12 @@ def test_monitoring_role_is_read_only(pg_engine: Engine) -> None:
             text(
                 "SELECT r.rolsuper, r.rolcreaterole, r.rolcreatedb, "
                 "pg_has_role(r.oid, 'pg_monitor', 'member') AS monitor "
-                "FROM pg_roles r WHERE r.rolname = 'otel_monitor'"
-            )
+                "FROM pg_roles r WHERE r.rolname = :name"
+            ),
+            {"name": MONITOR_USER},
         ).one_or_none()
 
-    assert role is not None, "otel_monitor role missing (created on first init)"
+    assert role is not None, f"{MONITOR_USER} role missing (created on first init)"
     assert role.monitor is True
     assert (role.rolsuper, role.rolcreaterole, role.rolcreatedb) == (
         False,

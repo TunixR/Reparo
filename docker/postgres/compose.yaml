@@ -29,7 +29,7 @@ services:
       # Postgres 18+ layout: data lives in a major-version subdirectory of
       # /var/lib/postgresql, so later major upgrades can use pg_upgrade --link.
       - postgres-data:/var/lib/postgresql
-      - ./initdb:/docker-entrypoint-initdb.d:ro
+      - ./initdb:/docker-entrypoint-initdb.d:ro,z
     networks:
       - backend
     labels:

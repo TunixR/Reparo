@@ -116,7 +116,7 @@ def gateway_task(case: Case[str, str], mocks: Any) -> dict[str, Any]:
     - tool_calls: which mock tools were called and with what args
     - raw_instruction: what was sent to the model
     """
-    from prompts.gateway import GATEWAY_ORCHESTRATOR_PROMPT
+    from evals.prompts import GATEWAY_PROMPT
 
     mocks.clear()
     error_input = json.loads(case.input)
@@ -125,7 +125,7 @@ def gateway_task(case: Case[str, str], mocks: Any) -> dict[str, Any]:
     agent = StrandsAgent(
         model=model,
         tools=mocks.build_tools(),
-        system_prompt=GATEWAY_ORCHESTRATOR_PROMPT,
+        system_prompt=GATEWAY_PROMPT,
         callback_handler=None,
     )
 
@@ -225,7 +225,7 @@ async def _run_handler_async(
 
     Returns (task_output, agent_result).
     """
-    from prompts.task_inference import TASK_INFERENCE_ONLY
+    from evals.prompts import TASK_INFERENCE_ONLY
 
     payload = json.loads(case.input)
     model = build_model(model_name=model_name, api_url=api_url)

@@ -99,7 +99,7 @@ class TaskIdentificationEvaluator(Evaluator[str, str]):
     def evaluate(
         self, evaluation_case: EvaluationData[str, str]
     ) -> list[EvaluationOutput]:
-        from prompts.task_inference import JUDGE_PROMPT
+        from evals.prompts import JUDGE_PROMPT
 
         expected = json.loads(evaluation_case.expected_output or "{}")
         actual = _parse_output(evaluation_case.actual_output)

@@ -15,8 +15,14 @@ from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
 from strands.types.content import Messages
 
-from agent_tools.hooks import AgentLoggingHook, LimitToolCounts, ToolLoggingHook
+from agent_tools.hooks import (
+    AgentLoggingHook,
+    LimitToolCounts,
+    RequireToolCalls,
+    ToolLoggingHook,
+)
 from agent_tools.image import screenshot_bytes
+from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
 from database.agents.tooled_gui_agent import TooledGuiAgent
 from database.provider.models import Router
 from database.tools.models import Tool
@@ -237,7 +243,9 @@ class Agent(SQLModel, table=True):
     # }
 
     def get_tool_name(self) -> str:
-        """Return the name of the agent as a valid tool name."""
+        """Return the name of the tool this agent is exposed as (see `as_tool`)."""
+        if self.type == AgentType.GuiAgent:
+            return GUI_AGENT_TOOL_NAME
         return self.name.lower().replace(" ", "_")
 
     def get_tools(self) -> list[Tool]:
@@ -271,6 +279,10 @@ class Agent(SQLModel, table=True):
             if sa.limit is not None:
                 tool_limits[sa.child_agent.get_tool_name()] = sa.limit
         return LimitToolCounts(tool_limits)
+
+    def get_required_tools_hook(self) -> RequireToolCalls:
+        """Return a hook that sends the agent back until its required tools are called."""
+        return RequireToolCalls([at.tool.name for at in self.tools if at.required])
 
     def get_logging_hooks(self, invocation_state: dict[str, Any]) -> list[HookProvider]:
         agent_logging_hook = AgentLoggingHook(
@@ -516,7 +528,11 @@ class Agent(SQLModel, table=True):
 
         model = self.get_model()
 
-        hooks = [self.get_tool_limiter(), *self.get_logging_hooks(invocation_state)]
+        hooks = [
+            self.get_tool_limiter(),
+            self.get_required_tools_hook(),
+            *self.get_logging_hooks(invocation_state),
+        ]
 
         strands_agent = StrandsAgent(
             model=model,

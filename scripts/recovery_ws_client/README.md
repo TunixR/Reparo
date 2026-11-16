@@ -13,6 +13,9 @@ The entry point is `scripts/recovery_ws_test_client.py`; the implementation is i
 - Responds to `type: "screenshot"` messages using `pyautogui.screenshot()` bytes.
 - Executes `type: "action"` messages automatically using `pyautogui`.
 - Enforces a non-blocking minimum delay between actions (default 1 second).
+- Prints how the run ended: the `done.content` answer, or the `error` code and reason.
+- Sends `abort` when you press Ctrl-C, so the server stops the recovery instead of waiting on a
+  socket that went quiet.
 - Writes optional transcript logs for run analysis.
 
 ## Payload Catalog
@@ -33,12 +36,16 @@ Each entry has this shape:
     "variables": {},
     "ui_log": [],
     "errored_act": {},
-    "model": "..."
+    "model": "...",
+    "capabilities": {"modalities": ["vision"], "ocr": false}
   }
 }
 ```
 
-Use `--payload-id` to choose which payload to send.
+Use `--payload-id` to choose which payload to send. The payload is sent as stored, so a UI log entry
+or `errored_act` that carries a `model_event_id` (the id of the task it performed in `model`) is
+sent with it. `capabilities` is optional; without it the server assumes `vision` only. Use
+`--capabilities` to send other capabilities without editing the catalog.
 
 ## Run
 
@@ -59,6 +66,31 @@ Optional flags:
 - `--dry-run-actions`
 - `--max-actions <n>`
 - `--save-screenshots-dir <dir>`
+- `--capabilities '<json>'`, e.g. `'{"modalities": ["dom", "vision"], "ocr": true}'`; replaces the
+  payload's `capabilities`. A robot without `vision` can't be served by today's GUI agents, which
+  makes this a quick way to see that refusal.
+
+## Output
+
+The client prints a JSON summary when the run ends. After a `done` it holds the answer:
+
+```json
+{
+  "terminal": "done",
+  "recovery_id": "...",
+  "done": {
+    "success": true,
+    "process_finished": false,
+    "continue_from_model_event_id": "act_4",
+    "loop_iteration": [],
+    "variables": {}
+  }
+}
+```
+
+After an `error` it holds `{"code": "...", "content": "..."}` instead. Ctrl-C sends
+`{"type": "abort", "error_code": "USER_INTERRUPT", ...}` and exits with status 130. The exit status
+is 0 for `done`, 1 for `error`, 2 when the server closed the socket, 3 on a client exception.
 
 ## Safety Notes
 
@@ -74,4 +106,5 @@ Optional flags:
 4. Screenshot requests are answered with image bytes.
 5. Action results are sent with success/failure shape.
 6. Action execution spacing is at least 1 second.
-7. `done` finalizes run with exit code 0 and summary.
+7. `done` finalizes run with exit code 0 and prints its `content`.
+8. Ctrl-C during a recovery sends `abort`; the server stores it on the exception and sends no `done`.

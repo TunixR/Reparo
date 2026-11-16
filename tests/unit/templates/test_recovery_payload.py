@@ -158,3 +158,110 @@ def test_payload_requires_model():
 
     with pytest.raises(ValidationError):
         _ = RecoveryPayload.model_validate(payload)
+
+
+def test_payload_model_event_id_is_optional():
+    parsed = RecoveryPayload.model_validate(_valid_payload())
+
+    assert parsed.ui_log[0].model_event_id is None
+    assert parsed.errored_act.model_event_id is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("click_submit", "click_submit"), (7, "7"), ("   ", None), (None, None)],
+)
+def test_payload_normalizes_model_event_id(raw: object, expected: str | None):
+    payload = _valid_payload()
+    payload["ui_log"][0]["model_event_id"] = raw
+    payload["errored_act"]["model_event_id"] = raw
+
+    parsed = RecoveryPayload.model_validate(payload)
+
+    assert parsed.ui_log[0].model_event_id == expected
+    assert parsed.errored_act.model_event_id == expected
+
+
+def test_payload_rejects_non_scalar_model_event_id():
+    payload = _valid_payload()
+    payload["errored_act"]["model_event_id"] = ["click_submit"]
+
+    with pytest.raises(ValidationError):
+        _ = RecoveryPayload.model_validate(payload)
+
+
+def test_payload_rejects_non_scalar_event_id():
+    payload = _valid_payload()
+    payload["ui_log"][0]["event_id"] = {"id": 1}
+
+    with pytest.raises(ValidationError):
+        _ = RecoveryPayload.model_validate(payload)
+
+
+def test_payload_defaults_capabilities_to_vision_only():
+    parsed = RecoveryPayload.model_validate(_valid_payload())
+
+    assert parsed.capabilities.modalities == ["vision"]
+    assert parsed.capabilities.ocr is False
+    assert parsed.capabilities.details == {}
+
+
+def test_payload_accepts_capabilities_in_order_of_preference():
+    payload = _valid_payload()
+    payload["capabilities"] = {
+        "modalities": ["dom", "a11y", "vision"],
+        "ocr": True,
+        "details": {"dom": {"selector_syntax": "css"}},
+    }
+
+    parsed = RecoveryPayload.model_validate(payload)
+
+    assert parsed.capabilities.modalities == ["dom", "a11y", "vision"]
+    assert parsed.capabilities.ocr is True
+    assert parsed.capabilities.details == {"dom": {"selector_syntax": "css"}}
+
+
+def test_payload_accepts_capabilities_with_only_modalities():
+    payload = _valid_payload()
+    payload["capabilities"] = {"modalities": ["a11y"]}
+
+    parsed = RecoveryPayload.model_validate(payload)
+
+    assert parsed.capabilities.modalities == ["a11y"]
+    assert parsed.capabilities.ocr is False
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        {"modalities": []},
+        {"modalities": ["vision", "vision"]},
+        {"modalities": ["ocr"]},
+        {"modalities": ["vision"], "unknown": True},
+        {"modalities": "vision"},
+    ],
+    ids=["empty", "duplicate", "unknown-modality", "unknown-field", "not-a-list"],
+)
+def test_payload_rejects_invalid_capabilities(capabilities: dict[str, Any]):
+    payload = _valid_payload()
+    payload["capabilities"] = capabilities
+
+    with pytest.raises(ValidationError):
+        _ = RecoveryPayload.model_validate(payload)
+
+
+def test_payload_recovery_task_defaults_to_none():
+    assert RecoveryPayload.model_validate(_valid_payload()).recovery_task is None
+
+
+def test_payload_accepts_recovery_task():
+    payload = _valid_payload() | {"recovery_task": "Submit the invoice"}
+
+    assert RecoveryPayload.model_validate(payload).recovery_task == "Submit the invoice"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", None])
+def test_payload_normalizes_blank_recovery_task_to_none(blank: str | None):
+    payload = _valid_payload() | {"recovery_task": blank}
+
+    assert RecoveryPayload.model_validate(payload).recovery_task is None

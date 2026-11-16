@@ -11,12 +11,14 @@ from typing import Any
 
 from strands import ToolContext, tool
 
+from agent_tools.utils import set_continuation
+
 
 class GatewayMocks:
     """Mock tools for Gateway Orchestrator (Contribution 1: Error Filtering).
 
     Provides:
-    - ui_error_handler: mock that captures when gateway routes to UI module
+    - ui_exception_handler: mock that captures when gateway routes to UI module
     - route_to_human: mock that captures when gateway escalates to human
     """
 
@@ -29,7 +31,7 @@ class GatewayMocks:
         capture = self
 
         @tool(
-            name="ui_error_handler",
+            name="ui_exception_handler",
             description="Handle UI-related errors with screenshot analysis and recovery.",
             context=True,
         )
@@ -71,8 +73,8 @@ class HandlerMocks:
     Provides:
     - recovery_agent: captures the task description the agent identifies.
       Returns prompt injection to short-circuit further analysis.
-    - compute_continuation_activity: captures future_activities status.
-      Returns -1 (all done) to trigger reporting phase.
+    - set_continuation: captures the continuation the agent names.
+      Always accepts it, to trigger the reporting phase.
     """
 
     def __init__(self) -> None:
@@ -103,31 +105,35 @@ class HandlerMocks:
             )
             return (
                 "Recovery completed successfully in test environment. "
-                "All planned future activities were executed during recovery. "
-                "Use compute_continuation_activity to determine the continuation point, "
-                "providing each future activity and whether it was executed (true for all)."
+                "The rest of the process was completed during recovery. "
+                "Use set_continuation with recovered and process_finished set to true."
             )
 
         @tool(
-            description="Compute the continuation activity index based on future activities "
-            "and their execution status.",
+            name="set_continuation",
+            description=set_continuation.tool_spec["description"],
         )
-        def mock_compute_continuation(
-            future_activities: list[str], executed_status: list[bool]
-        ) -> int:
+        def mock_set_continuation(
+            recovered: bool,
+            process_finished: bool,
+            model_event_id: str | None,
+            loop_iteration: list[int],
+        ) -> str:
             capture.continuation_calls.append(
                 {
-                    "future_activities": future_activities,
-                    "executed_status": executed_status,
+                    "recovered": recovered,
+                    "process_finished": process_finished,
+                    "model_event_id": model_event_id,
+                    "loop_iteration": loop_iteration,
                 }
             )
-            return -1
+            return "ok"
 
         self._recovery_agent = mock_recovery_agent
-        self._compute_continuation = mock_compute_continuation
+        self._set_continuation = mock_set_continuation
 
     def build_tools(self) -> list[Any]:
-        return [self._recovery_agent, self._compute_continuation]
+        return [self._recovery_agent, self._set_continuation]
 
     @property
     def identified_task(self) -> str | None:

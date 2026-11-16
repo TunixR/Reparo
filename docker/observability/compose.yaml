@@ -32,7 +32,7 @@ services:
     entrypoint: ["/usr/bin/clickhouse-keeper", "--config-file=/etc/clickhouse-keeper/keeper.yaml"]
     volumes:
       - signoz-keeper-data:/var/lib/clickhouse-keeper
-      - ./clickhouse/keeper.yaml:/etc/clickhouse-keeper/keeper.yaml:ro
+      - ./clickhouse/keeper.yaml:/etc/clickhouse-keeper/keeper.yaml:ro,z
     healthcheck:
       test: ["CMD", "clickhouse-keeper-client", "-h", "localhost", "-p", "9181", "-q", "ls"]
       interval: 30s
@@ -73,8 +73,8 @@ services:
     volumes:
       - signoz-clickhouse-data:/var/lib/clickhouse
       - signoz-clickhouse-scripts:/var/lib/clickhouse/user_scripts:ro
-      - ./clickhouse/config.yaml:/etc/clickhouse-server/config.yaml:ro
-      - ./clickhouse/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
+      - ./clickhouse/config.yaml:/etc/clickhouse-server/config.yaml:ro,z
+      - ./clickhouse/functions.yaml:/etc/clickhouse-server/functions.yaml:ro,z
     ulimits:
       nproc: 65535
       nofile:
@@ -165,8 +165,8 @@ services:
         /signoz-otel-collector migrate sync check &&
         exec /signoz-otel-collector --config=/etc/otel-collector-config.yaml --manager-config=/etc/opamp-config.yaml --copy-path=/var/tmp/collector-config.yaml
     volumes:
-      - ./collector/config.yaml:/etc/otel-collector-config.yaml:ro
-      - ./collector/opamp.yaml:/etc/opamp-config.yaml:ro
+      - ./collector/config.yaml:/etc/otel-collector-config.yaml:ro,z
+      - ./collector/opamp.yaml:/etc/opamp-config.yaml:ro,z
     depends_on:
       signoz:
         condition: service_healthy
@@ -189,6 +189,10 @@ services:
     image: otel/opentelemetry-collector-contrib:${OTEL_AGENT_VERSION:-0.164.0}
     # Docker's container log files (read-only mount below) are readable by root only.
     user: "0:0"
+    # SELinux hosts: read Docker's log directory without relabelling it (a `z`
+    # mount would change the labels of the daemon's own storage).
+    security_opt:
+      - label=disable
     command:
       - --config=/etc/otelcol/config.yaml
       # Report the table schema as its own attribute (receiver's recommended mode).
@@ -198,7 +202,7 @@ services:
       POSTGRES_MONITOR_PASSWORD: ${POSTGRES_MONITOR_PASSWORD:?set POSTGRES_MONITOR_PASSWORD in docker/.env}
       DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-development}
     volumes:
-      - ./agent/config.yaml:/etc/otelcol/config.yaml:ro
+      - ./agent/config.yaml:/etc/otelcol/config.yaml:ro,z
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - otel-agent-data:/var/lib/otelcol
     networks:

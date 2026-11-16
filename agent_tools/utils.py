@@ -1,27 +1,175 @@
-import numpy as np
-from pydantic import ValidationError
-from strands import tool
+from collections.abc import MutableMapping
+from typing import Any
+
+from opentelemetry import trace
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic_core import InitErrorDetails
+from strands import ToolContext, tool
+
+from agent_tools.process_model import (
+    Loop,
+    ModelEventError,
+    check_model_event,
+    describe_model_event,
+    enclosing_loops,
+)
+from observability import attributes as attrs
+
+CONTINUATION_STATE_KEY = "continuation"
+# Not "model": Strands puts its own Model object under that key of the state.
+PROCESS_MODEL_STATE_KEY = "process_model"
+
+
+class Continuation(BaseModel):
+    """Where the robot continues after a repaired recovery, as validated by `set_continuation`.
+
+    Attributes:
+        process_finished: The recovery completed the rest of the process.
+        continue_from_model_event_id: The task of the model the robot runs next;
+            `None` when the process is finished.
+        loop_iteration: 0-based passes of the loops enclosing that task,
+            outermost first.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    process_finished: bool = False
+    continue_from_model_event_id: str | None = None
+    loop_iteration: list[int] = Field(default_factory=list)
+
+
+# `set_continuation` stores under CONTINUATION_STATE_KEY a `Continuation` when the
+# recovery was repaired, or `None` when it wasn't; the key is absent until it is called.
+
+
+def stored_continuation(state: MutableMapping[str, Any]) -> Continuation | None:
+    """The continuation `set_continuation` accepted; `None` if it wasn't called or the
+    recovery wasn't repaired (see `declared_not_recovered`)."""
+    continuation = state.get(CONTINUATION_STATE_KEY)
+    return continuation if isinstance(continuation, Continuation) else None
+
+
+def declared_not_recovered(state: MutableMapping[str, Any]) -> bool:
+    """Whether `set_continuation` was called with `recovered` false."""
+    return CONTINUATION_STATE_KEY in state and state[CONTINUATION_STATE_KEY] is None
+
+
+def _invalid(field: str, value: object, message: str) -> ValidationError:
+    """Build the ValidationError the agent sees; `LimitToolCounts` refunds the call."""
+    details: InitErrorDetails = {
+        "type": "value_error",
+        "loc": (field,),
+        "input": value,
+        "ctx": {"error": ValueError(message)},
+    }
+    return ValidationError.from_exception_data("set_continuation", [details])
+
+
+def _describe_loops(loops: list[Loop]) -> str:
+    return ", ".join(
+        f"{loop.id} ({loop.name})" if loop.name else loop.id for loop in loops
+    )
 
 
 @tool(
-    description="Compute the continuation activity index based on future activities and their execution status."
+    context=True,
+    description=(
+        "State whether the recovery repaired the process and, if it did, where the RPA "
+        "robot continues. This is the only way to name the continuation, and it must "
+        "succeed before you finish.\n"
+        "- recovered: false if the recovery failed and the process was not repaired; "
+        "pass process_finished false, model_event_id null and loop_iteration []; they "
+        "are ignored and the robot is told the recovery failed.\n"
+        "- process_finished: true if the recovery completed the rest of the process, so "
+        "the robot has nothing left to run; model_event_id and loop_iteration are then "
+        "ignored.\n"
+        "- model_event_id: the id of the task in `model` the robot runs next (a model "
+        "event id, never a UI log event_id). Naming the errored task means 'retry it'; "
+        "naming an earlier one means 'go back'.\n"
+        "- loop_iteration: one 0-based pass per loop enclosing that task, outermost "
+        "first; [] when the task is in no loop.\n"
+        "If the continuation is invalid, the error says what is wrong and what is "
+        "expected: correct it and call again."
+    ),
 )
-def compute_continuation_activity(
-    future_activities: list[str], executed_status: list[bool]
-) -> int:
-    if len(future_activities) != len(executed_status):
-        raise ValidationError(
-            "Length of future_activities and executed_status must be the same.",
-            [],
+def set_continuation(
+    recovered: bool,
+    process_finished: bool,
+    model_event_id: str | None,
+    loop_iteration: list[int],
+    tool_context: ToolContext,
+) -> str:
+    state = tool_context.invocation_state
+
+    if not recovered:
+        state[CONTINUATION_STATE_KEY] = None
+        return (
+            "ok: the recovery failed; the robot is told the process was not repaired."
         )
 
-    arr = np.array(executed_status)
-    if not arr.any():  # None executed
-        return 0
+    if process_finished:
+        state[CONTINUATION_STATE_KEY] = Continuation(process_finished=True)
+        return "ok: the process is finished; the robot has nothing left to run."
 
-    rev_idx = int(np.argmax(arr[::-1]))
+    model = state.get(PROCESS_MODEL_STATE_KEY)
+    if not isinstance(model, str):
+        raise RuntimeError(
+            "The process model must be provided in the invocation state."
+        )
 
-    if rev_idx == 0:  # All executed
-        return -1
+    if model_event_id is None or not model_event_id.strip():
+        raise _invalid(
+            "model_event_id",
+            model_event_id,
+            "model_event_id is required unless process_finished is true.",
+        )
+    try:
+        check_model_event(model, model_event_id)
+    except ModelEventError as exc:
+        raise _invalid("model_event_id", model_event_id, str(exc)) from exc
 
-    return arr.size - rev_idx
+    if any(p < 0 for p in loop_iteration):
+        raise _invalid(
+            "loop_iteration",
+            loop_iteration,
+            f"loop passes are 0-based and can't be negative, got {loop_iteration}.",
+        )
+
+    loops = enclosing_loops(model, model_event_id)
+    if loops is not None and len(loops) != len(loop_iteration):
+        if loops:
+            expected = (
+                f"{model_event_id} is inside {len(loops)} "
+                f"loop{'s' if len(loops) > 1 else ''} ({_describe_loops(loops)}, "
+                f"outermost first), so loop_iteration needs {len(loops)} "
+                f"pass{'es' if len(loops) > 1 else ''}"
+            )
+        else:
+            expected = f"{model_event_id} is in no loop, so loop_iteration must be []"
+        raise _invalid(
+            "loop_iteration", loop_iteration, f"{expected}, got {loop_iteration}."
+        )
+
+    state[CONTINUATION_STATE_KEY] = Continuation(
+        continue_from_model_event_id=model_event_id, loop_iteration=loop_iteration
+    )
+    if loops is None:
+        trace.get_current_span().add_event(attrs.EVENT_LOOP_DEPTH_UNCHECKED)
+
+    event = describe_model_event(model, model_event_id)
+    target = (
+        f"{model_event_id} ({event.name})" if event and event.name else model_event_id
+    )
+    if loops is None:
+        where = (
+            f"with loop_iteration {loop_iteration} as given (the loop depth can't be "
+            "read from this model)"
+        )
+    elif loops:
+        passes = ", ".join(
+            f"{loop.id} pass {p}" for loop, p in zip(loops, loop_iteration, strict=True)
+        )
+        where = f"inside {_describe_loops(loops)}: {passes}"
+    else:
+        where = "in no loop"
+    return f"ok: the robot continues from {target}, {where}."

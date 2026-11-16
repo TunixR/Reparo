@@ -31,6 +31,10 @@ from strands.types.tools import ToolResult, ToolUse
 from agent_tools.hooks import AgentLoggingHook, MaxGuiImagesHook
 from agent_tools.image import capture_screenshot
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
+from robot.capabilities import require_vision
+
+TOOL_NAME = "tooled_guiagent"
+"""The tool name every GUI agent is exposed as to its parent agent."""
 
 MAX_ACTIONS = 40
 
@@ -437,7 +441,7 @@ class TooledGuiAgent:
     # ---------------------------------------------------------------------------
 
     @tool(
-        name="tooled_guiagent",
+        name=TOOL_NAME,
         description="A element and action ground model for UI tasks.",
         context=True,
     )
@@ -458,7 +462,7 @@ class TooledGuiAgent:
             variables: Process variables and known runtime values.
             ui_log: Ordered UI execution history leading up to failure.
             errored_act: Structured details for the failed activity.
-            model: Model-generated textual context for failure and recovery intent.
+            model: The process model, whose task ids are model event ids.
             override_invocation_state: Optional override for the invocation state.
 
         Returns:
@@ -476,7 +480,7 @@ class TooledGuiAgent:
                         "errored_act": errored_act,
                         "model": model,
                     },
-                    name="tooled_guiagent",
+                    name=TOOL_NAME,
                     toolUseId="MANUAL",
                     reasoningSignature="",
                 ),
@@ -499,8 +503,12 @@ class TooledGuiAgent:
 
         if "websocket" not in tool_context.invocation_state:
             raise ValueError("WebSocket must be provided in tool context")
+        require_vision(tool_context.invocation_state)
 
         websocket = tool_context.invocation_state["websocket"]
+        state_variables = tool_context.invocation_state.get("variables")
+        if isinstance(state_variables, dict):
+            variables = state_variables  # pyright: ignore[reportUnknownVariableType]
         # Enriches the Strands span of this tool call.
         telemetry = GuiTaskTelemetry(
             task=task, model=model, ui_log=ui_log, errored_act=errored_act

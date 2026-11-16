@@ -7,14 +7,14 @@ from a JSON file. Tool populators and router populators remain unchanged.
 Notes:
 - Idempotent: existing agents are matched by name and their argument contracts are kept in sync.
 - Tools must have been populated previously (populate_tools) or they will be skipped.
-- Routers must exist for the specified model names in the JSON (use populate_routers first).
+- Each agent names a router role from routers.json (`router`); populate_routers must run first.
+- Prompts are read from Markdown files in `default_prompts/`, named by each agent's `prompt_file`.
 - Response model paths are stored as import strings for dynamic loading at runtime.
 - Supports sub-agent relationships and tool attachments via JSON.
 """
 
 from __future__ import annotations
 
-import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -29,27 +29,9 @@ from database.agents.models import (
     Argument,
     SubAgent,
 )
+from database.populators.routers import find_router
 from database.provider.models import Router
 from database.tools.models import Tool
-from settings import (
-    PROVIDER_GROUNDING_MODEL,
-    PROVIDER_MODEL,
-    PROVIDER_VISION_MODEL,
-    PROVIDER_VISION_TOOL_MODEL,
-)
-
-
-def _get_router_by_model(session: Session, model_name: str) -> Router:
-    """
-    Return an existing Router for the given model_name or panics.
-    """
-    router = session.exec(select(Router).where(Router.model_name == model_name)).first()
-    if router:
-        return router
-    else:
-        raise ValueError(
-            f"[populate_agents] Error: No Router found for model '{model_name}'. Please create it first."
-        )
 
 
 def _argument(
@@ -72,17 +54,24 @@ def _attach_tools(
     agent: Agent,
     tool_names: list[str],
     limits: list[int | None] | None = None,
+    required: list[bool] | None = None,
 ) -> None:
     """
     Attach tools (by name) to an Agent via AgentTool association.
     Skips missing tools but logs a warning.
-    When limits are provided, they must match the number of tools; each tool gets its corresponding limit.
+    When limits or required flags are provided, they must match the number of tools;
+    each tool gets its corresponding value.
     """
 
     if limits is not None and len(tool_names) != len(limits):
         raise ValueError(
             f"[populate_agents] Tools/limits length mismatch for agent '{agent.name}': \
             {len(tool_names)} tools vs {len(limits)} limits."
+        )
+    if required is not None and len(tool_names) != len(required):
+        raise ValueError(
+            f"[populate_agents] Tools/required length mismatch for agent '{agent.name}': "
+            f"{len(tool_names)} tools vs {len(required)} required flags."
         )
 
     for idx, tool_name in enumerate(tool_names):
@@ -104,7 +93,7 @@ def _attach_tools(
                 tool=tool,
                 tool_id=tool.id,
                 limit=(limits[idx] if limits is not None else None),
-                required=False,
+                required=(required[idx] if required is not None else False),
             )
         )
 
@@ -113,7 +102,7 @@ def _create_agent(
     session: Session,
     name: str,
     description: str,
-    prompt: str | None,
+    prompt: str,
     response_model: str | None,
     args: list[Argument],
     router: Router,
@@ -236,10 +225,9 @@ def _load_json_config() -> dict[str, Any]:
         {
           "name": "...",
           "description": "...",
-          "prompt": "..." | null,
-          "prompt_import": "package.module:CONST_OR_FUNC" | null,
+          "prompt_file": "agent_name.md",  // in default_prompts/
           "response_model": "package.module.ClassName" | null,
-          "router_model": "gpt-4o-mini" | "$PROVIDER_MODEL" | "$PROVIDER_VISION_MODEL" | "$PROVIDER_VISION_TOOL_MODEL" | "$PROVIDER_GROUNDING_MODEL",
+          "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
           "agent_type": "GatewayAgent" | "ErrorAgent" | "GuiAgent",
           "input_type": "TEXT" | "IMAGETEXT",
           "enabled": true,
@@ -247,11 +235,11 @@ def _load_json_config() -> dict[str, Any]:
           "arguments": [
             {"name": "...", "description": "...", "type": "str", "json_type": "string"}
           ],
-          "tools": {"names": ["take_screenshot"], "limits": [null]}
+          "tools": {"names": ["take_screenshot"], "limits": [null], "required": [false]}
           }
         ],
       "sub_agents": [
-        {"parent": "UI Exception Handler", "child": "UI Direct Recovery", "limit": 1}
+        {"parent": "UI Exception Handler", "child": "UI Standalone UITARS", "limit": 1}
       ]
     }
     """
@@ -265,35 +253,20 @@ def _load_json_config() -> dict[str, Any]:
         return json.load(f)
 
 
-def _resolve_router_model(model_token: str) -> str:
-    """
-    Translate special tokens into configured model names,
-    otherwise pass through literal model names.
-    """
-    token_map = {
-        "$PROVIDER_MODEL": PROVIDER_MODEL,
-        "$PROVIDER_VISION_MODEL": PROVIDER_VISION_MODEL,
-        "$PROVIDER_VISION_TOOL_MODEL": PROVIDER_VISION_TOOL_MODEL,
-        "$PROVIDER_GROUNDING_MODEL": PROVIDER_GROUNDING_MODEL,
-    }
-    return token_map.get(model_token, model_token)
+DEFAULT_PROMPTS_DIR = Path(__file__).parent / "default_prompts"
 
 
-def _import_prompt(prompt_import: str) -> str:
-    """
-    Import prompt from 'package.module:ATTRIBUTE_OR_CALLABLE'.
-    If callable, call it without args to get the prompt string.
-    """
-    module_name, _, attr = prompt_import.partition(":")
-    if not module_name or not attr:
+def _read_prompt(agent_name: str, prompt_file: str | None) -> str:
+    """Read an agent's prompt from its file in ``default_prompts/``."""
+    if not prompt_file:
+        raise ValueError(f"[populate_agents] Agent '{agent_name}' has no prompt_file.")
+    path = DEFAULT_PROMPTS_DIR / prompt_file
+    if path.parent != DEFAULT_PROMPTS_DIR:
         raise ValueError(
-            f"Invalid prompt_import '{prompt_import}'. Expected 'module:attr'"
+            f"[populate_agents] prompt_file '{prompt_file}' of agent '{agent_name}' "
+            f"must be a file name in {DEFAULT_PROMPTS_DIR}."
         )
-    module = importlib.import_module(module_name)
-    obj = getattr(module, attr)
-    if callable(obj):
-        raise ValueError("Prompt import functions are not supported in this context.")
-    return str(obj)
+    return path.read_text(encoding="utf-8")
 
 
 def populate_agents(engine: Engine) -> None:
@@ -315,15 +288,10 @@ def populate_agents(engine: Engine) -> None:
         for item in agents_cfg:
             name = item["name"]
             description = item.get("description", "") or ""
-            prompt: str | None = item.get("prompt", None)
-            prompt_import = item.get("prompt_import")
-            if prompt_import and not prompt:
-                prompt = _import_prompt(prompt_import)
+            prompt = _read_prompt(name, item.get("prompt_file"))
 
             response_model = item.get("response_model")
-            router_model_token = item.get("router_model", "$PROVIDER_MODEL")
-            router_model_name = _resolve_router_model(router_model_token)
-            router = _get_router_by_model(session, router_model_name)
+            router = find_router(session, item.get("router", "text"))
 
             agent_type = _resolve_agent_type(item["agent_type"])
             input_type = _resolve_input_type(item.get("input_type"))
@@ -362,8 +330,9 @@ def populate_agents(engine: Engine) -> None:
             tools_cfg = item.get("tools", {})
             tool_names = tools_cfg.get("names", []) or []
             tool_limits = tools_cfg.get("limits", None)
+            tool_required = tools_cfg.get("required", None)
             if tool_names:
-                _attach_tools(session, agent, tool_names, tool_limits)
+                _attach_tools(session, agent, tool_names, tool_limits, tool_required)
         # Sub-agent relationships
         for rel in subs_cfg:
             parent_name = rel["parent"]

@@ -181,9 +181,7 @@ class Router(SQLModel, table=True):
                         return (prompt_cost, completion_cost)
             return (-1.0, -1.0)
 
-        raise NotImplementedError(
-            f"Router provider {self.provider_type} not yet implemented."
-        )
+        return (-1.0, -1.0)
 
     def get_conversation_cost(self, input_tokens: int, output_tokens: int) -> float:
         """Calculate the cost of a conversation based on input and output tokens."""

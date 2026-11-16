@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import Lock
@@ -8,6 +9,7 @@ from opentelemetry import trace as trace_api
 from pydantic import ValidationError
 from sqlmodel import Session
 from strands.hooks import (
+    AfterInvocationEvent,
     AfterToolCallEvent,
     BeforeInvocationEvent,
     BeforeModelCallEvent,
@@ -21,6 +23,8 @@ from strands.types.tools import ToolResultContent
 
 from observability import attributes as attrs
 from settings import MAX_GUI_IMAGES
+
+MAX_REQUIRED_TOOL_REMINDERS = 3
 
 OMITTED_IMAGE_TEXT = "ommited screenshot due to max allowed images per message"
 
@@ -73,6 +77,46 @@ class MaxGuiImagesHook(HookProvider):
         _ = block.pop("image", None)
         block["text"] = OMITTED_IMAGE_TEXT
         return remaining
+
+
+class RequireToolCalls(HookProvider):
+    """Sends the agent back until each required tool has been called successfully.
+
+    After at most `max_reminders` reminders the agent may finish anyway.
+    """
+
+    def __init__(
+        self,
+        required_tools: Iterable[str],
+        max_reminders: int = MAX_REQUIRED_TOOL_REMINDERS,
+    ):
+        self.required_tools = set(required_tools)
+        self.max_reminders = max_reminders
+        self.called: set[str] = set()
+        self.reminders = 0
+
+    @override
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        if not self.required_tools:
+            return
+        registry.add_callback(AfterToolCallEvent, self.record_call)
+        registry.add_callback(AfterInvocationEvent, self.remind)
+
+    def record_call(self, event: AfterToolCallEvent) -> None:
+        if event.exception is None and event.result.get("status") != "error":
+            self.called.add(event.tool_use["name"])
+
+    def remind(self, event: AfterInvocationEvent) -> None:
+        missing = sorted(self.required_tools - self.called)
+        if not missing or self.reminders >= self.max_reminders:
+            return
+        self.reminders += 1
+        names = ", ".join(f"`{name}`" for name in missing)
+        event.resume = (
+            f"You haven't called the required tool(s) {names} successfully. Call them "
+            "before finishing; if a call is rejected, correct it as its error says and "
+            "call it again."
+        )
 
 
 class LimitToolCounts(HookProvider):

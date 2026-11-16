@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.141.1",
-    "psycopg2>=2.9.12",
+    "psycopg2-binary>=2.9.12",
     "sqlmodel>=0.0.39",
     "strands-agents[openai,otel]>=1.51.0",
     "strands-agents-tools>=0.8.5",
@@ -14,7 +14,7 @@ dependencies = [
     "pillow>=12.3.0",
     "numpy>=2.5.1",
     "scikit-image>=0.25.2",
-    "opencv-python>=5.0.0.93",
+    "opencv-python-headless>=5.0.0.93",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "alembic>=1.19.1",
@@ -28,6 +28,7 @@ dependencies = [
     "websockets>=17.0.1",
     "regex>=2026.7.10",
     "opentelemetry-instrumentation-logging>=0.66b2",
+    "defusedxml>=0.7.1",
 ]
 
 [dependency-groups]
@@ -37,7 +38,7 @@ dev = [
     "ruff>=0.15.22",
 ]
 temp = [
-    "opencv-python>=5.0.0.93",
+    "opencv-python-headless>=5.0.0.93",
     "scikit-image>=0.25.2",
 ]
 

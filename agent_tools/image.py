@@ -4,12 +4,13 @@ from io import BytesIO
 
 import cv2
 import numpy as np
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocketDisconnect
 from PIL import Image
 from skimage.metrics import structural_similarity as ssim
 from strands import ToolContext, tool
 
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
+from robot.channel import RobotIO
 
 IMAGE_SIMILARITY_THRESHOLD = 0.95  # Threshold for image similarity (0 to 1)
 
@@ -92,7 +93,7 @@ async def take_screenshot(
 
 
 async def compare_images(
-    before_image: bytes, expected_change: bool, websocket: WebSocket
+    before_image: bytes, expected_change: bool, websocket: RobotIO
 ) -> bool:
     """
     Compare two images and determine if they are identical.
@@ -138,11 +139,9 @@ async def compare_images(
         )
 
 
-async def request_remote_screenshot(
-    websocket: WebSocket, timeout: float = 15.0
-) -> bytes:
+async def request_remote_screenshot(websocket: RobotIO, timeout: float = 15.0) -> bytes:
     """
-    Send a request over the provided WebSocket and wait for the client to send back a screenshot.
+    Send a request to the robot and wait for it to send back a screenshot.
 
     The client may respond in one of the following ways:
     - send bytes directly (use `await websocket.receive_bytes()`)
@@ -150,7 +149,7 @@ async def request_remote_screenshot(
     - send a JSON message containing an image under keys like `image` or `image_base64`
 
     Args:
-        websocket (WebSocket): Active FastAPI WebSocket connection to the client.
+        websocket (RobotIO): The robot, normally its recovery connection.
         message (str): Message payload to send to the client asking for a screenshot.
         timeout (float): Seconds to wait for the client's response.
 
@@ -175,12 +174,12 @@ async def request_remote_screenshot(
         raise RuntimeError(f"Unable to interpret client response as image: {e}")
 
 
-async def screenshot_bytes(websocket: WebSocket) -> bytes:
+async def screenshot_bytes(websocket: RobotIO) -> bytes:
     """
     Take a screenshot and return it as bytes.
 
     Args:
-        websocket (WebSocket): WebSocket connection to RPA robot
+        websocket (RobotIO): The robot, normally its recovery connection.
 
     Returns:
         bytes: Screenshot image data in bytes.
@@ -192,7 +191,7 @@ async def screenshot_bytes(websocket: WebSocket) -> bytes:
 
 
 async def capture_screenshot(
-    websocket: WebSocket, telemetry: GuiTaskTelemetry
+    websocket: RobotIO, telemetry: GuiTaskTelemetry
 ) -> tuple[bytes, tuple[int, int]]:
     """Fetch a client screenshot in a ``gui.screenshot`` span.
 
