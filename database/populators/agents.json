@@ -124,10 +124,10 @@
       "description": "Recovers the UI by acting on the robot's desktop through action tools, each returning a fresh screenshot.",
       "prompt_file": "gui_agent_tooled.md",
       "response_model": null,
-      "router_model": "$PROVIDER_GROUNDING_MODEL",
+      "router_model": "bytedance/ui-tars-1.5-7b",
       "agent_type": "GuiAgent",
       "input_type": "IMAGETEXT",
-      "enabled": true,
+      "enabled": false,
       "arguments": [
         {
           "name": "task",
@@ -166,14 +166,14 @@
       }
     },
     {
-      "name": "UI-TARS GUI Agent",
-      "description": "Text-based GUI agent that writes UI-TARS actions for the standalone UI-TARS loop (database/agents/uitars.py). Disabled: GUI agents are run through the tool-based loop, which this prompt doesn't fit.",
-      "prompt_file": "gui_agent_text.md",
+      "name": "Tooled GuiAgent",
+      "description": "Tool based GUI agent that uses tools for actions (database/agents/tooled_guiagent.py)",
+      "prompt_file": "gui_agent_tooled.md",
       "response_model": null,
       "router_model": "$PROVIDER_GROUNDING_MODEL",
       "agent_type": "GuiAgent",
       "input_type": "IMAGETEXT",
-      "enabled": false,
+      "enabled": true,
       "arguments": [
         {
           "name": "task",
@@ -216,6 +216,11 @@
     {
       "parent": "Gateway Orchestrator",
       "child": "UI Exception Handler",
+      "limit": 1
+    },
+    {
+      "parent": "UI Exception Handler",
+      "child": "Tooled GuiAgent",
       "limit": 1
     },
     {

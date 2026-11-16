@@ -24,6 +24,14 @@
       "vision_backbone": "OTHER"
     },
     {
+      "model_name": "bytedance/ui-tars-1.5-7b",
+      "api_key": "$PROVIDER_API_KEY",
+      "api_endpoint": "$PROVIDER_API_BASE",
+      "provider_type": "OPENROUTER",
+      "capabilities": ["TEXT", "VISION"],
+      "vision_backbone": "QWEN2_5"
+    },
+    {
       "model_name": "$PROVIDER_GROUNDING_MODEL",
       "api_key": "$PROVIDER_API_KEY",
       "api_endpoint": "$PROVIDER_API_BASE",
