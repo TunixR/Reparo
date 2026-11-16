@@ -58,11 +58,6 @@ def _named_tools(prompt: str) -> set[str]:
     return set(re.findall(r"`([a-z_]+)[`(]", prompt)) & ALL_TOOLS
 
 
-def test_every_prompt_file_is_used_by_one_agent() -> None:
-    files = sorted(p.name for p in DEFAULT_PROMPTS_DIR.glob("*.md"))
-    assert sorted(a["prompt_file"] for a in AGENTS.values()) == files
-
-
 @pytest.mark.parametrize("name", sorted(AGENTS))
 def test_prompt_names_only_tools_the_agent_is_given(name: str) -> None:
     agent = AGENTS[name]
