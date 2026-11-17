@@ -461,8 +461,8 @@ class Agent(SQLModel, table=True):
         self.router = router
         self.router_id = router.id
 
-    def get_pydantic_response_model(self) -> ResponseModel | None:
-        """Dynamically import and return the agent's structured response pydantic model."""
+    def output_model(self) -> ResponseModel | None:
+        """Return the model of this agent's structured output, imported from `response_model`."""
         if not self.response_model:
             return None
 
@@ -482,10 +482,6 @@ class Agent(SQLModel, table=True):
                 f"The class '{self.response_model}' is not a valid Pydantic model."
             )
         return model_class
-
-    def output_model(self) -> ResponseModel | None:
-        """Return the model of this agent's structured output, if it has one."""
-        return self.get_pydantic_response_model()
 
     async def run(
         self, invocation_state: dict[str, Any] | None = None, **kwargs: Any
@@ -538,11 +534,14 @@ class Agent(SQLModel, table=True):
         ``kwargs`` are the agent's inputs. Tools, sub-agents, hooks and the output model
         are computed per call. The agent runs twice on one conversation: a free run on
         the inputs, then a structured-output call. The final result is the second call's
-        `AgentResult`, whose metrics accumulate both. ``prompt`` and
-        ``invocation_context`` are accepted for the protocol and ignored: the
-        instruction is built from the inputs.
+        `AgentResult`, whose metrics accumulate both.
+
+        ``prompt`` and ``invocation_context`` are named only so they stay out of
+        ``kwargs``: Strands Graph passes both to every node, and left in ``kwargs`` they
+        would be taken as agent inputs and fail `validate_input`. Both are ignored,
+        because the instruction is built from the inputs.
         """
-        del prompt, invocation_context
+        del prompt, invocation_context  # unused, see above
         if invocation_state is None:
             invocation_state = {}
         self.validate_input(**kwargs)
@@ -666,7 +665,7 @@ class Agent(SQLModel, table=True):
         router = data.get("router")
         super().__init__(**data)
         # Validate that the response model can be imported successfully
-        _ = self.get_pydantic_response_model()
+        _ = self.output_model()
         if router is not None:
             self.validate_capabilities_support_input_type(
                 router.capabilities,
