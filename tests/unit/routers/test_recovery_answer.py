@@ -468,7 +468,7 @@ def test_variables_come_from_code_not_from_the_llm(
         kwargs["variables"]["invoice_id"] = "HALLUCINATED"
         return {"success": False, "variables": {"invented": True}}
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call)
+    monkeypatch.setattr(Agent, "run", _fake_call)
 
     message = _recover(client, robot_key_raw, valid_recovery_payload)
 

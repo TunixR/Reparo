@@ -1,6 +1,10 @@
+import asyncio
+import contextvars
 import enum
 import logging
 import uuid
+from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, override
@@ -10,9 +14,11 @@ from sqlalchemy import Column
 from sqlmodel import Enum, Field, Relationship, SQLModel
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
+from strands.agent import AgentResult, InvocationContext
 from strands.hooks import HookProvider
 from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
+from strands.types.agent import AgentInput
 from strands.types.content import Messages
 
 from agent_tools.hooks import (
@@ -30,6 +36,9 @@ from observability import attributes as attrs
 from observability.events import log_event
 
 logger = logging.getLogger(__name__)
+
+# Module level: inside `Agent` the name `type` is the agent type field.
+type ResponseModel = type[BaseModel]
 
 
 class Argument(SQLModel, table=True):
@@ -326,7 +335,7 @@ class Agent(SQLModel, table=True):
                     "A valid robot_exception_id must be provided in tool context invocation state."
                 )
 
-            return await self(
+            return await self.run(
                 invocation_state=tool_context.invocation_state,
                 **tool_context.tool_use.get("input", {}),
             )
@@ -452,7 +461,7 @@ class Agent(SQLModel, table=True):
         self.router = router
         self.router_id = router.id
 
-    def get_pydantic_response_model(self) -> BaseModel | None:
+    def get_pydantic_response_model(self) -> ResponseModel | None:
         """Dynamically import and return the agent's structured response pydantic model."""
         if not self.response_model:
             return None
@@ -463,26 +472,80 @@ class Agent(SQLModel, table=True):
         except Exception as e:
             raise ImportError(f"Could not import module '{module_path}': {e}") from e
         try:
-            model_class: type[Any] = getattr(module, class_name)
+            model_class: object = getattr(module, class_name)
         except Exception as e:
             raise ImportError(
                 f"Could not find class '{class_name}' in module '{module_path}': {e}"
             ) from e
-        if not issubclass(model_class, BaseModel):
+        if not isinstance(model_class, type) or not issubclass(model_class, BaseModel):
             raise ValueError(
                 f"The class '{self.response_model}' is not a valid Pydantic model."
             )
-        return model_class  # pyright: ignore[reportReturnType] It returns type[BaseModel] but cannot be expressed in type hints without __future__ annotations, which mess up SQLModel
+        return model_class
 
-    async def __call__(
-        self, invocation_state: dict[str, Any] | None = None, *args: Any, **kwargs: Any
+    def output_model(self) -> ResponseModel | None:
+        """Return the model of this agent's structured output, if it has one."""
+        return self.get_pydantic_response_model()
+
+    async def run(
+        self, invocation_state: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
+        """Run the agent on explicit inputs and return its structured response as a dict.
+
+        This is how an agent runs standalone and as a tool of another agent.
         """
-        Dinamically computes tools, subagents, output model and input validation. Calls the agent and returns the final structered response.
+        result = await self.invoke_async(invocation_state=invocation_state, **kwargs)
+        if result.structured_output is None:  # stream_async raises before this
+            raise ValueError("Agent did not return a structured response.")
+        return result.structured_output.model_dump()
+
+    async def invoke_async(
+        self, prompt: AgentInput = None, **kwargs: Any
+    ) -> AgentResult:
+        """Run the agent through `stream_async` and return its final `AgentResult`."""
+        result: AgentResult | None = None
+        async for event in self.stream_async(prompt, **kwargs):
+            if "result" in event:
+                result = event["result"]
+        if result is None:
+            raise ValueError("Agent did not produce a result.")
+        return result
+
+    def __call__(self, prompt: AgentInput = None, **kwargs: Any) -> AgentResult:
+        """Run `invoke_async` to completion from synchronous code.
+
+        Only here so the agent satisfies Strands' `AgentBase` protocol. Never use it with a
+        live robot connection: it runs the agent on a separate event loop in another
+        thread, while the robot's websocket belongs to the server's loop. Use `run` or
+        `invoke_async` instead.
         """
+        context = contextvars.copy_context()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(
+                context.run, asyncio.run, self.invoke_async(prompt, **kwargs)
+            ).result()
+
+    async def stream_async(
+        self,
+        prompt: AgentInput = None,
+        *,
+        invocation_state: dict[str, Any] | None = None,
+        invocation_context: InvocationContext | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Run the agent and stream its Strands events, ending with ``{"result": AgentResult}``.
+
+        ``kwargs`` are the agent's inputs. Tools, sub-agents, hooks and the output model
+        are computed per call. The agent runs twice on one conversation: a free run on
+        the inputs, then a structured-output call. The final result is the second call's
+        `AgentResult`, whose metrics accumulate both. ``prompt`` and
+        ``invocation_context`` are accepted for the protocol and ignored: the
+        instruction is built from the inputs.
+        """
+        del prompt, invocation_context
         if invocation_state is None:
             invocation_state = {}
-        self.validate_input(*args, **kwargs)
+        self.validate_input(**kwargs)
         invocation_state["inputs"] = {
             arg.name: kwargs.get(arg.name) for arg in self.arguments
         }
@@ -542,27 +605,33 @@ class Agent(SQLModel, table=True):
             messages=messages,  # type: ignore This works fine
         )
 
+        result: AgentResult | None = None
         try:
             instruction = "\n".join(
                 [f"{arg.name}: {kwargs.get(arg.name)}" for arg in self.arguments]
             )
 
-            _ = await strands_agent.invoke_async(
+            # Each Strands run ends with its own result event; only the agent's
+            # final result is yielded, after its usage is accounted for.
+            async for event in strands_agent.stream_async(
                 instruction,
                 invocation_state=invocation_state,
-            )
+            ):
+                if "result" not in event:
+                    yield event
 
-            response: BaseModel | None = (
-                await strands_agent.invoke_async(
-                    "Given our conversation so far, please provide a report using structured output with the given tool.",
-                    structured_output_model=self.get_pydantic_response_model(),  # pyright: ignore[reportArgumentType] It returns type[BaseModel] but cannot be expressed in type hints without __future__ annotations, which mess up SQLModel
-                    invocation_state=invocation_state,
-                )
-            ).structured_output
+            async for event in strands_agent.stream_async(
+                "Given our conversation so far, please provide a report using structured output with the given tool.",
+                structured_output_model=self.output_model(),
+                invocation_state=invocation_state,
+            ):
+                if "result" in event:
+                    result = event["result"]
+                else:
+                    yield event
 
-            if response is None:
+            if result is None or result.structured_output is None:
                 raise ValueError("Agent did not return a structured response.")
-            return response.model_dump()
         finally:
             # Every AgentResult.metrics is this same object; accumulated_usage sums
             # both invocations above, including tokens spent before a failure.
@@ -588,6 +657,7 @@ class Agent(SQLModel, table=True):
                     attrs.AGENT_COST: cost,
                 },
             )
+        yield {"result": result}
 
     def __init__(self, **data: Any) -> None:
         # Routers are passed as objects so their capabilities can be validated

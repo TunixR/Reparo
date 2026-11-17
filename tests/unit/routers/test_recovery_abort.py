@@ -156,7 +156,7 @@ def test_abort_mid_llm_turn_cancels_the_gateway(
         await asyncio.sleep(60)
 
     call, seen = _gateway_cancelled_by_abort(_thinking)
-    monkeypatch.setattr(Agent, "__call__", call)
+    monkeypatch.setattr(Agent, "run", call)
 
     _assert_aborted(
         session,
@@ -190,7 +190,7 @@ def test_abort_mid_action_is_not_read_as_the_action_result(
         await asyncio.sleep(60)
 
     call, seen = _gateway_cancelled_by_abort(_acting)
-    monkeypatch.setattr(Agent, "__call__", call)
+    monkeypatch.setattr(Agent, "run", call)
 
     _assert_aborted(
         session,
@@ -246,7 +246,7 @@ def test_disconnect_mid_llm_turn_cancels_the_gateway_and_is_recorded(
         await asyncio.sleep(60)
 
     call, seen = _gateway_cancelled_by_abort(_thinking)
-    monkeypatch.setattr(Agent, "__call__", call)
+    monkeypatch.setattr(Agent, "run", call)
 
     with client.websocket_connect(
         WS_PATH, headers={"X-ROBOT-KEY": robot_key_raw}
