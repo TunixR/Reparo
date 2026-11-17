@@ -38,7 +38,7 @@ The platform addresses critical business continuity needs by minimizing automati
 
 #### 1.1.2 Recovery Agents
 - [x] **REQ-F-008**: Each recovery module SHALL declare its input requirements, output capabilities, available tools, and supported error types (Inputs via `Argument`; tools via `AgentTool`/`SubAgent`; error-type via agent description)
-- [x] **REQ-F-009**: Recovery Agents SHALL implement a standardized interface for communication with the gateway (Implemented via a uniform agent invocation interface `database/agents/models.py:Agent.__call__` and tool exposure `Agent.as_tool()`.)
+- [x] **REQ-F-009**: Recovery Agents SHALL implement a standardized interface for communication with the gateway (Implemented via a uniform agent invocation interface `database/agents/models.py:Agent.run`, Strands' `AgentBase` protocol (`Agent.stream_async`) and tool exposure `Agent.as_tool()`.)
 - [x] **REQ-F-010**: Agents SHALL be capable of generating high-level execution plans for error resolution
 - [x] **REQ-F-011**: Agents SHALL execute plans step-by-step with iterative decision-making after each step (Especialized agents like GUIAgent's custom flow)
 - [x] **REQ-F-012**: Agents SHALL evaluate step completion status and determine next actions (continue, replan, escalate, or complete)

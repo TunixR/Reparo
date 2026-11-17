@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -10,10 +9,8 @@ from strands import Agent as StrandsAgent
 from strands.agent import AgentBase, AgentResult
 
 from database.agents.models import Agent
-from tests.unit.fixtures.agent_fixtures import ScriptedReport
+from tests.unit.fixtures.agent_fixtures import ScriptedAgent, ScriptedReport
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
-
-type ScriptedAgent = Callable[..., tuple[Agent, ScriptedModel]]
 
 # The first LLM phase answers in text, the structured-output phase fills the report.
 TURNS = ("Looked at the robot.", ToolCall("ScriptedReport", {"done": True}))

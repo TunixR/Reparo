@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from database.agents.models import Agent
 from database.provider.models import Router
+from tests.unit.fixtures.agent_fixtures import ScriptedAgent
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 
@@ -22,7 +22,7 @@ def _usage_event(caplog: pytest.LogCaptureFixture) -> dict[str, Any]:
 
 @pytest.fixture
 def run_agent(
-    scripted_agent: Callable[..., tuple[Agent, ScriptedModel]],
+    scripted_agent: ScriptedAgent,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> Callable[..., Any]:

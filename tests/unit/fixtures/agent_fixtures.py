@@ -69,6 +69,10 @@ def gateway_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agen
     )
 
 
+type ScriptedAgent = Callable[..., tuple[Agent, ScriptedModel]]
+"""Factory returned by ``scripted_agent``: turns in, the agent and its model out."""
+
+
 class ScriptedReport(BaseModel):
     """Response model of ``scripted_agent``; a ``ToolCall("ScriptedReport", ...)`` fills it."""
 
@@ -80,7 +84,7 @@ def scripted_agent(
     make_agent: Callable[..., Agent],
     mock_router: Router,
     monkeypatch: pytest.MonkeyPatch,
-) -> Callable[..., tuple[Agent, ScriptedModel]]:
+) -> ScriptedAgent:
     """Return a factory for a real agent whose model replays the given turns.
 
     The agent takes one ``task`` argument and answers with a ``ScriptedReport``.
