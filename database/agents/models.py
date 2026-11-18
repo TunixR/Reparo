@@ -25,7 +25,7 @@ from agent_tools.hooks import (
 )
 from agent_tools.image import screenshot_bytes
 from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
-from database.agents.tooled_gui_agent import TooledGuiAgent
+from database.agents.tooled_gui_agent import GuiRunReport, TooledGuiAgent
 from database.provider.models import Router
 from database.tools.models import Tool
 from observability import attributes as attrs
@@ -466,7 +466,12 @@ class Agent(SQLModel, table=True):
         self.router_id = router.id
 
     def output_model(self) -> ResponseModel | None:
-        """Return the model of this agent's structured output, imported from `response_model`."""
+        """Return the model of this agent's structured output.
+
+        A GUI agent reports a `GuiRunReport`; any other agent its `response_model`.
+        """
+        if self.type == AgentType.GuiAgent:
+            return GuiRunReport
         if not self.response_model:
             return None
 
@@ -504,11 +509,23 @@ class Agent(SQLModel, table=True):
         """Run the agent as a node of an agent graph and return its structured output.
 
         The caller binds ``inputs``; the agent never looks at the graph context. Like
-        ``__call__``, it records the inputs and its trace id in ``invocation_state``.
+        ``__call__``, it records the inputs in ``invocation_state``. A GUI agent drives
+        the robot's desktop and reports a `GuiRunReport`.
         """
         if self.type == AgentType.GuiAgent:
-            raise NotImplementedError("GUI agents cannot run as graph nodes yet.")
+            self._bind_inputs(invocation_state, inputs)
+            report = await TooledGuiAgent(self).run(invocation_state, inputs)
+            return NodeRun(output=report)
         return NodeRun(output=await self._execute(invocation_state, inputs))
+
+    def _bind_inputs(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> None:
+        """Validate ``inputs`` and record them in ``invocation_state`` for the agent trace."""
+        self.validate_input(**inputs)
+        invocation_state["inputs"] = {
+            arg.name: inputs.get(arg.name) for arg in self.arguments
+        }
 
     async def _execute(
         self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
@@ -519,10 +536,7 @@ class Agent(SQLModel, table=True):
         runs twice on one conversation: a free run on the inputs, then a
         structured-output call. Usage and cost of both are logged, even on failure.
         """
-        self.validate_input(**inputs)
-        invocation_state["inputs"] = {
-            arg.name: inputs.get(arg.name) for arg in self.arguments
-        }
+        self._bind_inputs(invocation_state, inputs)
 
         tools: list[DecoratedFunctionTool] = [  # pyright: ignore[reportMissingTypeArgument]
             t.get_tool_function() for t in self.get_tools()
