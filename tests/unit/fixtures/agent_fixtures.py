@@ -3,7 +3,7 @@ Agent fixtures for unit tests.
 """
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -113,3 +113,27 @@ def scripted_agent(
         return agent, model
 
     return _scripted
+
+
+type EntryPoint = Callable[
+    [Agent, dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]
+]
+"""Runs an agent on a state and inputs and returns its structured output as a dict."""
+
+
+async def _via_call(
+    agent: Agent, state: dict[str, Any], inputs: dict[str, Any]
+) -> dict[str, Any]:
+    return await agent(invocation_state=state, **inputs)
+
+
+async def _via_run_node(
+    agent: Agent, state: dict[str, Any], inputs: dict[str, Any]
+) -> dict[str, Any]:
+    return (await agent.run_node(state, inputs)).output.model_dump()
+
+
+@pytest.fixture(params=[_via_call, _via_run_node], ids=["__call__", "run_node"])
+def entry_point(request: pytest.FixtureRequest) -> EntryPoint:
+    """Each way to run an agent: standalone ``__call__`` and the graph's ``run_node``."""
+    return request.param

@@ -164,7 +164,7 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
         )
         return {"success": True}
 
-    monkeypatch.setattr(Agent, "run", _gateway)
+    monkeypatch.setattr(Agent, "__call__", _gateway)
 
     with telemetry.client.websocket_connect(
         "/recovery/robot_exception/ws", headers={"X-ROBOT-KEY": key_raw}

@@ -88,7 +88,7 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
         )
         return {"success": True}
 
-    monkeypatch.setattr(Agent, "run", _fake_call)
+    monkeypatch.setattr(Agent, "__call__", _fake_call)
     caplog.set_level(logging.INFO)
 
     headers = {"X-ROBOT-KEY": robot_key_raw}
@@ -172,7 +172,7 @@ def test_turn_failure_logs_and_records_redacted_exception(
     ) -> dict[str, Any]:
         raise RuntimeError(f"model call failed password={PASSWORD}")
 
-    monkeypatch.setattr(Agent, "run", _failing_call)
+    monkeypatch.setattr(Agent, "__call__", _failing_call)
     caplog.set_level(logging.INFO)
 
     headers = {"X-ROBOT-KEY": robot_key_raw}

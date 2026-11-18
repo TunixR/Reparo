@@ -1,4 +1,4 @@
-"""Token accounting of ``Agent.run`` across its two Strands invocations."""
+"""Token accounting of an agent run across its two Strands invocations."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from database.provider.models import Router
-from tests.unit.fixtures.agent_fixtures import ScriptedAgent
+from tests.unit.fixtures.agent_fixtures import EntryPoint, ScriptedAgent
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 
@@ -23,10 +23,11 @@ def _usage_event(caplog: pytest.LogCaptureFixture) -> dict[str, Any]:
 @pytest.fixture
 def run_agent(
     scripted_agent: ScriptedAgent,
+    entry_point: EntryPoint,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> Callable[..., Any]:
-    """Run ``Agent.run`` on a real Strands agent whose model plays ``turns``."""
+    """Run a real agent, through each entry point, on a model that plays ``turns``."""
     monkeypatch.setattr(
         Router, "get_conversation_cost", lambda _self, i, o: i * 0.001 + o * 0.01
     )
@@ -34,7 +35,9 @@ def run_agent(
 
     async def _run(*turns: Turn) -> tuple[Any, ScriptedModel]:
         agent, model = scripted_agent(*turns, usage=(100, 10))
-        result = await agent.run({"websocket": None}, task="Recover the robot")
+        result = await entry_point(
+            agent, {"websocket": None}, {"task": "Recover the robot"}
+        )
         return result, model
 
     return _run

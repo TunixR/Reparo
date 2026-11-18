@@ -1,10 +1,8 @@
-import asyncio
-import contextvars
 import enum
 import logging
 import uuid
-from collections.abc import AsyncIterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, override
@@ -14,11 +12,9 @@ from sqlalchemy import Column
 from sqlmodel import Enum, Field, Relationship, SQLModel
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
-from strands.agent import AgentResult, InvocationContext
 from strands.hooks import HookProvider
 from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
-from strands.types.agent import AgentInput
 from strands.types.content import Messages
 
 from agent_tools.hooks import (
@@ -39,6 +35,14 @@ logger = logging.getLogger(__name__)
 
 # Module level: inside `Agent` the name `type` is the agent type field.
 type ResponseModel = type[BaseModel]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeRun:
+    """What an agent produces as a node of an agent graph."""
+
+    output: BaseModel
+    """The node's structured output, an instance of the agent's `output_model()`."""
 
 
 class Argument(SQLModel, table=True):
@@ -335,7 +339,7 @@ class Agent(SQLModel, table=True):
                     "A valid robot_exception_id must be provided in tool context invocation state."
                 )
 
-            return await self.run(
+            return await self(
                 invocation_state=tool_context.invocation_state,
                 **tool_context.tool_use.get("input", {}),
             )
@@ -483,70 +487,41 @@ class Agent(SQLModel, table=True):
             )
         return model_class
 
-    async def run(
+    async def __call__(
         self, invocation_state: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
         """Run the agent on explicit inputs and return its structured response as a dict.
 
         This is how an agent runs standalone and as a tool of another agent.
         """
-        result = await self.invoke_async(invocation_state=invocation_state, **kwargs)
-        if result.structured_output is None:  # stream_async raises before this
-            raise ValueError("Agent did not return a structured response.")
-        return result.structured_output.model_dump()
-
-    async def invoke_async(
-        self, prompt: AgentInput = None, **kwargs: Any
-    ) -> AgentResult:
-        """Run the agent through `stream_async` and return its final `AgentResult`."""
-        result: AgentResult | None = None
-        async for event in self.stream_async(prompt, **kwargs):
-            if "result" in event:
-                result = event["result"]
-        if result is None:
-            raise ValueError("Agent did not produce a result.")
-        return result
-
-    def __call__(self, prompt: AgentInput = None, **kwargs: Any) -> AgentResult:
-        """Run `invoke_async` to completion from synchronous code.
-
-        Only here so the agent satisfies Strands' `AgentBase` protocol. Never use it with a
-        live robot connection: it runs the agent on a separate event loop in another
-        thread, while the robot's websocket belongs to the server's loop. Use `run` or
-        `invoke_async` instead.
-        """
-        context = contextvars.copy_context()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            return executor.submit(
-                context.run, asyncio.run, self.invoke_async(prompt, **kwargs)
-            ).result()
-
-    async def stream_async(
-        self,
-        prompt: AgentInput = None,
-        *,
-        invocation_state: dict[str, Any] | None = None,
-        invocation_context: InvocationContext | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[Any]:
-        """Run the agent and stream its Strands events, ending with ``{"result": AgentResult}``.
-
-        ``kwargs`` are the agent's inputs. Tools, sub-agents, hooks and the output model
-        are computed per call. The agent runs twice on one conversation: a free run on
-        the inputs, then a structured-output call. The final result is the second call's
-        `AgentResult`, whose metrics accumulate both.
-
-        ``prompt`` and ``invocation_context`` are named only so they stay out of
-        ``kwargs``: Strands Graph passes both to every node, and left in ``kwargs`` they
-        would be taken as agent inputs and fail `validate_input`. Both are ignored,
-        because the instruction is built from the inputs.
-        """
-        del prompt, invocation_context  # unused, see above
         if invocation_state is None:
             invocation_state = {}
-        self.validate_input(**kwargs)
+        return (await self._execute(invocation_state, kwargs)).model_dump()
+
+    async def run_node(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> NodeRun:
+        """Run the agent as a node of an agent graph and return its structured output.
+
+        The caller binds ``inputs``; the agent never looks at the graph context. Like
+        ``__call__``, it records the inputs and its trace id in ``invocation_state``.
+        """
+        if self.type == AgentType.GuiAgent:
+            raise NotImplementedError("GUI agents cannot run as graph nodes yet.")
+        return NodeRun(output=await self._execute(invocation_state, inputs))
+
+    async def _execute(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> BaseModel:
+        """Run the agent on validated inputs and return its structured output.
+
+        Tools, sub-agents, hooks and the output model are computed per call. The agent
+        runs twice on one conversation: a free run on the inputs, then a
+        structured-output call. Usage and cost of both are logged, even on failure.
+        """
+        self.validate_input(**inputs)
         invocation_state["inputs"] = {
-            arg.name: kwargs.get(arg.name) for arg in self.arguments
+            arg.name: inputs.get(arg.name) for arg in self.arguments
         }
 
         tools: list[DecoratedFunctionTool] = [  # pyright: ignore[reportMissingTypeArgument]
@@ -604,33 +579,27 @@ class Agent(SQLModel, table=True):
             messages=messages,  # type: ignore This works fine
         )
 
-        result: AgentResult | None = None
         try:
             instruction = "\n".join(
-                [f"{arg.name}: {kwargs.get(arg.name)}" for arg in self.arguments]
+                [f"{arg.name}: {inputs.get(arg.name)}" for arg in self.arguments]
             )
 
-            # Each Strands run ends with its own result event; only the agent's
-            # final result is yielded, after its usage is accounted for.
-            async for event in strands_agent.stream_async(
+            _ = await strands_agent.invoke_async(
                 instruction,
                 invocation_state=invocation_state,
-            ):
-                if "result" not in event:
-                    yield event
+            )
 
-            async for event in strands_agent.stream_async(
-                "Given our conversation so far, please provide a report using structured output with the given tool.",
-                structured_output_model=self.output_model(),
-                invocation_state=invocation_state,
-            ):
-                if "result" in event:
-                    result = event["result"]
-                else:
-                    yield event
+            response = (
+                await strands_agent.invoke_async(
+                    "Given our conversation so far, please provide a report using structured output with the given tool.",
+                    structured_output_model=self.output_model(),
+                    invocation_state=invocation_state,
+                )
+            ).structured_output
 
-            if result is None or result.structured_output is None:
+            if response is None:
                 raise ValueError("Agent did not return a structured response.")
+            return response
         finally:
             # Every AgentResult.metrics is this same object; accumulated_usage sums
             # both invocations above, including tokens spent before a failure.
@@ -656,7 +625,6 @@ class Agent(SQLModel, table=True):
                     attrs.AGENT_COST: cost,
                 },
             )
-        yield {"result": result}
 
     def __init__(self, **data: Any) -> None:
         # Routers are passed as objects so their capabilities can be validated
