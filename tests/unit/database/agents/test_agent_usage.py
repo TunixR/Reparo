@@ -1,4 +1,4 @@
-"""Token accounting of ``Agent.__call__`` across its two Strands invocations."""
+"""Token accounting of ``Agent.run`` across its two Strands invocations."""
 
 from __future__ import annotations
 
@@ -7,16 +7,10 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
 
-import database.agents.models as agent_models
-from database.agents.models import Agent, Argument
 from database.provider.models import Router
+from tests.unit.fixtures.agent_fixtures import ScriptedAgent
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
-
-
-class _Report(BaseModel):
-    done: bool
 
 
 def _usage_event(caplog: pytest.LogCaptureFixture) -> dict[str, Any]:
@@ -28,32 +22,19 @@ def _usage_event(caplog: pytest.LogCaptureFixture) -> dict[str, Any]:
 
 @pytest.fixture
 def run_agent(
-    make_agent: Callable[..., Agent],
-    mock_router: Router,
+    scripted_agent: ScriptedAgent,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> Callable[..., Any]:
-    """Run ``Agent.__call__`` on a real Strands agent whose model plays ``turns``."""
-
-    async def _no_screenshot(_websocket: object) -> bytes:
-        return b""
-
-    monkeypatch.setattr(agent_models, "screenshot_bytes", _no_screenshot)
-    monkeypatch.setattr(Agent, "get_pydantic_response_model", lambda _self: _Report)
+    """Run ``Agent.run`` on a real Strands agent whose model plays ``turns``."""
     monkeypatch.setattr(
         Router, "get_conversation_cost", lambda _self, i, o: i * 0.001 + o * 0.01
     )
-    # The logging hooks write audit rows to Postgres; this test is about tokens.
-    monkeypatch.setattr(Agent, "get_logging_hooks", lambda _self, _state: [])
     caplog.set_level(logging.INFO)
-    # Strands rejects a blank prompt, and the instruction lists the arguments.
-    task = Argument(name="task", description="Task", type="str", json_type="string")
-    agent = make_agent(router=mock_router, arguments=[task])
 
     async def _run(*turns: Turn) -> tuple[Any, ScriptedModel]:
-        model = ScriptedModel(*turns, usage=(100, 10))
-        monkeypatch.setattr(Router, "get_model", lambda _self: model)
-        result = await agent({"websocket": None}, task="Recover the robot")
+        agent, model = scripted_agent(*turns, usage=(100, 10))
+        result = await agent.run({"websocket": None}, task="Recover the robot")
         return result, model
 
     return _run
@@ -65,7 +46,7 @@ async def test_usage_sums_both_invocations(
 ) -> None:
     # First invocation answers in text, the second fills the report.
     result, model = await run_agent(
-        "Looked at the robot.", ToolCall("_Report", {"done": True})
+        "Looked at the robot.", ToolCall("ScriptedReport", {"done": True})
     )
 
     assert result == {"done": True}

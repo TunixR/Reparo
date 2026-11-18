@@ -61,7 +61,7 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
             "loop_iteration": [],
         }
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+    monkeypatch.setattr(Agent, "run", _fake_call, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     with client.websocket_connect(
@@ -195,7 +195,7 @@ def test_recovery_ws_ingest_stores_declared_capabilities(
         captured["capabilities"] = invocation_state[CAPABILITIES_STATE_KEY]  # pyright: ignore[reportOptionalSubscript]
         return {"success": False}
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+    monkeypatch.setattr(Agent, "run", _fake_call, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     with client.websocket_connect(
@@ -227,7 +227,7 @@ def test_recovery_ws_accepts_recovery_task_and_does_not_pass_it_to_the_agent(
         calls.append({"invocation_state": invocation_state, "kwargs": kwargs})
         return {"success": False}
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+    monkeypatch.setattr(Agent, "run", _fake_call, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     messages: list[dict[str, Any]] = []

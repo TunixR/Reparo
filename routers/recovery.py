@@ -242,7 +242,7 @@ async def _invoke_gateway_agent(
             "error_description": act.error_description,
         }
 
-    response = await agent(
+    response = await agent.run(
         invocation_state=invocation_state,
         task_name=recovery_context.task_name,
         platform=recovery_context.platform,

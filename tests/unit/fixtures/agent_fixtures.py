@@ -7,10 +7,13 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 from sqlmodel import Session
 
-from database.agents.models import Agent, AgentType
+import database.agents.models as agent_models
+from database.agents.models import Agent, AgentType, Argument
 from database.provider.models import Router
+from tests.unit.shared.scripted_model import ScriptedModel, Turn
 
 
 @pytest.fixture
@@ -64,3 +67,49 @@ def gateway_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agen
         response_model=None,
         type=AgentType.GatewayAgent,
     )
+
+
+type ScriptedAgent = Callable[..., tuple[Agent, ScriptedModel]]
+"""Factory returned by ``scripted_agent``: turns in, the agent and its model out."""
+
+
+class ScriptedReport(BaseModel):
+    """Response model of ``scripted_agent``; a ``ToolCall("ScriptedReport", ...)`` fills it."""
+
+    done: bool
+
+
+@pytest.fixture
+def scripted_agent(
+    make_agent: Callable[..., Agent],
+    mock_router: Router,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ScriptedAgent:
+    """Return a factory for a real agent whose model replays the given turns.
+
+    The agent takes one ``task`` argument and answers with a ``ScriptedReport``.
+    Its logging hooks and screenshots are disabled, so it runs without a robot.
+    """
+
+    async def _no_screenshot(_websocket: object) -> bytes:
+        return b""
+
+    monkeypatch.setattr(agent_models, "screenshot_bytes", _no_screenshot)
+    # The logging hooks write audit rows outside the test session.
+    monkeypatch.setattr(Agent, "get_logging_hooks", lambda _self, _state: [])
+    # Strands rejects a blank prompt, and the instruction lists the arguments.
+    task = Argument(name="task", description="Task", type="str", json_type="string")
+    agent = make_agent(
+        router=mock_router,
+        arguments=[task],
+        response_model=f"{__name__}.ScriptedReport",
+    )
+
+    def _scripted(
+        *turns: Turn, usage: tuple[int, int] = (12, 4)
+    ) -> tuple[Agent, ScriptedModel]:
+        model = ScriptedModel(*turns, usage=usage)
+        monkeypatch.setattr(Router, "get_model", lambda _self, **_params: model)
+        return agent, model
+
+    return _scripted
