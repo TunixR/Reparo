@@ -202,7 +202,7 @@ Process Model:
         raise TypeError("The continuation inferrer did not return a structured report.")
 
     # Scored against the same answer production sends in `done.content`.
-    answer, failure_reason = _build_answer(report.model_dump(), invocation_state)
+    answer, failure_reason = _build_answer(report, invocation_state)
     span = trace.get_current_span()
     span.set_attribute(attrs.RECOVERY_SUCCESS, answer.success)
     record_answer(span, answer, failure_reason)

@@ -2,7 +2,6 @@ import enum
 import logging
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, override
@@ -24,6 +23,7 @@ from agent_tools.hooks import (
     ToolLoggingHook,
 )
 from agent_tools.image import screenshot_bytes
+from database.agent_graphs.runner import NodeRun
 from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
 from database.agents.tooled_gui_agent import GuiRunReport, TooledGuiAgent
 from database.provider.models import Router
@@ -35,14 +35,6 @@ logger = logging.getLogger(__name__)
 
 # Module level: inside `Agent` the name `type` is the agent type field.
 type ResponseModel = type[BaseModel]
-
-
-@dataclass(frozen=True, slots=True)
-class NodeRun:
-    """What an agent produces as a node of an agent graph."""
-
-    output: BaseModel
-    """The node's structured output, an instance of the agent's `output_model()`."""
 
 
 class Argument(SQLModel, table=True):

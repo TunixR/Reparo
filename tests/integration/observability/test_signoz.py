@@ -6,6 +6,7 @@ stored. See ``conftest.py`` for the setup and cleanup.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -14,8 +15,10 @@ from opentelemetry import trace
 from sqlmodel import Session
 
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
+from database.agent_graphs.runner import NodeRun
 from database.agents.models import Agent
 from database.logging.models import RobotException
+from templates.gateway import ResponseToRPA
 from tests.integration.observability.conftest import SECRET, Telemetry
 from tests.integration.observability.signoz import Row
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
@@ -147,8 +150,8 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
     robot_key = make_robot_key(name="Integration", key_raw=key_raw)
 
     async def _gateway(
-        _self: Agent, invocation_state: dict[str, Any] | None = None, **_: Any
-    ) -> dict[str, Any]:
+        _self: Agent, invocation_state: dict[str, Any], _inputs: Mapping[str, Any]
+    ) -> NodeRun:
         # A real Strands agent with a scripted model: its spans must join the turn.
         from strands import Agent as StrandsAgent
 
@@ -156,15 +159,14 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
             model=ScriptedModel("Recovered."), name="gateway", callback_handler=None
         )
         await agent.invoke_async("Recover the robot")
-        assert invocation_state is not None
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
             continue_from_model_event_id="click_submit",
             loop_iteration=[],
         )
-        return {"success": True}
+        return NodeRun(output=ResponseToRPA(success=True))
 
-    monkeypatch.setattr(Agent, "__call__", _gateway)
+    monkeypatch.setattr(Agent, "run_node", _gateway)
 
     with telemetry.client.websocket_connect(
         "/recovery/robot_exception/ws", headers={"X-ROBOT-KEY": key_raw}
@@ -190,12 +192,15 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
     assert turn["attributes_bool"]["recovery.success"] is True
     assert turn["attributes_number"]["recovery.payload.ui_log_count"] == 1
 
-    # Nesting: websocket span -> recovery.turn -> persist and the Strands agent.
+    # Nesting: websocket span -> recovery.turn -> persist, and the agent graph run
+    # with the Strands agent beneath it.
     websocket_span = next(s for s in spans if s["span_id"] == turn["parent_span_id"])
     assert "robot_exception/ws" in websocket_span["name"]
     assert by_name["recovery.persist"]["parent_span_id"] == turn["span_id"]
+    graph_run = by_name["agent_graph.run"]
+    assert graph_run["parent_span_id"] == turn["span_id"]
     agent_span = next(s for s in spans if s["name"].startswith("invoke_agent"))
-    assert agent_span["parent_span_id"] == turn["span_id"]
+    assert agent_span["parent_span_id"] == graph_run["span_id"]
     assert any(s["name"] == "chat" for s in spans)
 
     # Correlation: the span attribute is the primary key of the audit row.

@@ -8,7 +8,8 @@ from fastapi import WebSocketDisconnect
 from sqlmodel import Session
 
 import database.agents.tooled_gui_agent as tooled_module
-from database.agents.models import Agent, AgentType, Argument, NodeRun
+from database.agent_graphs.runner import NodeRun
+from database.agents.models import Agent, AgentType, Argument
 from database.agents.tooled_gui_agent import GuiAction, GuiRunReport
 from database.provider.models import Router
 from tests.unit.shared.fake_websocket import FakeWebSocket, make_test_image_bytes

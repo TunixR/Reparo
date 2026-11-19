@@ -14,6 +14,7 @@ tries to recover them with LLM agents. Its main parts:
 | --- | --- | --- |
 | Recovery ingress | WebSocket a robot opens when it fails; one recovery per connection | `routers/recovery.py` |
 | Agents | Database-configured Strands agents: a gateway agent and the sub-agents it delegates to | `database/agents/` |
+| Agent graphs | The runner that executes a recovery one agent node at a time, starting at the gateway | `database/agent_graphs/` |
 | Tools | Python functions agents can call, registered in the database | `database/tools/`, `agent_tools/`, `gateway/` |
 | Provider routers | Which LLM backend and model each agent uses | `database/provider/`, `routers/provider.py` |
 | Trace logging | Per-recovery record of agent, tool and GUI steps, with screenshots in S3 | `database/logging/`, `agent_tools/hooks.py`, `s3/` |
@@ -64,9 +65,12 @@ sequenceDiagram
    capabilities (see [Robot protocol](#robot-protocol)).
 3. **Persist.** The raw payload is saved as a robot exception together with its recovery context
    (`database/logging/models.py`). The exception id is the recovery id used everywhere afterwards.
-4. **Run the gateway.** The backend loads the agent of type `GatewayAgent` and invokes it with the
-   recovery context. The WebSocket and the exception id travel in the Strands invocation state, so
-   every nested agent and tool can reach the robot and attach its traces to the right recovery.
+4. **Run the gateway.** The backend loads the agent of type `GatewayAgent` and runs it, with the
+   recovery context as its inputs, as the entry node of an agent graph. Reparo's agent graph runner
+   (`database/agent_graphs/runner.py`) awaits one node at a time inside the recovery, so an abort
+   cancels it; today the graph is the gateway alone. The WebSocket and the exception id travel in
+   the shared Strands invocation state, so every node and every nested agent and tool can reach the
+   robot and attach its traces to the right recovery.
 5. **Delegate.** Agents call sub-agents as tools. In the seeded configuration the gateway hands UI
    errors to an error agent, which in turn uses a GUI agent to act on the desktop and then states
    whether the process was repaired and, if so, names the task of the process model the robot should
@@ -77,8 +81,9 @@ sequenceDiagram
 6. **Drive the desktop.** A GUI agent asks the robot for screenshots and sends it UI actions
    (click, type, scroll...) over the same WebSocket; the robot executes them and replies. This is the
    robot-side contract implemented by the test client in `scripts/recovery_ws_client/`.
-7. **Finish.** The robot gets a `done` message with the recovery id. Only `success` comes from the
-   gateway's answer; the continuation is the one `set_continuation` stored, and the variables are the
+7. **Finish.** The robot gets a `done` message with the recovery id. Only `success` comes from an
+   agent: it is the last executed node's `success` field, false when missing or when the graph hit a
+   limit; the continuation is the one `set_continuation` stored, and the variables are the
    payload's, as changed by the GUI agents. A reported success without a stored continuation, or
    after `set_continuation` declared the recovery failed, is sent as a failure. The success sent is stored on the exception. `done` is sent only for a recovery that
    was persisted and run; every other ending (an invalid payload, a server without a gateway agent,
