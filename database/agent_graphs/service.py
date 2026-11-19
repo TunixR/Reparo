@@ -196,6 +196,18 @@ def _structure_violations(session: Session, graph: AgentGraph) -> list[str]:
         *_condition_violations(graph, outputs),
         *_input_map_violations(graph, outputs),
         *_binding_violations(graph, outputs),
+        *_recovery_violations(graph),
+    ]
+
+
+def _recovery_violations(graph: AgentGraph) -> list[str]:
+    """The default recovery graph must be able to run recoveries."""
+    if not graph.is_default_recovery:
+        return []
+    return [
+        f"Recoveries can't run the default recovery graph: {gap}, or don't make it "
+        "the default."
+        for gap in graph.recovery_gaps()
     ]
 
 

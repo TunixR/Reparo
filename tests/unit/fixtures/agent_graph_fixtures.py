@@ -16,8 +16,10 @@ from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
 from database.agent_graphs.models import AgentGraph, AgentGraphEdge, AgentGraphNode
-from database.agents.models import Agent, AgentType, Argument
+from agent_tools.utils import SET_CONTINUATION_FN_MODULE
+from database.agents.models import Agent, AgentTool, AgentType, Argument
 from database.provider.models import Router
+from database.tools.models import Tool
 
 
 class Finding(BaseModel):
@@ -313,3 +315,26 @@ def tasked_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent
         arguments=[argument("task")],
         response_model=GRAPH_REPORT,
     )
+
+
+@pytest.fixture
+def continuation_agent(
+    session: Session, make_agent: Callable[..., Agent], mock_router: Router
+) -> Agent:
+    """An agent with the set_continuation tool; it outputs a `GraphReport`."""
+    agent = make_agent(
+        router=mock_router, name="Continuer", response_model=GRAPH_REPORT
+    )
+    tool = Tool(
+        name="set_continuation",
+        description="Set where the robot continues.",
+        fn_module=SET_CONTINUATION_FN_MODULE,
+    )
+    session.add(tool)
+    session.commit()
+    session.add(
+        AgentTool(agent_id=agent.id, tool_id=tool.id, limit=None, required=True)
+    )
+    session.commit()
+    session.refresh(agent)
+    return agent

@@ -23,8 +23,10 @@ from tests.unit.fixtures.agent_fixtures import ScriptedAgent, recovery_arguments
 from tests.unit.fixtures.agent_graph_fixtures import (
     GRAPH_REPORT,
     BuildAgentGraph,
+    EdgeSpec,
     MakeAgentGraph,
     Node,
+    NodeSpec,
     add_edge_via_api,
     argument,
     create_graph_via_api,
@@ -537,7 +539,10 @@ def test_a_graph_created_and_enabled_through_the_api_is_the_one_recoveries_run(
     client: TestClient,
     admin_headers: Headers,
     graph_agents: dict[str, Agent],
+    gui_agent: Agent,
+    continuation_agent: Agent,
     scripted_agent: ScriptedAgent,
+    build_agent_graph: BuildAgentGraph,
     make_agent_graph: MakeAgentGraph,
     make_robot_key: Callable[..., Any],
     valid_recovery_payload: dict[str, Any],
@@ -557,23 +562,17 @@ def test_a_graph_created_and_enabled_through_the_api_is_the_one_recoveries_run(
         return await original(self, invocation_state, input_map)
 
     monkeypatch.setattr(Agent, "run_node", _spy)
-    graph_id = create_graph_via_api(
-        client, admin_headers, name="New Default", is_default_recovery=True
-    ).json()["id"]
-    node = client.post(
-        f"/agent_graphs/{graph_id}/nodes",
-        json={
-            "key": "worker",
-            "agent_id": str(worker.id),
-            "is_entry": True,
-            "input_map": {"task": "recovery.task_name"},
-        },
-        headers=admin_headers,
-    )
-    assert node.status_code == status.HTTP_201_CREATED, node.text
-    assert (
-        enable_via_api(client, admin_headers, graph_id).status_code
-        == status.HTTP_200_OK
+    not_done = {"field": "done", "op": "eq", "value": False}
+    _ = build_agent_graph(
+        [
+            ("worker", worker, True, {"task": "recovery.task_name"}),
+            ("gui", gui_agent, False, {"task": "recovery.task_name"}),
+            ("continue", continuation_agent),
+        ],
+        [("worker", "gui", 0, not_done), ("gui", "continue")],
+        enabled=True,
+        name="New Default",
+        is_default_recovery=True,
     )
     key_raw = "test-robot-key-graph-api-0001"
     _ = make_robot_key(name="Graph API", enabled=True, key_raw=key_raw)
@@ -998,57 +997,116 @@ def gateway_like(make_agent: Callable[..., Agent], mock_router: Router) -> Agent
     return make_agent(router=mock_router, name="Reader", arguments=recovery_arguments())
 
 
-def test_the_default_recovery_graph_notes_where_a_recovery_ends_unrecovered(
+@pytest.fixture
+def recovery_nodes(
+    graph_agents: dict[str, Agent], gui_agent: Agent, continuation_agent: Agent
+) -> list[NodeSpec]:
+    """A recovery: a GUI agent, then an agent with set_continuation that reports
+    ``success``; chain them in order."""
+    return [
+        ("start", graph_agents["Alpha"]),
+        ("gui", gui_agent, False, {"task": "start.finding.reason"}),
+        ("continue", continuation_agent),
+    ]
+
+
+CHAIN = [("start", "gui"), ("gui", "continue")]
+
+
+def test_a_graph_with_a_gui_agent_set_continuation_and_success_fits_recoveries(
     client: TestClient,
     admin_headers: Headers,
     build_agent_graph: BuildAgentGraph,
-    graph_agents: dict[str, Agent],
-    gui_agent: Agent,
-    graphless_gateway: Agent,
+    recovery_nodes: list[NodeSpec],
 ):
-    on_done = {"field": "done", "op": "eq", "value": True}
-    graph = build_agent_graph(
-        [
-            ("gateway", graphless_gateway),
-            ("a", graph_agents["Alpha"]),
-            ("gui", gui_agent, False, {"task": "a.finding.reason"}),
-        ],
-        [("gateway", "a"), ("a", "gui", 0, on_done)],
+    graph = build_agent_graph(recovery_nodes, CHAIN)
+
+    made_default = client.patch(
+        f"/agent_graphs/{graph.id}",
+        json={"enabled": True, "is_default_recovery": True},
+        headers=admin_headers,
     )
 
-    enabled = enable_via_api(client, admin_headers, graph.id)
+    assert made_default.status_code == status.HTTP_200_OK, made_default.text
+    assert made_default.json()["flags"] == []
+    got = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers)
+    assert got.json()["flags"] == []
+
+
+@pytest.mark.parametrize(
+    ("nodes", "edges", "gap"),
+    [
+        (
+            lambda fit, agents: [fit[0], ("continue", agents["Beta"])],
+            [("start", "continue")],
+            "set_continuation",
+        ),
+        (lambda fit, _: [fit[0], fit[2]], [("start", "continue")], "GUI agent"),
+        (
+            lambda fit, _: [fit[0], fit[2], fit[1]],
+            [("start", "continue"), ("continue", "gui")],
+            "'success'",
+        ),
+    ],
+    ids=["no set_continuation", "no gui agent", "no success at an end"],
+)
+def test_a_graph_missing_a_recovery_part_is_flagged_and_cannot_be_the_default(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    recovery_nodes: list[NodeSpec],
+    graph_agents: dict[str, Agent],
+    nodes: Callable[[list[NodeSpec], dict[str, Agent]], list[NodeSpec]],
+    edges: list[EdgeSpec],
+    gap: str,
+):
+    graph = build_agent_graph(nodes(recovery_nodes, graph_agents), edges, enabled=True)
+
+    got = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers)
     made_default = client.patch(
         f"/agent_graphs/{graph.id}",
         json={"is_default_recovery": True},
         headers=admin_headers,
     )
 
-    assert enabled.status_code == status.HTTP_200_OK, enabled.text
-    assert enabled.json()["info"] == []
-    assert made_default.status_code == status.HTTP_200_OK, made_default.text
-    info: list[str] = made_default.json()["info"]
-    assert len(info) == 1, info
-    assert all(f in info[0] for f in ("node 'gui'", "'success'", "GuiRunReport"))
-    got = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers)
-    assert got.json()["info"] == info
-    listed = client.get("/agent_graphs/", headers=admin_headers).json()
-    assert "info" not in listed[0]
+    assert got.json()["flags"] == ["NOT_RECOVERY_FIT"]
+    _rejected(made_default, "Recoveries can't run", gap)
 
 
-def test_a_default_recovery_graph_may_end_at_the_gateway(
+def test_a_write_cannot_make_the_default_recovery_graph_unfit(
     client: TestClient,
     admin_headers: Headers,
     build_agent_graph: BuildAgentGraph,
-    graphless_gateway: Agent,
+    recovery_nodes: list[NodeSpec],
+    graph_agents: dict[str, Agent],
 ):
     graph = build_agent_graph(
-        [("gateway", graphless_gateway)], is_default_recovery=True
+        recovery_nodes, CHAIN, enabled=True, is_default_recovery=True
     )
+
+    response = client.patch(
+        f"/agent_graphs/{graph.id}/nodes/{graph.nodes['gui']}",
+        json={"agent_id": str(graph_agents["Beta"].id), "input_map": {}},
+        headers=admin_headers,
+    )
+
+    _rejected(response, "Recoveries can't run", "GUI agent")
+
+
+def test_a_graph_that_is_not_the_default_may_be_unfit_for_recoveries(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+):
+    graph = build_agent_graph([("a", graph_agents["Alpha"])])
 
     response = enable_via_api(client, admin_headers, graph.id)
 
     assert response.status_code == status.HTTP_200_OK, response.text
-    assert response.json()["info"] == []
+    assert response.json()["flags"] == ["NOT_RECOVERY_FIT"]
+    listed = client.get("/agent_graphs/", headers=admin_headers).json()
+    assert "flags" not in listed[0]
 
 
 def test_a_write_to_an_enabled_graph_must_keep_its_bindings_valid(

@@ -1,4 +1,5 @@
 import asyncio
+import enum
 import logging
 import uuid
 from collections.abc import Mapping
@@ -12,6 +13,7 @@ from sqlalchemy.orm import validates
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
+from agent_tools.utils import SET_CONTINUATION_FN_MODULE
 from database.agent_graphs.conditions import CONDITION, Condition, ConditionType
 from database.agent_graphs.runner import (
     AGENT_GRAPH_CONTEXT_KEY,
@@ -24,6 +26,22 @@ from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
 
 logger = logging.getLogger(__name__)
+
+
+class AgentGraphFlag(str, enum.Enum):
+    """Something an agent graph can't be used for."""
+
+    NOT_RECOVERY_FIT = "NOT_RECOVERY_FIT"
+
+
+def _reports_success(node: "AgentGraphNode") -> bool:
+    """Whether the node's output model has a boolean ``success``."""
+    try:
+        model = node.agent.output_model()
+    except (ImportError, ValueError):
+        return False
+    success = None if model is None else model.model_fields.get("success")
+    return success is not None and success.annotation is bool
 
 
 class AgentGraph(SQLModel, table=True):
@@ -92,34 +110,44 @@ class AgentGraph(SQLModel, table=True):
         return entry
 
     @property
-    def info(self) -> list[str]:
-        """For the default recovery graph, each node other than the gateway that can
-        end a run without a boolean ``success``: a recovery ending there is reported
-        as not recovered."""
-        if not self.is_default_recovery:
-            return []
-        notes: list[str] = []
-        for node in self.nodes:
-            if node.agent.type == AgentType.GatewayAgent or any(
-                e.condition is None for e in self.edges if e.source_node_id == node.id
-            ):
-                continue
-            try:
-                model = node.agent.output_model()
-            except (ImportError, ValueError):
-                continue
-            if model is None:
-                lacks = f"its agent '{node.agent.name}' has no output model"
-            else:
-                success = model.model_fields.get("success")
-                if success is not None and success.annotation is bool:
-                    continue
-                lacks = f"its output model {model.__name__} has no boolean 'success'"
-            notes.append(
-                f"A recovery that ends at node '{node.key}' is reported as not "
-                f"recovered, since {lacks}."
+    def flags(self) -> list[AgentGraphFlag]:
+        """What the graph can't be used for."""
+        return [AgentGraphFlag.NOT_RECOVERY_FIT] if self.recovery_gaps() else []
+
+    def recovery_gaps(self) -> list[str]:
+        """Why recoveries can't run the graph; empty when they can."""
+        gaps: list[str] = []
+        if not any(node.agent.type == AgentType.GuiAgent for node in self.nodes):
+            gaps.append(
+                "no node runs a GUI agent, so nothing acts on the robot's desktop; "
+                "add one"
             )
-        return notes
+        if not any(
+            tool.fn_module == SET_CONTINUATION_FN_MODULE
+            for node in self.nodes
+            for tool in node.agent.get_tools()
+        ):
+            gaps.append(
+                "no node's agent has the set_continuation tool, so a recovery can't "
+                "say where the robot continues; give it to one"
+            )
+        if not any(
+            _reports_success(node) for node in self.nodes if self._can_end(node)
+        ):
+            gaps.append(
+                "no node that can end the graph outputs a boolean 'success', so every "
+                "recovery is reported as not recovered; add 'success: bool' to the "
+                "output model of one"
+            )
+        return gaps
+
+    def _can_end(self, node: "AgentGraphNode") -> bool:
+        """Whether a run can end at ``node``: it has no unconditional outgoing edge."""
+        return not any(
+            edge.condition is None
+            for edge in self.edges
+            if edge.source_node_id == node.id
+        )
 
     @property
     def node_limit(self) -> int:
@@ -432,11 +460,8 @@ class AgentGraphRead(SQLModel):
 
 
 class AgentGraphDetail(AgentGraphRead):
-    """An agent graph with its nodes, its edges and notes on how it runs."""
+    """An agent graph with its nodes, its edges and what it can't be used for."""
 
-    info: list[str] = Field(
-        description=(
-            "How a recovery run by this graph ends at nodes that can't report one; "
-            "empty unless it is the default recovery graph."
-        )
+    flags: list[AgentGraphFlag] = Field(
+        description="What the graph can't be used for, such as recoveries."
     )
