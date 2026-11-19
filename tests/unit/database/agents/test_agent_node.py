@@ -2,7 +2,6 @@
 
 import json
 import uuid
-from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -10,8 +9,7 @@ from sqlmodel import Session
 from strands import Agent as StrandsAgent
 from strands import tool
 
-from database.agents.models import Agent, AgentTool, AgentType, NodeRun
-from database.provider.models import Router
+from database.agents.models import Agent, AgentTool, NodeRun
 from database.tools.models import Tool
 from tests.unit.fixtures.agent_fixtures import EntryPoint, ScriptedAgent, ScriptedReport
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
@@ -87,16 +85,6 @@ def test_output_model_is_the_response_model(
 
     assert agent.output_model() is ScriptedReport
     assert mock_agent.output_model() is None
-
-
-@pytest.mark.asyncio
-async def test_run_node_on_a_gui_agent_is_not_implemented_yet(
-    make_agent: Callable[..., Agent], mock_router: Router
-) -> None:
-    gui_agent = make_agent(router=mock_router, type=AgentType.GuiAgent)
-
-    with pytest.raises(NotImplementedError):
-        _ = await gui_agent.run_node({"websocket": None}, {})
 
 
 @pytest.mark.asyncio

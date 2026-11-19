@@ -6,9 +6,14 @@ structured tool calls instead of parsing free-form text output. Each action
 WebSocket, waits for the client result, records a GUI trace, and returns a
 fresh screenshot for the model to reason about.
 
-Telemetry goes through ``GuiTaskTelemetry``: the outer ``tooled_guiagent`` tool
-span carries ``gui.task.*`` and each action tool span gets ``gui.action`` and
-``gui.screenshot`` children (see OBSERVABILITY.md).
+It runs two ways on one core: as the ``tooled_guiagent`` tool of a parent agent
+(and the eval socket), and as a graph node through ``run``, which returns a
+``GuiRunReport``.
+
+Telemetry goes through ``GuiTaskTelemetry``: the current span (the
+``tooled_guiagent`` tool call or the graph node) carries ``gui.task.*`` and each
+action tool span gets ``gui.action`` and ``gui.screenshot`` children (see
+OBSERVABILITY.md).
 """
 
 from __future__ import annotations
@@ -19,18 +24,21 @@ if TYPE_CHECKING:
     from database.agents.models import Agent
 
 import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import WebSocketDisconnect
+from pydantic import BaseModel, Field
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
 from strands.types.content import ContentBlock, Messages
-from strands.types.tools import ToolResult, ToolUse
+from strands.types.tools import ToolResult
 
 from agent_tools.hooks import AgentLoggingHook, MaxGuiImagesHook
 from agent_tools.image import capture_screenshot
-from observability.instrumentation.gui_agent import GuiTaskTelemetry
+from observability.instrumentation.gui_agent import GuiAction, GuiTaskTelemetry
 from robot.capabilities import require_vision
 
 TOOL_NAME = "tooled_guiagent"
@@ -38,13 +46,54 @@ TOOL_NAME = "tooled_guiagent"
 
 MAX_ACTIONS = 40
 
+GUI_RUN_STATE_KEY = "gui_run"
+
+
+class GuiRunReport(BaseModel):
+    """What a GUI agent run did on the robot's desktop, built in code."""
+
+    goal_reached: bool = Field(
+        description="The agent called finished with success and stayed within the action cap."
+    )
+    summary: str = Field(description="The agent's finished summary, or why it stopped.")
+    actions: list[GuiAction] = Field(description="Actions sent to the robot, in order.")
+
+
+@dataclass(slots=True)
+class _GuiRun:
+    """One GUI run: what its tools record and what it ended with."""
+
+    telemetry: GuiTaskTelemetry
+    variables: dict[str, Any]
+    agent: StrandsAgent
+    actions: int = 0
+    cap_reached: bool = False
+    summary: str | None = None
+    success: bool = False
+    disconnect: WebSocketDisconnect | None = None
+    error: str | None = None
+
+    def report(self) -> GuiRunReport:
+        if self.summary is not None:
+            summary = self.summary
+        elif self.cap_reached:
+            summary = (
+                f"Stopped at the cap of {MAX_ACTIONS} actions without calling finished."
+            )
+        else:
+            summary = "Stopped without calling finished."
+        return GuiRunReport(
+            goal_reached=self.success and not self.cap_reached,
+            summary=summary,
+            actions=list(self.telemetry.action_log),
+        )
+
 
 class TooledGuiAgent:
     def __init__(self, agent: Agent):
         self.agent = agent
         self.relative_dim = agent.router.relative_dim
         self.original_coords = agent.router.original_coords
-        self.actions = 0
 
     def _box_to_coords(self, box: list[float]) -> tuple[float, float]:
         if len(box) == 2:
@@ -64,21 +113,43 @@ class TooledGuiAgent:
         tool calls see the latest screen dimensions.
 
         Raises:
-            WebSocketDisconnect: propagated as-is when the client disconnects.
+            WebSocketDisconnect: when the client disconnects. Strands hands tool errors
+                to the model, so the run also records it and stops the inner agent,
+                and ``_run`` raises it again.
             RuntimeError: when the client reports action failure.
-            RuntimeError: when the action limit is exceeded.
+            RuntimeError: when the action limit is exceeded; the run then ends after
+                the current tool calls.
         """
-        if self.actions >= MAX_ACTIONS:
+        state = tool_context.invocation_state
+        run: _GuiRun = state[GUI_RUN_STATE_KEY]
+        telemetry = run.telemetry
+        if run.actions >= MAX_ACTIONS:
+            if not run.cap_reached:
+                run.cap_reached = True
+                telemetry.max_actions_exceeded(telemetry.actions, MAX_ACTIONS)
+            tool_context.agent.cancel(after_current_tools=True)
             raise RuntimeError(
-                "too many actions, must finish. If you did not manage to reach your goal, finish with success=false"
+                f"Action limit of {MAX_ACTIONS} reached: no more actions are sent and the run ends."
             )
 
-        self.actions += 1
+        run.actions += 1
+        try:
+            return await self._send_action(run, state, action_type, action_inputs)
+        except WebSocketDisconnect as exc:
+            run.disconnect = exc
+            tool_context.agent.cancel()
+            raise
 
-        state = tool_context.invocation_state
+    async def _send_action(
+        self,
+        run: _GuiRun,
+        state: dict[str, Any],
+        action_type: str,
+        action_inputs: dict[str, Any],
+    ) -> ToolResult:
+        telemetry = run.telemetry
         websocket = state["websocket"]
         hook: AgentLoggingHook = state["hook"]
-        telemetry: GuiTaskTelemetry = state["gui_telemetry"]
         current_image: bytes = state["current_image"]
 
         with telemetry.action(telemetry.actions + 1, action_type) as action_telemetry:
@@ -384,19 +455,24 @@ class TooledGuiAgent:
         self,
         content: str,
         tool_context: ToolContext,
+        success: bool = True,
     ) -> str:
         """Mark the task as complete and persist the final GUI trace.
         Call it when the recovery goal is reached, or when it clearly cannot be reached.
 
         Args:
             content: Summary of what was accomplished.
+            success: Whether the recovery goal was reached; false when it cannot be.
         """
         state = tool_context.invocation_state
+        run: _GuiRun = state[GUI_RUN_STATE_KEY]
         hook: AgentLoggingHook = state["hook"]
-        telemetry: GuiTaskTelemetry = state["gui_telemetry"]
         current_image: bytes = state["current_image"]
         now = datetime.now(UTC)
-        telemetry.done(telemetry.actions)
+        run.summary = content
+        run.success = success
+        if not run.cap_reached:
+            run.telemetry.done(run.telemetry.actions)
         await hook.register_gui_trace(
             "finished", {"content": content}, current_image, now, now, success=True
         )
@@ -470,46 +546,76 @@ class TooledGuiAgent:
             or a plain error string when an unexpected exception occurs.
         """
 
-        if tool_context is None:
-            tool_context = ToolContext(
-                tool_use=ToolUse(
-                    input={
-                        "task": task,
-                        "variables": variables,
-                        "ui_log": ui_log,
-                        "errored_act": errored_act,
-                        "model": model,
-                    },
-                    name=TOOL_NAME,
-                    toolUseId="MANUAL",
-                    reasoningSignature="",
-                ),
-                agent=None,
-                invocation_state={
-                    "inputs": {
-                        "task": task,
-                        "variables": variables,
-                        "ui_log": ui_log,
-                        "errored_act": errored_act,
-                        "model": model,
-                    },
-                },
-            )
-
+        state: dict[str, Any] = (
+            {
+                "inputs": {
+                    "task": task,
+                    "variables": variables,
+                    "ui_log": ui_log,
+                    "errored_act": errored_act,
+                    "model": model,
+                }
+            }
+            if tool_context is None
+            else tool_context.invocation_state
+        )
         if override_invocation_state is not None:
-            tool_context.invocation_state = override_invocation_state | dict(
-                tool_context.invocation_state
-            )
+            state = override_invocation_state | dict(state)
 
-        if "websocket" not in tool_context.invocation_state:
+        run = await self._run(
+            state, task, variables, ui_log, errored_act, model, contain_errors=True
+        )
+        if run.error is not None:
+            return run.error, run.variables
+        conversation_history = [
+            m["content"] for m in run.agent.messages if m["role"] == "assistant"
+        ]
+        return conversation_history, run.variables
+
+    async def run(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> GuiRunReport:
+        """Drive the robot's desktop on bound inputs and report what happened.
+
+        The direct run path of a graph node. Unlike the tool, it raises every error,
+        so a robot disconnect or a model failure ends the node instead of a report.
+        """
+        run = await self._run(
+            invocation_state,
+            inputs["task"],
+            inputs["variables"],
+            inputs["ui_log"],
+            inputs["errored_act"],
+            inputs["model"],
+            contain_errors=False,
+        )
+        return run.report()
+
+    async def _run(
+        self,
+        state: dict[str, Any],
+        task: str,
+        variables: dict[str, Any],
+        ui_log: list[Any],
+        errored_act: dict[str, Any],
+        model: str,
+        *,
+        contain_errors: bool,
+    ) -> _GuiRun:
+        """Run the inner agent until it finishes, stops or hits the action cap.
+
+        A robot disconnect and a ``RuntimeError`` always propagate. Any other error
+        propagates too, unless ``contain_errors``: then the run returns it as ``error``.
+        """
+        if "websocket" not in state:
             raise ValueError("WebSocket must be provided in tool context")
-        require_vision(tool_context.invocation_state)
+        require_vision(state)
 
-        websocket = tool_context.invocation_state["websocket"]
-        state_variables = tool_context.invocation_state.get("variables")
+        websocket = state["websocket"]
+        state_variables = state.get("variables")
         if isinstance(state_variables, dict):
             variables = state_variables  # pyright: ignore[reportUnknownVariableType]
-        # Enriches the Strands span of this tool call.
+        # Enriches the current span: the Strands tool call or the graph node.
         telemetry = GuiTaskTelemetry(
             task=task, model=model, ui_log=ui_log, errored_act=errored_act
         )
@@ -517,14 +623,13 @@ class TooledGuiAgent:
 
         hook = AgentLoggingHook(
             agent_id=self.agent.id,
-            invocation_state=tool_context.invocation_state,
-            parent_trace_id=tool_context.invocation_state.get("parent_trace_id", None),
+            invocation_state=state,
+            parent_trace_id=state.get("parent_trace_id", None),
             is_gui_agent=True,
         )
 
-        inner_state = dict(tool_context.invocation_state) | {
+        inner_state = dict(state) | {
             "hook": hook,
-            "gui_telemetry": telemetry,
             "current_image": image,
             "image_size": image_size,
         }
@@ -552,29 +657,21 @@ class TooledGuiAgent:
             }
         ]
 
-        agent_model = self.agent.get_model()
-
         agent = StrandsAgent(  # type: ignore
-            model=agent_model,
+            model=self.agent.get_model(),
             tools=self.get_gui_tools(variables),
             hooks=[hook, MaxGuiImagesHook()],
         )
-
-        if tool_context.agent is None:
-            tool_context.agent = agent
+        run = _GuiRun(telemetry=telemetry, variables=variables, agent=agent)
+        inner_state[GUI_RUN_STATE_KEY] = run
 
         try:
-            _ = await agent.invoke_async(messages, invocation_state=inner_state)
+            _ = await run.agent.invoke_async(messages, invocation_state=inner_state)
+            if run.disconnect is not None:
+                raise run.disconnect
             if telemetry.outcome is None:
                 telemetry.model_stopped(telemetry.actions)
-
-            conversation_history = list(
-                map(
-                    lambda m: m["content"],
-                    filter(lambda m: m["role"] == "assistant", agent.messages),
-                )
-            )
-            return conversation_history, variables
+            return run
         except WebSocketDisconnect:
             telemetry.client_disconnected(telemetry.actions)
             raise
@@ -582,7 +679,10 @@ class TooledGuiAgent:
             telemetry.failed(telemetry.actions, e, escaped=True)
             raise
         except Exception as e:
-            telemetry.failed(telemetry.actions, e)
-            return str(e), variables
+            telemetry.failed(telemetry.actions, e, escaped=not contain_errors)
+            if not contain_errors:
+                raise
+            run.error = str(e)
+            return run
         finally:
             hook.update_trace(finished=True, cost=-1.0)
