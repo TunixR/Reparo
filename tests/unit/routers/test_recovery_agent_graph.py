@@ -8,6 +8,7 @@ as they do in production.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -23,8 +24,9 @@ from database.logging.models import RobotException
 from database.provider.models import Router
 from database.tools.models import Tool
 from tests.unit.agent_tools._shared.process_models import SPENDING_APPROVAL_MODEL
-from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
+from tests.unit.fixtures.agent_graph_fixtures import Edge, MakeAgentGraph, Node
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
+from tests.unit.shared.log_events import logged_events
 
 GATEWAY = "Gateway Orchestrator"
 INFERER = "Recovery Inferer"
@@ -33,6 +35,7 @@ CONTINUATION = "Continuation Inferer"
 
 class Triage(BaseModel):
     diagnosis: str
+    ui_exception: bool
 
 
 class Inference(BaseModel):
@@ -167,8 +170,13 @@ def _instruction(model: ScriptedModel, run: int = 0) -> str:
     return texts[1]
 
 
-def _triage(diagnosis: str = "Submit is disabled") -> list[Turn]:
-    return ["Triaged.", ToolCall("Triage", {"diagnosis": diagnosis})]
+def _triage(
+    diagnosis: str = "Submit is disabled", *, ui_exception: bool = True
+) -> list[Turn]:
+    return [
+        "Triaged.",
+        ToolCall("Triage", {"diagnosis": diagnosis, "ui_exception": ui_exception}),
+    ]
 
 
 def _inference(recovery_task: str = "Enable and click Submit") -> list[Turn]:
@@ -276,7 +284,7 @@ def test_one_agent_backing_two_nodes_runs_once_per_node(
     assert _instruction(models[INFERER], run=2).endswith("symptom: First guess")
     context = node_runs[-1][1][AGENT_GRAPH_CONTEXT_KEY]
     assert context.outputs == {
-        "gateway": Triage(diagnosis="Submit is disabled"),
+        "gateway": Triage(diagnosis="Submit is disabled", ui_exception=True),
         "infer": Inference(recovery_task="First guess"),
         "check": Inference(recovery_task="Second guess"),
     }
@@ -349,7 +357,7 @@ def test_a_passed_execution_timeout_is_done_without_success(
     ) -> NodeRun:
         ran.append(self.name)
         await asyncio.sleep(0.05)
-        return NodeRun(output=Triage(diagnosis="slow"))
+        return NodeRun(output=Triage(diagnosis="slow", ui_exception=True))
 
     monkeypatch.setattr(Agent, "run_node", _slow_node)
 
@@ -373,7 +381,7 @@ def test_a_node_timeout_is_an_internal_error(
         _self: Agent, _state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         await asyncio.sleep(1)
-        return NodeRun(output=Triage(diagnosis="too late"))
+        return NodeRun(output=Triage(diagnosis="too late", ui_exception=True))
 
     monkeypatch.setattr(Agent, "run_node", _hanging_node)
 
@@ -424,6 +432,162 @@ def test_the_run_starts_at_the_entry_node_even_inside_a_cycle(
     assert message["type"] == "done"
     assert message["content"]["success"] is False
     assert [name for name, _ in node_runs] == [GATEWAY, INFERER, GATEWAY]
+
+
+UI_EXCEPTION = {"field": "ui_exception", "op": "eq", "value": True}
+
+
+@pytest.fixture
+def ui_exception_graph(
+    agents: dict[str, Agent], make_agent_graph: MakeAgentGraph
+) -> None:
+    """Persist gateway -> inferer -> continuation, past the gateway only on UI exceptions."""
+    _ = make_agent_graph(
+        Node("gateway", agents[GATEWAY]),
+        Node("inferer", agents[INFERER], {"symptom": "gateway.diagnosis"}),
+        Node("continuation", agents[CONTINUATION]),
+        edges=[
+            Edge("gateway", "inferer", UI_EXCEPTION),
+            Edge("inferer", "continuation"),
+        ],
+    )
+
+
+@pytest.mark.usefixtures("ui_exception_graph")
+def test_a_satisfied_condition_runs_the_recovery_path(
+    client: TestClient,
+    robot_key_raw: str,
+    payload: dict[str, Any],
+    script: Callable[..., dict[str, ScriptedModel]],
+    node_runs: list[tuple[str, dict[str, Any]]],
+):
+    _ = script(
+        gateway=_triage(ui_exception=True),
+        inferer=_inference(),
+        continuation=_continued(),
+    )
+
+    message = _recover(client, robot_key_raw, payload)
+
+    assert [name for name, _ in node_runs] == [GATEWAY, INFERER, CONTINUATION]
+    assert message["type"] == "done"
+    assert message["content"]["success"] is True
+
+
+@pytest.mark.usefixtures("ui_exception_graph")
+def test_an_unsatisfied_condition_ends_after_the_gateway_without_success(
+    client: TestClient,
+    robot_key_raw: str,
+    payload: dict[str, Any],
+    script: Callable[..., dict[str, ScriptedModel]],
+    node_runs: list[tuple[str, dict[str, Any]]],
+):
+    _ = script(gateway=_triage(ui_exception=False))
+
+    message = _recover(client, robot_key_raw, payload)
+
+    assert [name for name, _ in node_runs] == [GATEWAY]
+    assert message["type"] == "done"
+    assert message["content"]["success"] is False
+
+
+def _condition_errors(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return logged_events(caplog, "agent_graph.condition_error")
+
+
+def test_of_two_satisfied_edges_only_the_higher_priority_target_runs(
+    client: TestClient,
+    robot_key_raw: str,
+    payload: dict[str, Any],
+    agents: dict[str, Agent],
+    make_agent_graph: MakeAgentGraph,
+    script: Callable[..., dict[str, ScriptedModel]],
+    node_runs: list[tuple[str, dict[str, Any]]],
+    caplog: pytest.LogCaptureFixture,
+):
+    _ = make_agent_graph(
+        Node("gateway", agents[GATEWAY]),
+        Node("inferer", agents[INFERER], {"symptom": "gateway.diagnosis"}),
+        Node(
+            "continuation", agents[CONTINUATION], {"recovery_task": "gateway.diagnosis"}
+        ),
+        edges=[
+            Edge("gateway", "inferer", UI_EXCEPTION, priority=2),
+            Edge("gateway", "continuation", UI_EXCEPTION, priority=1),
+            Edge(
+                "gateway",
+                "gateway",
+                {"field": "missing", "op": "is_null"},
+                priority=3,
+            ),
+        ],
+    )
+    _ = script(gateway=_triage(ui_exception=True), continuation=_continued())
+    caplog.set_level(logging.WARNING)
+
+    message = _recover(client, robot_key_raw, payload)
+
+    assert [name for name, _ in node_runs] == [GATEWAY, CONTINUATION]
+    assert message["content"]["success"] is True
+    assert _condition_errors(caplog) == []
+
+
+def test_the_unconditional_edge_runs_when_nothing_else_matches(
+    client: TestClient,
+    robot_key_raw: str,
+    payload: dict[str, Any],
+    agents: dict[str, Agent],
+    make_agent_graph: MakeAgentGraph,
+    script: Callable[..., dict[str, ScriptedModel]],
+    node_runs: list[tuple[str, dict[str, Any]]],
+):
+    _ = make_agent_graph(
+        Node("gateway", agents[GATEWAY]),
+        Node("inferer", agents[INFERER], {"symptom": "gateway.diagnosis"}),
+        Node(
+            "continuation", agents[CONTINUATION], {"recovery_task": "gateway.diagnosis"}
+        ),
+        edges=[
+            Edge("gateway", "continuation", priority=1),
+            Edge("gateway", "inferer", UI_EXCEPTION, priority=0),
+        ],
+    )
+    _ = script(gateway=_triage(ui_exception=False), continuation=_continued())
+
+    message = _recover(client, robot_key_raw, payload)
+
+    assert [name for name, _ in node_runs] == [GATEWAY, CONTINUATION]
+    assert message["content"]["success"] is True
+
+
+def test_a_condition_on_a_missing_field_ends_the_graph_and_is_logged(
+    client: TestClient,
+    robot_key_raw: str,
+    payload: dict[str, Any],
+    agents: dict[str, Agent],
+    make_agent_graph: MakeAgentGraph,
+    script: Callable[..., dict[str, ScriptedModel]],
+    node_runs: list[tuple[str, dict[str, Any]]],
+    caplog: pytest.LogCaptureFixture,
+):
+    graph = make_agent_graph(
+        Node("gateway", agents[GATEWAY]),
+        Node("inferer", agents[INFERER], {"symptom": "gateway.diagnosis"}),
+        edges=[
+            Edge("gateway", "inferer", {"field": "severity", "op": "gt", "value": 2})
+        ],
+    )
+    _ = script(gateway=_triage())
+    caplog.set_level(logging.WARNING)
+
+    message = _recover(client, robot_key_raw, payload)
+
+    assert [name for name, _ in node_runs] == [GATEWAY]
+    assert message["type"] == "done"
+    assert message["content"]["success"] is False
+    [error] = _condition_errors(caplog)
+    assert vars(error)["agent_graph.id"] == str(graph.id)
+    assert vars(error)["error.type"] == "KeyError"
 
 
 @pytest.mark.parametrize("graph", ["disabled_default", "enabled_not_default"])
