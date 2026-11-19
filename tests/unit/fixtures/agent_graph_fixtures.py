@@ -8,10 +8,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from fastapi import status
+from fastapi.testclient import TestClient
+from httpx import Headers
+from httpx2 import Response
 from sqlmodel import Session, col, select
 
 from database.agent_graphs.models import AgentGraph, AgentGraphEdge, AgentGraphNode
-from database.agents.models import Agent
+from database.agents.models import Agent, AgentType
+from database.provider.models import Router
 
 
 @dataclass(frozen=True)
@@ -104,3 +109,148 @@ def make_agent_graph(session: Session) -> MakeAgentGraph:
         return graph
 
     return _make_agent_graph
+
+
+def create_graph_via_api(
+    client: TestClient, headers: Headers, **fields: Any
+) -> Response:
+    """POST a graph with a unique name; ``fields`` override the body."""
+    body = {"name": f"Graph {uuid.uuid4()}", "description": "A test graph."} | fields
+    return client.post("/agent_graphs/", json=body, headers=headers)
+
+
+def add_edge_via_api(
+    client: TestClient,
+    headers: Headers,
+    graph_id: str,
+    node_ids: Mapping[str, str],
+    source: str,
+    target: str,
+    priority: int = 0,
+    condition: dict[str, Any] | None = None,
+) -> Response:
+    """POST an edge between the nodes with keys ``source`` and ``target``."""
+    return client.post(
+        f"/agent_graphs/{graph_id}/edges",
+        json={
+            "source_node_id": node_ids[source],
+            "target_node_id": node_ids[target],
+            "priority": priority,
+            "condition": condition,
+        },
+        headers=headers,
+    )
+
+
+def enable_via_api(client: TestClient, headers: Headers, graph_id: str) -> Response:
+    return client.patch(
+        f"/agent_graphs/{graph_id}", json={"enabled": True}, headers=headers
+    )
+
+
+type NodeSpec = tuple[str, Agent] | tuple[str, Agent, bool]
+"""``(key, agent[, is_entry])``."""
+
+type EdgeSpec = (
+    tuple[str, str] | tuple[str, str, int] | tuple[str, str, int, dict[str, Any]]
+)
+"""``(source, target[, priority[, condition]])``, by node key."""
+
+
+@dataclass(frozen=True)
+class ApiGraph:
+    """A graph made through the API: its id and its node ids by key."""
+
+    id: str
+    nodes: Mapping[str, str]
+
+
+type BuildAgentGraph = Callable[..., ApiGraph]
+"""Factory returned by ``build_agent_graph``: node and edge specs in, the graph out."""
+
+
+@pytest.fixture
+def build_agent_graph(client: TestClient, admin_headers: Headers) -> BuildAgentGraph:
+    """Return a factory that builds a graph through the API as an administrator.
+
+    The first node is the entry unless a spec says otherwise. Without a priority,
+    an edge's place in the list is its priority. With ``enabled``, the graph is
+    enabled once complete. Other keyword arguments are graph fields.
+    """
+
+    def _build(
+        nodes: Sequence[NodeSpec],
+        edges: Sequence[EdgeSpec] = (),
+        enabled: bool = False,
+        **fields: Any,
+    ) -> ApiGraph:
+        created = create_graph_via_api(client, admin_headers, **fields)
+        assert created.status_code == status.HTTP_201_CREATED, created.text
+        graph_id: str = created.json()["id"]
+        ids: dict[str, str] = {}
+        for index, spec in enumerate(nodes):
+            match spec:
+                case (key, agent):
+                    is_entry = index == 0
+                case (key, agent, is_entry):
+                    pass
+            response = client.post(
+                f"/agent_graphs/{graph_id}/nodes",
+                json={"key": key, "agent_id": str(agent.id), "is_entry": is_entry},
+                headers=admin_headers,
+            )
+            assert response.status_code == status.HTTP_201_CREATED, response.text
+            ids[key] = response.json()["id"]
+        for index, spec in enumerate(edges):
+            match spec:
+                case (source, target):
+                    priority, condition = index, None
+                case (source, target, priority):
+                    condition = None
+                case (source, target, priority, condition):
+                    pass
+            response = add_edge_via_api(
+                client,
+                admin_headers,
+                graph_id,
+                ids,
+                source,
+                target,
+                priority,
+                condition,
+            )
+            assert response.status_code == status.HTTP_201_CREATED, response.text
+        if enabled:
+            response = enable_via_api(client, admin_headers, graph_id)
+            assert response.status_code == status.HTTP_200_OK, response.text
+        return ApiGraph(graph_id, ids)
+
+    return _build
+
+
+@pytest.fixture
+def graph_agents(
+    make_agent: Callable[..., Agent], mock_router: Router
+) -> dict[str, Agent]:
+    """Three enabled agents, by name, to back graph nodes."""
+    return {
+        name: make_agent(router=mock_router, name=name)
+        for name in ("Alpha", "Beta", "Gamma")
+    }
+
+
+@pytest.fixture
+def disabled_agent(
+    session: Session, make_agent: Callable[..., Agent], mock_router: Router
+) -> Agent:
+    agent = make_agent(router=mock_router, name="Dormant")
+    agent.enabled = False
+    session.add(agent)
+    session.commit()
+    return agent
+
+
+@pytest.fixture
+def graphless_gateway(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
+    """A gateway agent in no graph, unlike ``gateway_agent``."""
+    return make_agent(router=mock_router, name="Gateway", type=AgentType.GatewayAgent)

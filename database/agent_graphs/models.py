@@ -254,3 +254,147 @@ class AgentGraphEdge(SQLModel, table=True):
                 logging.WARNING,
             )
             return False
+
+
+class AgentGraphCreate(SQLModel):
+    """Schema for creating an agent graph; it starts as a draft unless enabled."""
+
+    name: str = Field(description="Name of the agent graph.")
+    description: str = Field(description="What the agent graph does.")
+    enabled: bool = Field(default=False, description="Whether the graph may run.")
+    is_default_recovery: bool = Field(
+        default=False,
+        description="Whether recoveries run this graph; it takes over from the previous one.",
+    )
+    max_node_executions: int | None = Field(
+        default=None,
+        gt=0,
+        description="Cap on node executions per run; required when the graph has a cycle.",
+    )
+    execution_timeout_s: float | None = Field(
+        default=None, gt=0, description="Soft run deadline in seconds; null is off."
+    )
+    node_timeout_s: float | None = Field(
+        default=None,
+        gt=0,
+        description="Hard deadline for one node in seconds; null is off.",
+    )
+
+
+class AgentGraphUpdate(SQLModel):
+    """Schema for updating an agent graph; a null limit turns that limit off."""
+
+    name: str | None = Field(default=None, description="Name of the agent graph.")
+    description: str | None = Field(
+        default=None, description="What the agent graph does."
+    )
+    enabled: bool | None = Field(default=None, description="Whether the graph may run.")
+    is_default_recovery: bool | None = Field(
+        default=None,
+        description="Whether recoveries run this graph; it takes over from the previous one.",
+    )
+    max_node_executions: int | None = Field(
+        default=None,
+        gt=0,
+        description="Cap on node executions per run; required when the graph has a cycle.",
+    )
+    execution_timeout_s: float | None = Field(
+        default=None, gt=0, description="Soft run deadline in seconds; null is off."
+    )
+    node_timeout_s: float | None = Field(
+        default=None,
+        gt=0,
+        description="Hard deadline for one node in seconds; null is off.",
+    )
+
+
+class AgentGraphNodeCreate(SQLModel):
+    """Schema for adding a node to an agent graph."""
+
+    key: str = Field(description="The node's identity in its graph.")
+    agent_id: uuid.UUID = Field(description="The agent that runs as this node.")
+    is_entry: bool = Field(default=False, description="Whether the run starts here.")
+    input_map: dict[str, str] = Field(
+        default_factory=dict,
+        description='Argument name to "recovery.<field>" or "<node_key>.<field>".',
+    )
+
+
+class AgentGraphNodeUpdate(SQLModel):
+    """Schema for changing a node of an agent graph."""
+
+    key: str | None = Field(
+        default=None, description="The node's identity in its graph."
+    )
+    agent_id: uuid.UUID | None = Field(
+        default=None, description="The agent that runs as this node."
+    )
+    is_entry: bool | None = Field(
+        default=None, description="Whether the run starts here."
+    )
+    input_map: dict[str, str] | None = Field(
+        default=None,
+        description='Argument name to "recovery.<field>" or "<node_key>.<field>".',
+    )
+
+
+class AgentGraphEdgeCreate(SQLModel):
+    """Schema for adding an edge between two nodes of the same agent graph."""
+
+    source_node_id: uuid.UUID = Field(description="The node the edge leaves.")
+    target_node_id: uuid.UUID = Field(description="The node the edge enters.")
+    priority: int = Field(
+        default=0, description="Lower priorities are evaluated first."
+    )
+    condition: Condition | None = Field(
+        default=None,
+        description="Predicate over the source node's output; null is unconditional.",
+    )
+
+
+class AgentGraphEdgeUpdate(SQLModel):
+    """Schema for changing an edge; a null condition makes it unconditional."""
+
+    target_node_id: uuid.UUID | None = Field(
+        default=None, description="The node the edge enters."
+    )
+    priority: int | None = Field(
+        default=None, description="Lower priorities are evaluated first."
+    )
+    condition: Condition | None = Field(
+        default=None,
+        description="Predicate over the source node's output; null is unconditional.",
+    )
+
+
+class AgentGraphNodeRead(SQLModel):
+    id: uuid.UUID
+    key: str
+    agent_id: uuid.UUID
+    is_entry: bool
+    input_map: dict[str, str]
+
+
+class AgentGraphEdgeRead(SQLModel):
+    id: uuid.UUID
+    source_node_id: uuid.UUID
+    target_node_id: uuid.UUID
+    priority: int
+    condition: Condition | None
+
+
+class AgentGraphRead(SQLModel):
+    """An agent graph with its nodes and edges."""
+
+    id: uuid.UUID
+    name: str
+    description: str
+    enabled: bool
+    is_default_recovery: bool
+    max_node_executions: int | None
+    execution_timeout_s: float | None
+    node_timeout_s: float | None
+    nodes: list[AgentGraphNodeRead]
+    edges: list[AgentGraphEdgeRead]
+    created_at: datetime
+    updated_at: datetime
