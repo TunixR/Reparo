@@ -49,6 +49,7 @@ RECOVERY_PAYLOAD_INVALID_FIELDS = "recovery.payload.invalid_fields"
 
 AGENT_ID = "agent.id"
 AGENT_GRAPH_ID = "agent_graph.id"
+AGENT_GRAPH_EDGE_ID = "agent_graph.edge.id"
 AGENT_TRACE_ID = "agent_trace.id"
 AGENT_COST = "agent.cost"
 
@@ -100,3 +101,4 @@ EVENT_GUI_ACTION_RETRY = "gui.action_retry"
 EVENT_GUI_MAX_ACTIONS_EXCEEDED = "gui.max_actions_exceeded"
 
 EVENT_AGENT_USAGE = "agent.usage"
+EVENT_AGENT_GRAPH_CONDITION_ERROR = "agent_graph.condition_error"

@@ -69,8 +69,11 @@ sequenceDiagram
    (`database/agent_graphs/models.py`). It is looked up before the exception is persisted, and
    loaded with every node's agent right before the run; the migration and the populator make it
    the gateway agent alone. The graph awaits one node at a time, from its entry node, inside the
-   recovery, so an abort cancels it, and follows each node's outgoing edge until none is left or a
-   graph limit is hit. Each node's arguments bind from its
+   recovery, so an abort cancels it. After each node it follows the first outgoing edge, by
+   priority, whose condition holds over the node's structured output, until none does or a graph
+   limit is hit. Conditions are declarative predicates (`database/agent_graphs/conditions.py`),
+   never evaluated as code; an edge without one always holds, and one that can't be evaluated
+   doesn't. Each node's arguments bind from its
    input map, else by name from the recovery context and then from the earlier nodes' structured
    outputs. The WebSocket, the exception id and those outputs travel in the shared Strands
    invocation state, so every node and every nested agent and tool can reach the robot and attach

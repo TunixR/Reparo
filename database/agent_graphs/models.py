@@ -1,20 +1,28 @@
 import asyncio
+import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import Index, UniqueConstraint, text
+from sqlalchemy.orm import validates
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
+from database.agent_graphs.conditions import CONDITION, Condition, ConditionType
 from database.agent_graphs.runner import (
     AGENT_GRAPH_CONTEXT_KEY,
     AgentGraphContext,
     GraphOutcome,
     clean_state,
 )
+from observability import attributes as attrs
+from observability.events import brief, error_type, log_event
+
+logger = logging.getLogger(__name__)
 
 
 class AgentGraph(SQLModel, table=True):
@@ -88,7 +96,7 @@ class AgentGraph(SQLModel, table=True):
         return self.max_node_executions or len(self.nodes)
 
     async def run(self, state: dict[str, Any]) -> GraphOutcome:
-        """Run from the entry node until a node has no outgoing edge to follow.
+        """Run from the entry node until no outgoing edge of a node holds.
 
         Nodes are awaited in the caller's task, so cancelling the caller cancels the
         running node. Anything a node raises propagates unchanged, including the
@@ -122,7 +130,7 @@ class AgentGraph(SQLModel, table=True):
             context.record(node.key, run.output)
             terminal_node, output = node.key, run.output
             nodes_run += 1
-            node = node.next_node()
+            node = node.next_node(run.output)
         return GraphOutcome(terminal_node, output, nodes_run)
 
 
@@ -162,13 +170,13 @@ class AgentGraphNode(SQLModel, table=True):
         },
     )
 
-    def next_node(self) -> "AgentGraphNode | None":
-        """The target of the lowest-priority unconditional outgoing edge."""
-        edges = sorted(
-            (edge for edge in self.outgoing if edge.condition is None),
-            key=lambda edge: edge.priority,
-        )
-        return edges[0].target if edges else None
+    def next_node(self, output: BaseModel | None) -> "AgentGraphNode | None":
+        """The target of the first outgoing edge, by priority, that holds over ``output``.
+
+        Edges after that one aren't evaluated. ``None`` when no edge holds.
+        """
+        edges = sorted(self.outgoing, key=lambda edge: edge.priority)
+        return next((edge.target for edge in edges if edge.holds(output)), None)
 
 
 class AgentGraphEdge(SQLModel, table=True):
@@ -201,8 +209,48 @@ class AgentGraphEdge(SQLModel, table=True):
         }
     )
     priority: int = Field(default=0)
-    condition: dict[str, Any] | None = Field(
+    condition: Condition | None = Field(
         default=None,
-        sa_type=JSONB,
+        sa_type=ConditionType,
         description="Predicate over the source node's output; null is unconditional.",
     )
+
+    @validates("condition")
+    def validate_condition(
+        self, _key: str, condition: Condition | Mapping[str, Any] | None
+    ) -> Condition | Mapping[str, Any] | None:
+        """Reject a malformed condition where the edge is built, not at flush.
+
+        SQLModel keeps the assigned value, so a dict stays a dict until it is
+        stored; `ConditionType` loads it back as a `Condition`.
+        """
+        if condition is not None:
+            _ = CONDITION.validate_python(condition)
+        return condition
+
+    def holds(self, output: BaseModel | None) -> bool:
+        """Whether the run may follow this edge after its source produced ``output``.
+
+        An unconditional edge always holds. A condition over a missing output, or one
+        that raises (a missing field, a type error), doesn't, and the error is logged.
+        """
+        if self.condition is None:
+            return True
+        if output is None:
+            return False
+        try:
+            condition = CONDITION.validate_python(self.condition)
+            return condition.holds(output.model_dump(mode="json"))
+        except Exception as exc:
+            log_event(
+                logger,
+                attrs.EVENT_AGENT_GRAPH_CONDITION_ERROR,
+                {
+                    attrs.AGENT_GRAPH_ID: self.agent_graph_id,
+                    attrs.AGENT_GRAPH_EDGE_ID: self.id,
+                    attrs.ERROR_TYPE: error_type(exc),
+                    attrs.EXCEPTION_MESSAGE: brief(exc),
+                },
+                logging.WARNING,
+            )
+            return False

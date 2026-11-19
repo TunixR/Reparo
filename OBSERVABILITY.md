@@ -110,8 +110,9 @@ Strands do that:
 Names follow the OpenTelemetry rules: lowercase, dot-separated namespaces, `snake_case` within a
 component. Standard semantic-convention keys are reused where they exist (`error.type`,
 `exception.message`, `client.address`, `http.*`, `url.path`, `gen_ai.usage.*`); project keys live
-under `recovery.*`, `robot_key.*`, `agent.*`, `agent_trace.*`, `gui.*` and `request.*`. All of them
-are defined in `observability/attributes.py`; change them there and here together.
+under `recovery.*`, `robot_key.*`, `agent.*`, `agent_graph.*`, `agent_trace.*`, `gui.*` and
+`request.*`. All of them are defined in `observability/attributes.py`; change them there and here
+together.
 
 Log events are emitted with `observability.events.log_event`:
 
@@ -179,6 +180,7 @@ Log events:
 | `gui.action_retry` | WARN | `gui.action.iteration`, `error.type`, `exception.message` |
 | `gui.max_actions_exceeded` | WARN | `gui.task.max_actions` |
 | `agent.usage` | INFO | `agent.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `agent.cost` |
+| `agent_graph.condition_error` | WARN | `agent_graph.id`, `agent_graph.edge.id`, `error.type`, `exception.message` (bounded); the edge isn't followed |
 | `http.server_error`, `http.unhandled_exception` | ERROR | `http.request.method`, `url.path`, `http.response.status_code` or `error.type` |
 | `http.client_error`, `http.validation_failed` | WARN | the same request keys, `exception.message` or `request.invalid_fields` |
 

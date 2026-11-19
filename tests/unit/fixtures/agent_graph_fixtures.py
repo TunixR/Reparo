@@ -5,6 +5,7 @@ Agent graph fixtures for unit tests.
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 from sqlmodel import Session, col, select
@@ -22,6 +23,16 @@ class Node:
     input_map: Mapping[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Edge:
+    """An edge to create; without a priority, its place in ``edges`` is its priority."""
+
+    source: str
+    target: str
+    condition: dict[str, Any] | None = None
+    priority: int | None = None
+
+
 type MakeAgentGraph = Callable[..., AgentGraph]
 """Factory returned by ``make_agent_graph``: nodes and edges in, the persisted graph out."""
 
@@ -30,14 +41,14 @@ type MakeAgentGraph = Callable[..., AgentGraph]
 def make_agent_graph(session: Session) -> MakeAgentGraph:
     """Return a factory that persists an agent graph.
 
-    The first node is the entry node. ``edges`` are unconditional ``(source,
-    target)`` key pairs; without them, the nodes are chained in order. A new default
-    recovery graph takes over from the previous one.
+    The first node is the entry node. ``edges`` are `Edge`s or unconditional
+    ``(source, target)`` key pairs; without them, the nodes are chained in order. A
+    new default recovery graph takes over from the previous one.
     """
 
     def _make_agent_graph(
         *nodes: Node,
-        edges: Sequence[tuple[str, str]] | None = None,
+        edges: Sequence[Edge | tuple[str, str]] | None = None,
         name: str | None = None,
         enabled: bool = True,
         is_default_recovery: bool = True,
@@ -74,14 +85,18 @@ def make_agent_graph(session: Session) -> MakeAgentGraph:
         graph.nodes = list(rows.values())
         if edges is None:
             edges = [(a.key, b.key) for a, b in zip(nodes, nodes[1:], strict=False)]
+        normalized = [edge if isinstance(edge, Edge) else Edge(*edge) for edge in edges]
         graph.edges = [
-            AgentGraphEdge(
-                agent_graph_id=graph.id,
-                source_node_id=rows[source].id,
-                target_node_id=rows[target].id,
-                priority=index,
+            AgentGraphEdge.model_validate(
+                {
+                    "agent_graph_id": graph.id,
+                    "source_node_id": rows[edge.source].id,
+                    "target_node_id": rows[edge.target].id,
+                    "priority": index if edge.priority is None else edge.priority,
+                    "condition": edge.condition,
+                }
             )
-            for index, (source, target) in enumerate(edges)
+            for index, edge in enumerate(normalized)
         ]
         session.add(graph)
         session.commit()
