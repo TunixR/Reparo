@@ -22,12 +22,7 @@ from sqlmodel import Session, select
 import routers.recovery as recovery_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agent_graphs.runner import (
-    AgentGraphEdge,
-    AgentGraphNode,
-    LoadedAgentGraph,
-    NodeRun,
-)
+from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
 from database.agents.models import (
     Agent,
     AgentTool,
@@ -39,6 +34,7 @@ from database.logging.models import RobotException
 from database.provider.models import Router
 from database.tools.models import Tool
 from templates.gateway import ResponseToRPA
+from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 from tests.unit.agent_tools._shared.process_models import (
     COMPACT_MODEL,
     SPENDING_APPROVAL_MODEL,
@@ -115,8 +111,13 @@ def span_exporter(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemorySpanExpor
 
 
 @pytest.fixture
-def agents(session: Session, mock_router: Router) -> tuple[Agent, Agent]:
-    """A gateway whose only sub-agent is an error agent with `set_continuation`."""
+def agents(
+    session: Session, mock_router: Router, make_agent_graph: MakeAgentGraph
+) -> tuple[Agent, Agent]:
+    """A gateway whose only sub-agent is an error agent with `set_continuation`.
+
+    The gateway is the one node of the default recovery graph.
+    """
     tool = Tool(
         id=uuid.uuid4(),
         name="set_continuation",
@@ -176,6 +177,7 @@ def agents(session: Session, mock_router: Router) -> tuple[Agent, Agent]:
     session.commit()
     session.refresh(gateway)
     session.refresh(error_agent)
+    _ = make_agent_graph(Node("gateway", gateway))
     return gateway, error_agent
 
 
@@ -332,24 +334,19 @@ def test_a_failed_agent_graph_is_done_without_success(
     spending_payload: dict[str, Any],
     script: Callable[..., dict[str, ScriptedModel]],
     span_exporter: InMemorySpanExporter,
-    monkeypatch: pytest.MonkeyPatch,
+    agents: tuple[Agent, Agent],
+    make_agent_graph: MakeAgentGraph,
 ):
     models = script(
         gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(True)],
         error_turns=[_continuation("click_approve", [2]), "Recovered.", _report(True)],
     )
-
-    def _capped_graph(agent: Agent) -> LoadedAgentGraph:
-        return LoadedAgentGraph(
-            nodes=(
-                AgentGraphNode(key="gateway", agent=agent),
-                AgentGraphNode(key="gateway_again", agent=agent),
-            ),
-            max_node_executions=1,
-            edges=(AgentGraphEdge("gateway", "gateway_again"),),
-        )
-
-    monkeypatch.setattr(recovery_module, "_load_agent_graph", _capped_graph)
+    gateway, _ = agents
+    _ = make_agent_graph(
+        Node("gateway", gateway),
+        Node("gateway_again", gateway),
+        max_node_executions=1,
+    )
 
     message = _recover(client, robot_key_raw, spending_payload)
 
@@ -561,7 +558,7 @@ def test_a_last_output_without_success_is_not_a_success(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def _fake_run_node(
-        _self: Agent, invocation_state: dict[str, Any], _inputs: Mapping[str, Any]
+        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
@@ -588,8 +585,9 @@ def test_variables_come_from_code_not_from_the_llm(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def _fake_run_node(
-        _self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
+        inputs = invocation_state[AGENT_GRAPH_CONTEXT_KEY].recovery_inputs
         invocation_state["variables"]["retry"] = 2
         inputs["variables"]["invoice_id"] = "HALLUCINATED"
         return NodeRun(

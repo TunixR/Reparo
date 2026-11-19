@@ -1,22 +1,23 @@
-"""Reparo's agent graph runner: one path through an agent graph, a node at a time."""
+"""The runtime state of an agent graph run, shared by the graph and its nodes."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from database.agents.models import Agent
+    from database.agent_graphs.models import AgentGraphNode
 
 AGENT_GRAPH_CONTEXT_KEY = "agent_graph"
+RECOVERY_INPUTS_SOURCE = "recovery"
 
 _LEFTOVER_STATE_KEYS = ("request_state", "agent", "parent_trace_id")
 _LEFTOVER_STATE_PREFIX = "event_loop_"
 
-type FailureReason = Literal["max_node_executions"]
+type FailureReason = Literal["max_node_executions", "execution_timeout"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,59 +28,50 @@ class NodeRun:
     """The node's structured output, an instance of the agent's `output_model()`."""
 
 
-@dataclass(frozen=True, slots=True)
-class AgentGraphNode:
-    key: str
-    agent: Agent
-
-
-@dataclass(frozen=True, slots=True)
-class AgentGraphEdge:
-    source: str
-    target: str
-
-
-@dataclass(frozen=True, slots=True)
-class LoadedAgentGraph:
-    """An agent graph with every row it needs loaded, ready to run.
-
-    Iterating it walks the run's path: the entry node, the one node without
-    incoming edges, then each node's outgoing edge until none is left.
-    """
-
-    nodes: tuple[AgentGraphNode, ...]
-    max_node_executions: int
-    """A cap on node executions, so a run of a cyclic graph always ends."""
-    edges: tuple[AgentGraphEdge, ...] = ()
-
-    @classmethod
-    def single(cls, key: str, agent: Agent) -> LoadedAgentGraph:
-        return cls(nodes=(AgentGraphNode(key=key, agent=agent),), max_node_executions=1)
-
-    def __iter__(self) -> Iterator[AgentGraphNode]:
-        node: AgentGraphNode | None = self._entry()
-        while node is not None:
-            yield node
-            node = self._next(node)
-
-    def _entry(self) -> AgentGraphNode:
-        targets = {edge.target for edge in self.edges}
-        entry = next((n for n in self.nodes if n.key not in targets), None)
-        if entry is None:
-            raise ValueError("The agent graph has no node without incoming edges.")
-        return entry
-
-    def _next(self, node: AgentGraphNode) -> AgentGraphNode | None:
-        target = next((e.target for e in self.edges if e.source == node.key), None)
-        return next((n for n in self.nodes if n.key == target), None)
-
-
 @dataclass(slots=True)
 class AgentGraphContext:
     """The run's own part of the shared invocation state."""
 
     recovery_inputs: Mapping[str, Any]
+    nodes: Mapping[str, AgentGraphNode] = field(default_factory=dict)
     outputs: dict[str, BaseModel] = field(default_factory=dict)
+
+    def record(self, key: str, output: BaseModel) -> None:
+        """Store a node's output, the latest execution last."""
+        _ = self.outputs.pop(key, None)
+        self.outputs[key] = output
+
+    def get(self, path: str) -> Any:
+        """The value at ``recovery.<field>`` or ``<node_key>.<field>``, dotted.
+
+        A bare name is a recovery input, else that field of the most recent output
+        that has it. ``None`` when nothing has the value.
+        """
+        source, *fields = path.split(".")
+        if not fields:
+            if source in self.recovery_inputs:
+                return self.recovery_inputs[source]
+            return next(
+                (
+                    getattr(output, source)
+                    for output in reversed(self.outputs.values())
+                    if source in type(output).model_fields
+                ),
+                None,
+            )
+        value: Any = (
+            self.recovery_inputs
+            if source == RECOVERY_INPUTS_SOURCE
+            else self.outputs.get(source)
+        )
+        for name in fields:
+            if isinstance(value, BaseModel) and name in type(value).model_fields:
+                value = getattr(value, name)
+            elif isinstance(value, Mapping) and name in value:
+                value = value[name]  # pyright: ignore[reportUnknownVariableType] - JSON of unknown shape
+            else:
+                return None
+        return value  # pyright: ignore[reportUnknownVariableType] - JSON of unknown shape
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,30 +84,7 @@ class GraphOutcome:
     failure_reason: FailureReason | None = None
 
 
-async def run_graph(graph: LoadedAgentGraph, state: dict[str, Any]) -> GraphOutcome:
-    """Run ``graph`` from its entry node until no outgoing edge is left.
-
-    Nodes are awaited in the caller's task, so cancelling the caller cancels the
-    running node. Anything a node raises propagates unchanged. ``state`` holds an
-    `AgentGraphContext` under `AGENT_GRAPH_CONTEXT_KEY` and is shared, never copied,
-    by every node.
-    """
-    context: AgentGraphContext = state[AGENT_GRAPH_CONTEXT_KEY]
-    terminal_node: str | None = None
-    output: BaseModel | None = None
-    nodes_run = 0
-    for node in graph:
-        if nodes_run >= graph.max_node_executions:
-            return GraphOutcome(terminal_node, output, nodes_run, "max_node_executions")
-        _clean_state(state)
-        run = await node.agent.run_node(state, dict(context.recovery_inputs))
-        context.outputs[node.key] = run.output
-        terminal_node, output = node.key, run.output
-        nodes_run += 1
-    return GraphOutcome(terminal_node, output, nodes_run)
-
-
-def _clean_state(state: dict[str, Any]) -> None:
+def clean_state(state: dict[str, Any]) -> None:
     """Drop what the previous node's Strands event loop and tracing left behind."""
     for key in [
         k

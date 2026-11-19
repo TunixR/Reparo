@@ -23,7 +23,11 @@ from agent_tools.hooks import (
     ToolLoggingHook,
 )
 from agent_tools.image import screenshot_bytes
-from database.agent_graphs.runner import NodeRun
+from database.agent_graphs.runner import (
+    AGENT_GRAPH_CONTEXT_KEY,
+    AgentGraphContext,
+    NodeRun,
+)
 from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
 from database.agents.tooled_gui_agent import GuiRunReport, TooledGuiAgent
 from database.provider.models import Router
@@ -215,6 +219,10 @@ class Agent(SQLModel, table=True):
             "lazy": "joined",
             "foreign_keys": "SubAgent.parent_agent_id",
         },
+    )
+
+    graph_nodes: list["AgentGraphNode"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
+        back_populates="agent"
     )
 
     traces: list["AgentTrace"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
@@ -496,14 +504,18 @@ class Agent(SQLModel, table=True):
         return (await self._execute(invocation_state, kwargs)).model_dump()
 
     async def run_node(
-        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+        self, invocation_state: dict[str, Any], input_map: Mapping[str, str]
     ) -> NodeRun:
         """Run the agent as a node of an agent graph and return its structured output.
 
-        The caller binds ``inputs``; the agent never looks at the graph context. Like
-        ``__call__``, it records the inputs in ``invocation_state``. A GUI agent drives
-        the robot's desktop and reports a `GuiRunReport`.
+        Each argument comes from the graph context at its ``input_map`` path, else by
+        its name. Like ``__call__``, it records the inputs in ``invocation_state``. A
+        GUI agent drives the robot's desktop and reports a `GuiRunReport`.
         """
+        context: AgentGraphContext = invocation_state[AGENT_GRAPH_CONTEXT_KEY]
+        inputs = {
+            a.name: context.get(input_map.get(a.name, a.name)) for a in self.arguments
+        }
         if self.type == AgentType.GuiAgent:
             self._bind_inputs(invocation_state, inputs)
             report = await TooledGuiAgent(self).run(invocation_state, inputs)

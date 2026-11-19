@@ -167,7 +167,7 @@ The platform addresses critical business continuity needs by minimizing automati
 #### 1.6.2 Robot Exception Ingestion and Persistence
 - [x] **REQ-F-103**: The system SHALL accept robot exception submissions via WebSocket authenticated by RobotKey header `X-ROBOT-KEY` (Implemented: `WS /recovery/robot_exception/ws` in `routers/recovery.py`.)
 - [x] **REQ-F-104**: The system SHALL persist each received exception payload for later inspection (Implemented: `database/logging/models.py:RobotException`.)
-- [x] **REQ-F-105**: The system SHALL invoke a configured GatewayAgent for each persisted exception, passing `robot_exception_id` in invocation state (Implemented: `routers/recovery.py` + `database/agents/models.py`.)
+- [x] **REQ-F-105**: The system SHALL invoke a configured GatewayAgent for each persisted exception, passing `robot_exception_id` in invocation state (Implemented: `routers/recovery.py` runs the default recovery agent graph, `database/agent_graphs/models.py`, whose seeded entry node is the gateway.)
 
 #### 1.6.3 Agent/Tool/Provider Configuration APIs
 - [x] **REQ-F-106**: The system SHALL provide CRUD APIs for Agents with admin enforcement (Implemented: `routers/agents.py`.)

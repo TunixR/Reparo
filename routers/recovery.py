@@ -22,14 +22,12 @@ from agent_tools.utils import (
     declared_not_recovered,
     stored_continuation,
 )
+from database.agent_graphs.models import AgentGraph
 from database.agent_graphs.runner import (
     AGENT_GRAPH_CONTEXT_KEY,
     AgentGraphContext,
     GraphOutcome,
-    LoadedAgentGraph,
-    run_graph,
 )
-from database.agents.models import Agent, AgentType
 from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
@@ -56,10 +54,8 @@ ROBOT_KEY_HEADER = "X-ROBOT-KEY"
 
 
 INVALID_RECOVERY_PAYLOAD = "INVALID_RECOVERY_PAYLOAD"
-NO_GATEWAY_AGENT = "NO_GATEWAY_AGENT"
+NO_AGENT_GRAPH = "NO_AGENT_GRAPH"
 INTERNAL_ERROR = "INTERNAL_ERROR"
-
-GATEWAY_NODE_KEY = "gateway"
 
 # Websocket close code (RFC 6455): unsupported data.
 CLOSE_INVALID_PAYLOAD = 1003
@@ -95,12 +91,6 @@ def find_enabled_robot_key(
         return None
 
     return robot_key
-
-
-def _get_gateway_agent(session: database.SessionDep):
-    return session.exec(
-        select(database.Agent).where(database.Agent.type == AgentType.GatewayAgent)
-    ).first()
 
 
 def _decode_payload_or_raise(raw: str) -> Any:
@@ -205,12 +195,8 @@ def _build_answer(
     return answer, failure_reason
 
 
-def _load_agent_graph(gateway: Agent) -> LoadedAgentGraph:
-    return LoadedAgentGraph.single(GATEWAY_NODE_KEY, gateway)
-
-
 def _recovery_inputs(recovery_context: RecoveryContext) -> dict[str, Any]:
-    """The gateway's arguments, from the recovery payload."""
+    """The recovery inputs, from the recovery payload."""
     ui_log = [
         {
             "case_id": entry.case_id,
@@ -260,13 +246,14 @@ def _recovery_inputs(recovery_context: RecoveryContext) -> dict[str, Any]:
 
 
 async def _run_agent_graph(
-    gateway: Agent,
+    session: database.SessionDep,
+    graph_id: UUID,
     robot: RobotConnection,
     exception: RobotException,
     recovery_context: RecoveryContext,
     turn: telemetry.RecoveryTurnTelemetry,
 ) -> tuple[GraphOutcome, dict[str, Any]]:
-    """Run the gateway's agent graph; returns its outcome and the final invocation state."""
+    """Run the agent graph; returns its outcome and the final invocation state."""
     invocation_state: dict[str, Any] = {
         "websocket": robot,
         "robot_exception_id": exception.id,
@@ -277,8 +264,11 @@ async def _run_agent_graph(
             recovery_inputs=_recovery_inputs(recovery_context)
         ),
     }
+    graph = session.get(AgentGraph, graph_id)
+    if graph is None:
+        raise LookupError(f"The agent graph {graph_id} is gone.")
     with turn.agent_graph_run():
-        outcome = await run_graph(_load_agent_graph(gateway), invocation_state)
+        outcome = await graph.run(invocation_state)
     return outcome, invocation_state
 
 
@@ -305,7 +295,7 @@ async def _run_recovery_turn(
     robot_key: RobotKey,
     turn: telemetry.RecoveryTurnTelemetry,
 ) -> None:
-    """One recovery: payload, record, gateway run, answer.
+    """One recovery: payload, record, agent graph run, answer.
 
     ``done`` means a recovery was instantiated and answered; every other ending
     is an ``error`` with a code, except a robot that aborted or went away.
@@ -318,19 +308,19 @@ async def _run_recovery_turn(
         data = _decode_payload_or_raise(raw)
         turn.payload_received(raw, data)
 
-        # Validate before looking up the gateway, so a malformed payload is
+        # Validate before looking up the agent graph, so a malformed payload is
         # reported as such even on a misconfigured server.
         recovery_context = _build_recovery_context_or_raise(data)
         turn.context_built(recovery_context)
 
-        agent = _get_gateway_agent(session)
-        if not agent:
+        graph_id = AgentGraph.default_recovery_id(session)
+        if graph_id is None:
             raise RecoveryWsDomainError(
-                code=NO_GATEWAY_AGENT,
-                content="No GatewayAgent found in the database.",
+                code=NO_AGENT_GRAPH,
+                content="No enabled default recovery agent graph in the database.",
                 close_code=CLOSE_SERVER_ERROR,
             )
-        turn.agent_selected(agent.id)
+        turn.agent_graph_selected(graph_id)
 
         with turn.persisting():
             exception = _persist_exception_with_context(
@@ -341,7 +331,9 @@ async def _run_recovery_turn(
         # The agent graph run is a child span of this turn. It is cancelled as
         # soon as the robot aborts or goes away.
         outcome, invocation_state = await robot.run(
-            _run_agent_graph(agent, robot, exception, recovery_context, turn)
+            _run_agent_graph(
+                session, graph_id, robot, exception, recovery_context, turn
+            )
         )
         answer, failure_reason = _build_answer(
             outcome.output,
@@ -369,8 +361,8 @@ async def _run_recovery_turn(
     except WebSocketDisconnect:
         turn.client_disconnected()
     except RecoveryWsDomainError as exc:
-        if exc.code == NO_GATEWAY_AGENT:
-            turn.no_gateway_agent()
+        if exc.code == NO_AGENT_GRAPH:
+            turn.no_agent_graph()
         else:
             turn.invalid_payload(exc)
         await _send_error_and_close(robot, exc.code, exc.content, exc.close_code)

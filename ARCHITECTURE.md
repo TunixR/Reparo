@@ -14,7 +14,7 @@ tries to recover them with LLM agents. Its main parts:
 | --- | --- | --- |
 | Recovery ingress | WebSocket a robot opens when it fails; one recovery per connection | `routers/recovery.py` |
 | Agents | Database-configured Strands agents: a gateway agent and the sub-agents it delegates to | `database/agents/` |
-| Agent graphs | The runner that executes a recovery one agent node at a time, starting at the gateway | `database/agent_graphs/` |
+| Agent graphs | Database-defined graphs of agent nodes, and the runner that executes a recovery one node at a time, starting at the gateway | `database/agent_graphs/` |
 | Tools | Python functions agents can call, registered in the database | `database/tools/`, `agent_tools/`, `gateway/` |
 | Provider routers | Which LLM backend and model each agent uses | `database/provider/`, `routers/provider.py` |
 | Trace logging | Per-recovery record of agent, tool and GUI steps, with screenshots in S3 | `database/logging/`, `agent_tools/hooks.py`, `s3/` |
@@ -65,12 +65,16 @@ sequenceDiagram
    capabilities (see [Robot protocol](#robot-protocol)).
 3. **Persist.** The raw payload is saved as a robot exception together with its recovery context
    (`database/logging/models.py`). The exception id is the recovery id used everywhere afterwards.
-4. **Run the gateway.** The backend loads the agent of type `GatewayAgent` and runs it, with the
-   recovery context as its inputs, as the entry node of an agent graph. Reparo's agent graph runner
-   (`database/agent_graphs/runner.py`) awaits one node at a time inside the recovery, so an abort
-   cancels it; today the graph is the gateway alone. The WebSocket and the exception id travel in
-   the shared Strands invocation state, so every node and every nested agent and tool can reach the
-   robot and attach its traces to the right recovery.
+4. **Run the agent graph.** Every recovery runs the enabled default recovery agent graph
+   (`database/agent_graphs/models.py`). It is looked up before the exception is persisted, and
+   loaded with every node's agent right before the run; the migration and the populator make it
+   the gateway agent alone. The graph awaits one node at a time, from its entry node, inside the
+   recovery, so an abort cancels it, and follows each node's outgoing edge until none is left or a
+   graph limit is hit. Each node's arguments bind from its
+   input map, else by name from the recovery context and then from the earlier nodes' structured
+   outputs. The WebSocket, the exception id and those outputs travel in the shared Strands
+   invocation state, so every node and every nested agent and tool can reach the robot and attach
+   its traces to the right recovery.
 5. **Delegate.** Agents call sub-agents as tools. In the seeded configuration the gateway hands UI
    errors to an error agent, which in turn uses a GUI agent to act on the desktop and then states
    whether the process was repaired and, if so, names the task of the process model the robot should
@@ -86,7 +90,7 @@ sequenceDiagram
    limit; the continuation is the one `set_continuation` stored, and the variables are the
    payload's, as changed by the GUI agents. A reported success without a stored continuation, or
    after `set_continuation` declared the recovery failed, is sent as a failure. The success sent is stored on the exception. `done` is sent only for a recovery that
-   was persisted and run; every other ending (an invalid payload, a server without a gateway agent,
+   was persisted and run; every other ending (an invalid payload, a server without a default recovery graph,
    an unexpected failure) is an `error` message with a machine-readable code, and the socket is
    closed. The robot can also end the recovery itself with `abort`.
 8. **Report.** Once the robot (or its orchestrator) knows whether the process really continued, it
@@ -130,7 +134,7 @@ frame) and `action` (the robot answers with a JSON result: `success`, `action_ty
 | --- | --- | --- | --- |
 | The recovery ran | server | `done`: the recovery `id` and `ResponseToRPA` (`templates/gateway.py`) | 1000 |
 | The payload is not JSON or not valid | server | `error`, `INVALID_RECOVERY_PAYLOAD` | 1003 |
-| No gateway agent is configured | server | `error`, `NO_GATEWAY_AGENT` | 1011 |
+| No enabled default recovery agent graph | server | `error`, `NO_AGENT_GRAPH` | 1011 |
 | Anything unexpected | server | `error`, `INTERNAL_ERROR` | 1011 |
 | The robot gives up | robot | `abort`, with its own `error_code` and `error_description` | 1000, no `done` |
 
@@ -150,9 +154,8 @@ prompt, typed input arguments, response model, input type (text or image + text)
 tools and sub-agents. Invoking an agent builds a Strands agent from that row on the fly, validates the
 inputs, runs it, and asks for a structured response using the configured Pydantic model.
 
-- **Types.** `AgentType` distinguishes the gateway (the entry point for every recovery), error
-  agents, GUI agents and generic agents. Recovery uses the first `GatewayAgent` it finds, so keep
-  exactly one.
+- **Types.** `AgentType` distinguishes the gateway (the entry node of the seeded default recovery
+  graph), error agents, GUI agents and generic agents.
 - **Composition.** Sub-agents are exposed to their parent as tools, so delegation is just a tool
   call. Each tool or sub-agent link can carry a call limit, enforced by a hook
   (`agent_tools/hooks.py`). Disabled agents are left out.
