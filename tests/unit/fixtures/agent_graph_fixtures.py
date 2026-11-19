@@ -87,12 +87,14 @@ def make_agent_graph(session: Session) -> MakeAgentGraph:
             edges = [(a.key, b.key) for a, b in zip(nodes, nodes[1:], strict=False)]
         normalized = [edge if isinstance(edge, Edge) else Edge(*edge) for edge in edges]
         graph.edges = [
-            AgentGraphEdge(
-                agent_graph_id=graph.id,
-                source_node_id=rows[edge.source].id,
-                target_node_id=rows[edge.target].id,
-                priority=index if edge.priority is None else edge.priority,
-                condition=edge.condition,
+            AgentGraphEdge.model_validate(
+                {
+                    "agent_graph_id": graph.id,
+                    "source_node_id": rows[edge.source].id,
+                    "target_node_id": rows[edge.target].id,
+                    "priority": index if edge.priority is None else edge.priority,
+                    "condition": edge.condition,
+                }
             )
             for index, edge in enumerate(normalized)
         ]

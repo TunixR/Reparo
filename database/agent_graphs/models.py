@@ -1,16 +1,18 @@
 import asyncio
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import Index, UniqueConstraint, text
+from sqlalchemy.orm import validates
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
-from database.agent_graphs.conditions import evaluate
+from database.agent_graphs.conditions import CONDITION, Condition, ConditionType
 from database.agent_graphs.runner import (
     AGENT_GRAPH_CONTEXT_KEY,
     AgentGraphContext,
@@ -207,24 +209,38 @@ class AgentGraphEdge(SQLModel, table=True):
         }
     )
     priority: int = Field(default=0)
-    condition: dict[str, Any] | None = Field(
+    condition: Condition | None = Field(
         default=None,
-        sa_type=JSONB,
+        sa_type=ConditionType,
         description="Predicate over the source node's output; null is unconditional.",
     )
+
+    @validates("condition")
+    def validate_condition(
+        self, _key: str, condition: Condition | Mapping[str, Any] | None
+    ) -> Condition | Mapping[str, Any] | None:
+        """Reject a malformed condition where the edge is built, not at flush.
+
+        SQLModel keeps the assigned value, so a dict stays a dict until it is
+        stored; `ConditionType` loads it back as a `Condition`.
+        """
+        if condition is not None:
+            _ = CONDITION.validate_python(condition)
+        return condition
 
     def holds(self, output: BaseModel | None) -> bool:
         """Whether the run may follow this edge after its source produced ``output``.
 
         An unconditional edge always holds. A condition over a missing output, or one
-        that raises, doesn't, and the error is logged.
+        that raises (a missing field, a type error), doesn't, and the error is logged.
         """
         if self.condition is None:
             return True
         if output is None:
             return False
         try:
-            return evaluate(self.condition, output)
+            condition = CONDITION.validate_python(self.condition)
+            return condition.holds(output.model_dump(mode="json"))
         except Exception as exc:
             log_event(
                 logger,

@@ -1,7 +1,7 @@
 """Edge conditions: declarative JSON predicates over a node's structured output.
 
-A condition is validated into these models and evaluated by walking them; it is
-never ``eval``'d.
+A condition is validated into these models wherever it enters, stored as JSON by
+`ConditionType`, and evaluated by walking it; it is never ``eval``'d.
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ from pydantic import (
     TypeAdapter,
     model_validator,
 )
+from sqlalchemy import Dialect
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import TypeDecorator
 
 type Operator = Literal[
     "eq", "ne", "in", "not_in", "lt", "le", "gt", "ge", "is_null", "not_null"
@@ -100,9 +103,25 @@ class Not(BaseModel):
 
 type Condition = Compare | AllOf | AnyOf | Not
 
-_CONDITION: TypeAdapter[Condition] = TypeAdapter(Condition)
+CONDITION: TypeAdapter[Condition] = TypeAdapter(Condition)
 
 
-def evaluate(condition: Mapping[str, Any], output: BaseModel) -> bool:
-    """Whether ``condition`` holds over ``output``; raises when it can't be evaluated."""
-    return _CONDITION.validate_python(condition).holds(output.model_dump(mode="json"))
+class ConditionType(TypeDecorator[Condition]):
+    """A JSONB column that only stores, and always loads, a valid `Condition`."""
+
+    impl = JSONB
+    cache_ok = True
+
+    def process_bind_param(
+        self, value: Condition | Mapping[str, Any] | None, dialect: Dialect
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return CONDITION.dump_python(
+            CONDITION.validate_python(value), mode="json", by_alias=True
+        )
+
+    def process_result_value(
+        self, value: dict[str, Any] | None, dialect: Dialect
+    ) -> Condition | None:
+        return None if value is None else CONDITION.validate_python(value)

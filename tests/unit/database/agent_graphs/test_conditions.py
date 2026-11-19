@@ -2,12 +2,18 @@
 
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+from sqlalchemy.exc import StatementError
+from sqlmodel import Session, insert
 
-from database.agent_graphs.models import AgentGraphEdge
+from database.agent_graphs.conditions import AllOf, AnyOf, Compare, Not
+from database.agent_graphs.models import AgentGraph, AgentGraphEdge
+from database.agents.models import Agent
+from tests.unit.fixtures.agent_graph_fixtures import Edge, MakeAgentGraph, Node
 from tests.unit.shared.log_events import logged_events
 
 
@@ -33,12 +39,14 @@ OUTPUT = Verdict(
 )
 
 
-def _edge(condition: dict[str, Any] | None) -> AgentGraphEdge:
-    return AgentGraphEdge(
-        agent_graph_id=uuid.uuid4(),
-        source_node_id=uuid.uuid4(),
-        target_node_id=uuid.uuid4(),
-        condition=condition,
+def _edge(condition: Any) -> AgentGraphEdge:
+    return AgentGraphEdge.model_validate(
+        {
+            "agent_graph_id": uuid.uuid4(),
+            "source_node_id": uuid.uuid4(),
+            "target_node_id": uuid.uuid4(),
+            "condition": condition,
+        }
     )
 
 
@@ -147,10 +155,7 @@ def _condition_errors(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecor
         ({"field": "detail.missing", "op": "not_null"}, "KeyError"),
         ({"field": "category.name", "op": "eq", "value": "ui"}, "TypeError"),
         ({"field": "category", "op": "lt", "value": 3}, "TypeError"),
-        ({"field": "severity", "op": "in", "value": 3}, "ValidationError"),
-        ({"field": "category", "op": "in", "value": "uix"}, "ValidationError"),
         ({"not": {"field": "missing", "op": "eq", "value": 1}}, "KeyError"),
-        ({"any": [TRUE, {"field": "x", "op": "matches"}]}, "ValidationError"),
     ],
 )
 def test_a_condition_that_raises_is_false_and_logged(
@@ -179,3 +184,108 @@ def test_a_condition_over_a_missing_output_is_false(
 def test_an_unconditional_edge_always_holds():
     assert _holds(None) is True
     assert _holds(None, output=None) is True
+
+
+INVALID = [
+    {"field": "x", "op": "matches", "value": 1},
+    {"field": "x", "op": "in", "value": 3},
+    {"field": "x", "op": "not_in", "value": "abc"},
+    {"field": "x", "op": "eq", "value": 1, "extra": True},
+    {"op": "eq", "value": 1},
+    {"all": TRUE},
+    {"any": [TRUE, {"field": "x", "op": "matches"}]},
+    {"not": [TRUE]},
+    {},
+    ["not", "a", "condition"],
+]
+
+
+def _bare_edge(condition: Any) -> AgentGraphEdge:
+    return AgentGraphEdge(
+        agent_graph_id=uuid.uuid4(),
+        source_node_id=uuid.uuid4(),
+        target_node_id=uuid.uuid4(),
+        condition=condition,
+    )
+
+
+@pytest.mark.parametrize("build", [_edge, _bare_edge])
+@pytest.mark.parametrize("condition", INVALID)
+def test_an_edge_rejects_a_malformed_condition(
+    condition: Any, build: Callable[[Any], AgentGraphEdge]
+):
+    with pytest.raises(ValidationError):
+        _ = build(condition)
+
+
+def test_a_bare_edge_still_evaluates_its_condition():
+    assert _bare_edge({"not": FALSE}).holds(OUTPUT) is True
+
+
+def test_an_edge_validated_from_json_holds_a_typed_predicate():
+    edge = AgentGraphEdge.model_validate(
+        {
+            "agent_graph_id": uuid.uuid4(),
+            "source_node_id": uuid.uuid4(),
+            "target_node_id": uuid.uuid4(),
+            "condition": {"all": [TRUE, {"not": FALSE}]},
+        }
+    )
+
+    assert isinstance(edge.condition, AllOf)
+    assert edge.condition.all == [
+        Compare(field="ui_exception", op="eq", value=True),
+        Not.model_validate(
+            {"not": Compare(field="category", op="eq", value="network")}
+        ),
+    ]
+
+
+def test_a_stored_condition_loads_back_as_a_typed_predicate(
+    session: Session,
+    make_agent: Any,
+    mock_router: Any,
+    make_agent_graph: MakeAgentGraph,
+):
+    agent: Agent = make_agent(router=mock_router, name="Only")
+    made = make_agent_graph(
+        Node("a", agent),
+        Node("b", agent),
+        edges=[Edge("a", "b", {"any": [TRUE, {"not": FALSE}]})],
+    )
+    session.expunge_all()
+
+    graph = session.get(AgentGraph, made.id)
+
+    assert graph is not None
+    [edge] = graph.entry.outgoing
+    assert isinstance(edge.condition, AnyOf)
+    assert edge.condition.any == [
+        Compare(field="ui_exception", op="eq", value=True),
+        Not.model_validate(
+            {"not": Compare(field="category", op="eq", value="network")}
+        ),
+    ]
+
+
+def test_a_malformed_condition_is_never_stored(
+    session: Session,
+    make_agent: Any,
+    mock_router: Any,
+    make_agent_graph: MakeAgentGraph,
+):
+    agent: Agent = make_agent(router=mock_router, name="Only")
+    graph = make_agent_graph(Node("a", agent), Node("b", agent), edges=[])
+    a, b = sorted(graph.nodes, key=lambda node: node.key)
+
+    with pytest.raises(StatementError):
+        _ = session.exec(
+            insert(AgentGraphEdge).values(
+                id=uuid.uuid4(),
+                agent_graph_id=graph.id,
+                source_node_id=a.id,
+                target_node_id=b.id,
+                priority=0,
+                condition={"field": "x", "op": "matches"},
+            )
+        )
