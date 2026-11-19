@@ -15,8 +15,22 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import status
+from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
+from database.agent_graphs.conditions import (
+    CONDITION,
+    AllOf,
+    AnyOf,
+    Compare,
+    Condition,
+    Not,
+)
+from database.agent_graphs.field_types import (
+    FieldPathError,
+    comparison_error,
+    field_type,
+)
 from database.agent_graphs.models import (
     AgentGraph,
     AgentGraphCreate,
@@ -28,7 +42,9 @@ from database.agent_graphs.models import (
     AgentGraphNodeUpdate,
     AgentGraphUpdate,
 )
+from database.agent_graphs.runner import RECOVERY_INPUTS_SOURCE
 from database.agents.models import Agent, AgentType
+from templates.recovery_payload import RecoveryInputs
 
 MAX_NODE_EXECUTIONS = 100
 """The most node executions a graph may allow per run."""
@@ -168,14 +184,237 @@ def violations(session: Session, graph: AgentGraph) -> list[str]:
     return _agent_violations(graph.nodes) + _structure_violations(session, graph)
 
 
+def warnings(graph: AgentGraph) -> list[str]:
+    """What looks wrong with ``graph`` without making it invalid: a node, other than
+    a gateway, that can end a run but can't report a recovery."""
+    outputs, _ = _output_models(graph)
+    found: list[str] = []
+    for node in graph.nodes:
+        if node.agent.type == AgentType.GatewayAgent or node.key not in outputs:
+            continue
+        if any(e.condition is None for e in graph.edges if e.source_node_id == node.id):
+            continue
+        model = outputs[node.key]
+        if model is None:
+            lacks = f"its agent '{node.agent.name}' has no output model"
+        else:
+            success = model.model_fields.get("success")
+            if success is not None and success.annotation is bool:
+                continue
+            lacks = f"its output model {model.__name__} has no boolean 'success'"
+        found.append(
+            f"Node '{node.key}' can end the graph, but {lacks}, so a run that ends "
+            "there never reports a recovery; add 'success: bool' to the output, or "
+            "an unconditional edge out of the node."
+        )
+    return found
+
+
 def _structure_violations(session: Session, graph: AgentGraph) -> list[str]:
+    outputs, broken = _output_models(graph)
     return [
         *_entry_violations(graph),
         *_reachability_violations(graph),
         *_else_violations(graph),
         *_cycle_violations(graph),
         *_gateway_violations(session, graph),
+        *broken,
+        *_condition_violations(graph, outputs),
+        *_input_map_violations(graph, outputs),
+        *_binding_violations(graph, outputs),
     ]
+
+
+type OutputModels = dict[str, type[BaseModel] | None]
+
+
+def _output_models(graph: AgentGraph) -> tuple[OutputModels, list[str]]:
+    """Each node's output model by key, and why the ones missing can't load."""
+    models: OutputModels = {}
+    broken: list[str] = []
+    for node in graph.nodes:
+        try:
+            models[node.key] = node.agent.output_model()
+        except (ImportError, ValueError) as exc:
+            broken.append(
+                f"Node '{node.key}' runs the agent '{node.agent.name}', whose "
+                f"response model can't be loaded ({exc}); fix the agent's "
+                "response model."
+            )
+    return models, broken
+
+
+def _condition_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]:
+    """Conditions compare fields of their source's output model, as those fields'
+    types allow."""
+    nodes = {node.id: node for node in graph.nodes}
+    found: list[str] = []
+    unroutable: dict[str, AgentGraphNode] = {}
+    for edge in graph.edges:
+        source = nodes[edge.source_node_id]
+        if edge.condition is None or source.key not in outputs:
+            continue
+        model = outputs[source.key]
+        if model is None:
+            unroutable[source.key] = source
+            continue
+        where = (
+            f"The condition on the edge '{source.key}' → "
+            f"'{nodes[edge.target_node_id].key}'"
+        )
+        for compare in _compares(CONDITION.validate_python(edge.condition)):
+            try:
+                annotation = field_type(model, compare.field)
+            except FieldPathError as exc:
+                found.append(
+                    f"{where} compares '{compare.field}', but {exc}; compare a "
+                    "field of the source node's output."
+                )
+                continue
+            error = comparison_error(annotation, compare.op, compare.value)
+            if error is not None:
+                found.append(
+                    f"{where} compares '{compare.field}' with '{compare.op}', but "
+                    f"{error}; fix the operator or the value."
+                )
+    return [
+        f"Node '{node.key}' has conditional outgoing edges, but its agent "
+        f"'{node.agent.name}' has no output model to evaluate them on; give the "
+        "agent a response model or remove the conditions."
+        for node in unroutable.values()
+    ] + found
+
+
+def _input_map_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]:
+    """Input maps map arguments of their node's agent to paths that resolve."""
+    found: list[str] = []
+    for node in graph.nodes:
+        arguments = [argument.name for argument in node.agent.arguments]
+        for name, path in node.input_map.items():
+            where = f"Node '{node.key}' maps '{name}'"
+            if name not in arguments:
+                found.append(
+                    f"{where}, which isn't an argument of its agent "
+                    f"'{node.agent.name}' (arguments: {', '.join(arguments) or 'none'}); "
+                    "map one of its arguments."
+                )
+            error = _path_error(graph, outputs, path)
+            if error is not None:
+                found.append(f"{where} to '{path}', but {error}.")
+    return found
+
+
+def _path_error(graph: AgentGraph, outputs: OutputModels, path: str) -> str | None:
+    """Why an input map ``path`` doesn't resolve, if it doesn't."""
+    source, _, fields = path.partition(".")
+    if not fields:
+        return (
+            f"a path is '{RECOVERY_INPUTS_SOURCE}.<field>' or '<node_key>.<field>'; "
+            "write it in one of those forms"
+        )
+    if source == RECOVERY_INPUTS_SOURCE:
+        model: type[BaseModel] | None = RecoveryInputs
+    elif source not in {node.key for node in graph.nodes}:
+        return (
+            f"the graph has no node '{source}'; map from one of its nodes or "
+            f"from '{RECOVERY_INPUTS_SOURCE}'"
+        )
+    elif source not in outputs:
+        return None
+    else:
+        model = outputs[source]
+    if model is None:
+        return (
+            f"node '{source}' has no output model; give its agent a response "
+            "model or map from elsewhere"
+        )
+    try:
+        _ = field_type(model, fields)
+    except FieldPathError as exc:
+        return f"{exc}; map an existing field"
+    return None
+
+
+def _binding_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]:
+    """Every argument binds on every path into its node: from the recovery inputs,
+    from its input map, or by name from a node that runs before on every path."""
+    entry = _entry(graph)
+    if entry is None:
+        return []
+    keys = {node.id: node.key for node in graph.nodes}
+    dominators = _dominators(graph, entry.id)
+    found: list[str] = []
+    for node in graph.nodes:
+        if node.id not in dominators:
+            continue
+        before = {keys[d] for d in dominators[node.id] - {node.id}}
+        for argument in node.agent.arguments:
+            path = node.input_map.get(argument.name)
+            if path is not None:
+                source = path.partition(".")[0]
+                from_node = source != RECOVERY_INPUTS_SOURCE and source in keys.values()
+                if from_node and source not in before:
+                    found.append(
+                        f"Node '{node.key}' maps '{argument.name}' to '{path}', but "
+                        f"node '{source}' doesn't run before it on every path; map "
+                        "it from a node that does, or from the recovery inputs."
+                    )
+                continue
+            if argument.name in RecoveryInputs.model_fields:
+                continue
+            outputting = {
+                key
+                for key, model in outputs.items()
+                if model is not None and argument.name in model.model_fields
+            }
+            if outputting & before:
+                continue
+            elsewhere = sorted(outputting - before)
+            hint = (
+                f" Only {', '.join(f'node {k!r}' for k in elsewhere)} outputs it, "
+                "which doesn't run before it on every path."
+                if elsewhere
+                else ""
+            )
+            found.append(
+                f"Node '{node.key}' can start without its argument "
+                f"'{argument.name}': it isn't a recovery input, and no node that "
+                f"runs before it on every path outputs it.{hint} Map it in the "
+                "node's input_map."
+            )
+    return found
+
+
+def _dominators(graph: AgentGraph, entry: uuid.UUID) -> dict[uuid.UUID, set[uuid.UUID]]:
+    """For each node reachable from ``entry``, the nodes on every path to it,
+    itself included; conditions are ignored."""
+    reached = _reachable(graph, entry)
+    predecessors: dict[uuid.UUID, list[uuid.UUID]] = {n: [] for n in reached}
+    for edge in graph.edges:
+        if edge.source_node_id in reached and edge.target_node_id in reached:
+            predecessors[edge.target_node_id].append(edge.source_node_id)
+    dominators = {n: set(reached) for n in reached}
+    dominators[entry] = {entry}
+    changed = True
+    while changed:
+        changed = False
+        for node in reached - {entry}:
+            common = set.intersection(*(dominators[p] for p in predecessors[node]))
+            if common | {node} != dominators[node]:
+                dominators[node] = common | {node}
+                changed = True
+    return dominators
+
+
+def _compares(condition: Condition) -> Iterator[Compare]:
+    match condition:
+        case Compare():
+            yield condition
+        case AllOf(all=conditions) | AnyOf(any=conditions):
+            for inner in conditions:
+                yield from _compares(inner)
+        case Not(not_=inner):
+            yield from _compares(inner)
 
 
 def _agent_violations(nodes: Sequence[AgentGraphNode]) -> list[str]:
@@ -233,6 +472,12 @@ def _validate_write(
         )
 
 
+def _entry(graph: AgentGraph) -> AgentGraphNode | None:
+    """The entry node, if the graph has exactly one."""
+    entries = [node for node in graph.nodes if node.is_entry]
+    return entries[0] if len(entries) == 1 else None
+
+
 def _entry_violations(graph: AgentGraph) -> list[str]:
     """Exactly one entry node, with no incoming edges."""
     entries = [node for node in graph.nodes if node.is_entry]
@@ -255,13 +500,13 @@ def _entry_violations(graph: AgentGraph) -> list[str]:
 
 def _reachability_violations(graph: AgentGraph) -> list[str]:
     """Every node is reachable from the entry, ignoring conditions."""
-    entries = [node for node in graph.nodes if node.is_entry]
-    if len(entries) != 1:
+    entry = _entry(graph)
+    if entry is None:
         return []
-    reached = _reachable(graph, entries[0].id)
+    reached = _reachable(graph, entry.id)
     return [
         f"Node '{node.key}' is unreachable from the entry node "
-        f"'{entries[0].key}'; add an edge into it or remove it."
+        f"'{entry.key}'; add an edge into it or remove it."
         for node in graph.nodes
         if node.id not in reached
     ]

@@ -98,26 +98,27 @@ def _edge(graph: AgentGraph, edge_id: UUID) -> AgentGraphEdge:
 
 def _read(session: Session, graph: AgentGraph) -> AgentGraphRead:
     session.refresh(graph)
-    return AgentGraphRead.model_validate(graph, from_attributes=True)
+    return _as_read(graph)
+
+
+def _as_read(graph: AgentGraph) -> AgentGraphRead:
+    return AgentGraphRead.model_validate(graph, from_attributes=True).model_copy(
+        update={"warnings": service.warnings(graph)}
+    )
 
 
 @router.get(
     "/", response_model=Sequence[AgentGraphRead], summary="List all agent graphs"
 )
 def list_agent_graphs(session: SessionDep) -> Sequence[AgentGraphRead]:
-    return [
-        AgentGraphRead.model_validate(graph, from_attributes=True)
-        for graph in session.exec(select(AgentGraph)).all()
-    ]
+    return [_as_read(graph) for graph in session.exec(select(AgentGraph)).all()]
 
 
 @router.get(
     "/{graph_id}", response_model=AgentGraphRead, summary="Get agent graph by ID"
 )
 def get_agent_graph(graph_id: UUID, session: SessionDep) -> AgentGraphRead:
-    return AgentGraphRead.model_validate(
-        _graph(session, graph_id), from_attributes=True
-    )
+    return _as_read(_graph(session, graph_id))
 
 
 @router.post(

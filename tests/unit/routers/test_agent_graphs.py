@@ -18,12 +18,15 @@ from database.agent_graphs.models import AgentGraphEdge, AgentGraphNode
 from database.agent_graphs.runner import NodeRun
 from database.agent_graphs.service import MAX_NODE_EXECUTIONS
 from database.agents.models import Agent
-from tests.unit.fixtures.agent_fixtures import ScriptedAgent
+from database.provider.models import Router
+from tests.unit.fixtures.agent_fixtures import ScriptedAgent, recovery_arguments
 from tests.unit.fixtures.agent_graph_fixtures import (
+    GRAPH_REPORT,
     BuildAgentGraph,
     MakeAgentGraph,
     Node,
     add_edge_via_api,
+    argument,
     create_graph_via_api,
     enable_via_api,
 )
@@ -701,3 +704,385 @@ def test_a_write_that_loses_a_race_on_a_unique_constraint_is_rejected(
     _rejected(response, "concurrent change", "reload the graph and retry")
     nodes = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers).json()
     assert [n["key"] for n in nodes["nodes"]] == ["a"]
+
+
+def test_a_condition_compares_a_field_of_the_source_output(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+):
+    a, b, c = graph_agents.values()
+    typo = {"field": "finding.raeson", "op": "eq", "value": "timeout"}
+    graph = build_agent_graph(
+        [("a", a), ("b", b), ("c", c)], [("a", "b", 0, typo), ("a", "c", 1)]
+    )
+
+    _rejected(
+        enable_via_api(client, admin_headers, graph.id),
+        "'a' → 'b'",
+        "'raeson'",
+        "Finding",
+        "reason",
+    )
+
+
+@pytest.mark.parametrize(
+    ("condition", "fragments"),
+    [
+        ({"field": "attempts", "op": "eq", "value": "three"}, ("'attempts'", "three")),
+        ({"field": "attempts", "op": "in", "value": [1, "x"]}, ("'attempts'", '"x"')),
+        ({"field": "done", "op": "lt", "value": True}, ("'done'", "'lt'", "order")),
+        ({"field": "done", "op": "is_null"}, ("'done'", "'is_null'", "never null")),
+        (
+            {"field": "finding.tags.x", "op": "eq", "value": 1},
+            ("finding.tags", "no fields"),
+        ),
+        (
+            {"not": {"any": [{"field": "extra.k", "op": "ge", "value": "high"}]}},
+            ("'extra.k'", "high"),
+        ),
+    ],
+)
+def test_a_condition_operator_and_value_fit_the_field_type(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    condition: dict[str, Any],
+    fragments: tuple[str, ...],
+):
+    a, b, _ = graph_agents.values()
+    graph = build_agent_graph([("a", a), ("b", b)], [("a", "b", 0, condition)])
+
+    _rejected(enable_via_api(client, admin_headers, graph.id), "'a' → 'b'", *fragments)
+
+
+def test_conditions_that_fit_the_output_model_are_valid(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+):
+    a, b, _ = graph_agents.values()
+    condition = {
+        "all": [
+            {"field": "done", "op": "eq", "value": True},
+            {"field": "attempts", "op": "le", "value": 3},
+            {"field": "note", "op": "not_null"},
+            {"field": "finding.reason", "op": "in", "value": ["timeout", "popup"]},
+            {"field": "extra.retries", "op": "gt", "value": 0},
+        ]
+    }
+    graph = build_agent_graph([("a", a), ("b", b)], [("a", "b", 0, condition)])
+
+    response = enable_via_api(client, admin_headers, graph.id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+
+def test_a_node_with_conditional_edges_needs_an_output_model(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    mock_agent: Agent,
+):
+    graph = build_agent_graph(
+        [("free", mock_agent), ("b", graph_agents["Beta"])],
+        [("free", "b", 0, CONDITION)],
+    )
+
+    _rejected(
+        enable_via_api(client, admin_headers, graph.id),
+        "Node 'free'",
+        "conditional",
+        "no output model",
+    )
+
+
+def test_a_gui_node_is_routed_on_its_run_report(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    gui_agent: Agent,
+):
+    nodes = [
+        ("start", graph_agents["Alpha"]),
+        ("gui", gui_agent, False, {"task": "start.finding.reason"}),
+        ("b", graph_agents["Beta"]),
+    ]
+    on_success = {"field": "success", "op": "eq", "value": True}
+    on_goal = {"field": "goal_reached", "op": "eq", "value": True}
+    wrong = build_agent_graph(nodes, [("start", "gui"), ("gui", "b", 0, on_success)])
+    right = build_agent_graph(nodes, [("start", "gui"), ("gui", "b", 0, on_goal)])
+
+    _rejected(
+        enable_via_api(client, admin_headers, wrong.id),
+        "'gui' → 'b'",
+        "'success'",
+        "GuiRunReport",
+    )
+    assert (
+        enable_via_api(client, admin_headers, right.id).status_code
+        == status.HTTP_200_OK
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_map", "fragments"),
+    [
+        ({"tsk": "recovery.task_name"}, ("'tsk'", "isn't an argument", "task")),
+        ({"task": "recovery.task"}, ("'recovery.task'", "'task'", "task_name")),
+        (
+            {"task": "recovery.ui_log.case_id"},
+            ("'recovery.ui_log.case_id'", "no fields"),
+        ),
+        ({"task": "ghost.reason"}, ("'ghost.reason'", "no node 'ghost'")),
+        ({"task": "a.finding.raeson"}, ("'a.finding.raeson'", "'raeson'", "Finding")),
+        (
+            {"task": "task_name"},
+            ("'task_name'", "recovery.<field>", "<node_key>.<field>"),
+        ),
+    ],
+)
+def test_an_input_map_maps_arguments_to_recovery_inputs_or_node_outputs(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    tasked_agent: Agent,
+    input_map: dict[str, str],
+    fragments: tuple[str, ...],
+):
+    graph = build_agent_graph(
+        [("a", graph_agents["Alpha"]), ("b", tasked_agent, False, input_map)],
+        [("a", "b")],
+    )
+
+    _rejected(enable_via_api(client, admin_headers, graph.id), "Node 'b'", *fragments)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["recovery.task_name", "recovery.errored_act.error_code", "a.finding.reason"],
+)
+def test_an_input_map_that_resolves_is_valid(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    tasked_agent: Agent,
+    path: str,
+):
+    graph = build_agent_graph(
+        [("a", graph_agents["Alpha"]), ("b", tasked_agent, False, {"task": path})],
+        [("a", "b")],
+    )
+
+    response = enable_via_api(client, admin_headers, graph.id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+
+GOAL_REACHED = {"field": "goal_reached", "op": "eq", "value": True}
+
+
+@pytest.fixture
+def noted_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
+    """An agent taking a ``note``, a field of the `GraphReport` graph agents output."""
+    return make_agent(
+        router=mock_router,
+        name="Noted",
+        arguments=[argument("note")],
+        response_model=GRAPH_REPORT,
+    )
+
+
+def test_an_argument_bound_only_on_one_branch_is_rejected(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    gui_agent: Agent,
+    mock_agent: Agent,
+    noted_agent: Agent,
+    tasked_agent: Agent,
+):
+    gui = ("gui", gui_agent, True, {"task": "recovery.task_name"})
+    branches = [("gui", "b", 0, GOAL_REACHED), ("gui", "c", 1), ("b", "d"), ("c", "d")]
+    by_name = build_agent_graph(
+        [gui, ("b", graph_agents["Alpha"]), ("c", mock_agent), ("d", noted_agent)],
+        branches,
+    )
+    mapped = build_agent_graph(
+        [
+            gui,
+            ("b", graph_agents["Alpha"]),
+            ("c", mock_agent),
+            ("d", tasked_agent, False, {"task": "b.finding.reason"}),
+        ],
+        branches,
+    )
+
+    _rejected(
+        enable_via_api(client, admin_headers, by_name.id),
+        "Node 'd'",
+        "'note'",
+        "'b'",
+        "every path",
+    )
+    _rejected(
+        enable_via_api(client, admin_headers, mapped.id),
+        "Node 'd'",
+        "'b.finding.reason'",
+        "every path",
+    )
+
+
+def test_an_argument_must_bind(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    tasked_agent: Agent,
+):
+    graph = build_agent_graph(
+        [("a", graph_agents["Alpha"]), ("b", tasked_agent)], [("a", "b")]
+    )
+
+    _rejected(
+        enable_via_api(client, admin_headers, graph.id),
+        "Node 'b'",
+        "'task'",
+        "input_map",
+    )
+
+
+def test_arguments_bind_from_recovery_inputs_and_from_nodes_on_every_path(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    gui_agent: Agent,
+    mock_agent: Agent,
+    noted_agent: Agent,
+    gateway_like: Agent,
+):
+    graph = build_agent_graph(
+        [
+            ("start", gateway_like),
+            ("a", graph_agents["Alpha"]),
+            ("gui", gui_agent, False, {"task": "a.finding.reason"}),
+            ("c", mock_agent),
+            ("d", noted_agent),
+        ],
+        [
+            ("start", "a"),
+            ("a", "gui"),
+            ("gui", "c", 0, GOAL_REACHED),
+            ("gui", "d", 1),
+            ("c", "d"),
+        ],
+    )
+
+    response = enable_via_api(client, admin_headers, graph.id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+
+@pytest.fixture
+def gateway_like(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
+    """An agent taking the seven recovery inputs by name."""
+    return make_agent(router=mock_router, name="Reader", arguments=recovery_arguments())
+
+
+def test_a_node_that_can_end_the_graph_without_success_is_a_warning(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    gui_agent: Agent,
+    graphless_gateway: Agent,
+):
+    on_done = {"field": "done", "op": "eq", "value": True}
+    graph = build_agent_graph(
+        [
+            ("gateway", graphless_gateway),
+            ("a", graph_agents["Alpha"]),
+            ("gui", gui_agent, False, {"task": "a.finding.reason"}),
+        ],
+        [("gateway", "a"), ("a", "gui", 0, on_done)],
+    )
+
+    response = enable_via_api(client, admin_headers, graph.id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    warnings: list[str] = response.json()["warnings"]
+    assert len(warnings) == 1, warnings
+    assert all(f in warnings[0] for f in ("Node 'gui'", "'success'", "GuiRunReport"))
+    got = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers)
+    assert got.json()["warnings"] == warnings
+
+
+def test_a_gateway_may_end_the_graph_without_success(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graphless_gateway: Agent,
+):
+    graph = build_agent_graph([("gateway", graphless_gateway)])
+
+    response = enable_via_api(client, admin_headers, graph.id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["warnings"] == []
+
+
+def test_a_write_to_an_enabled_graph_must_keep_its_bindings_valid(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    tasked_agent: Agent,
+):
+    graph = build_agent_graph(
+        [
+            ("a", graph_agents["Alpha"]),
+            ("b", tasked_agent, False, {"task": "recovery.task_name"}),
+        ],
+        [("a", "b")],
+        enabled=True,
+    )
+
+    response = client.patch(
+        f"/agent_graphs/{graph.id}/nodes/{graph.nodes['b']}",
+        json={"input_map": {"task": "a.finding.raeson"}},
+        headers=admin_headers,
+    )
+
+    _rejected(response, "Node 'b'", "'raeson'")
+    body = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers).json()
+    assert body["nodes"][1]["input_map"] == {"task": "recovery.task_name"}
+
+
+def test_a_recovery_path_reads_the_recovery_inputs_even_beside_a_node_keyed_recovery(
+    client: TestClient,
+    admin_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    tasked_agent: Agent,
+):
+    graph = build_agent_graph(
+        [
+            ("a", graph_agents["Alpha"]),
+            ("recovery", graph_agents["Beta"]),
+            ("b", tasked_agent, False, {"task": "recovery.task_name"}),
+        ],
+        [("a", "recovery", 0, CONDITION), ("a", "b", 1), ("recovery", "b")],
+    )
+
+    response = enable_via_api(client, admin_headers, graph.id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text

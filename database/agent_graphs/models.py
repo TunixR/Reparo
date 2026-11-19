@@ -396,5 +396,9 @@ class AgentGraphRead(SQLModel):
     node_timeout_s: float | None
     nodes: list[AgentGraphNodeRead]
     edges: list[AgentGraphEdgeRead]
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="What looks wrong with the graph without making it invalid.",
+    )
     created_at: datetime
     updated_at: datetime
