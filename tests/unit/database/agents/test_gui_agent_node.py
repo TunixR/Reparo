@@ -12,6 +12,7 @@ from database.agent_graphs.runner import NodeRun
 from database.agents.models import Agent, AgentType, Argument
 from database.agents.tooled_gui_agent import GuiAction, GuiRunReport
 from database.provider.models import Router
+from tests.unit.fixtures.agent_fixtures import node_state
 from tests.unit.shared.fake_websocket import FakeWebSocket, make_test_image_bytes
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 from tests.unit.shared.tooled_gui_fakes import GUI_TASK_INPUT, make_robot, patch_gui_io
@@ -70,7 +71,7 @@ async def test_report_lists_the_actions_and_the_finished_summary(
     )
     robot = make_robot()
 
-    run = await agent.run_node({"websocket": robot}, _inputs())
+    run = await agent.run_node(node_state(_inputs(), websocket=robot), {})
 
     assert isinstance(run, NodeRun)
     assert run.output == GuiRunReport(
@@ -103,7 +104,7 @@ async def test_action_cap_ends_the_run_without_reaching_the_goal(
     )
     robot = make_robot()
 
-    run = await agent.run_node({"websocket": robot}, _inputs())
+    run = await agent.run_node(node_state(_inputs(), websocket=robot), {})
 
     assert isinstance(run.output, GuiRunReport)
     assert run.output.goal_reached is False
@@ -122,7 +123,7 @@ async def test_finished_without_success_reports_the_goal_not_reached(
         ToolCall("finished", {"content": "The form is gone", "success": False})
     )
 
-    run = await agent.run_node({"websocket": make_robot()}, _inputs())
+    run = await agent.run_node(node_state(_inputs(), websocket=make_robot()), {})
 
     assert run.output == GuiRunReport(
         goal_reached=False, summary="The form is gone", actions=[]
@@ -145,11 +146,11 @@ async def test_robot_disconnect_propagates(gui_node: GuiNode) -> None:
     robot = DisconnectingRobot([make_test_image_bytes(size=(64, 48))])
 
     with pytest.raises(WebSocketDisconnect):
-        _ = await agent.run_node({"websocket": robot}, _inputs())
+        _ = await agent.run_node(node_state(_inputs(), websocket=robot), {})
 
 
 async def test_model_error_propagates(gui_node: GuiNode) -> None:
     agent = gui_node(ConnectionError("model endpoint unreachable"))
 
     with pytest.raises(ConnectionError, match="model endpoint unreachable"):
-        _ = await agent.run_node({"websocket": make_robot()}, _inputs())
+        _ = await agent.run_node(node_state(_inputs(), websocket=make_robot()), {})

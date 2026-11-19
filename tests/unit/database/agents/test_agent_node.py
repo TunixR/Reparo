@@ -5,19 +5,29 @@ import uuid
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 from sqlmodel import Session
 from strands import Agent as StrandsAgent
 from strands import tool
 
-from database.agent_graphs.runner import NodeRun
+from database.agent_graphs.runner import AgentGraphContext, NodeRun
 from database.agents.models import Agent, AgentTool
 from database.tools.models import Tool
-from tests.unit.fixtures.agent_fixtures import EntryPoint, ScriptedAgent, ScriptedReport
+from tests.unit.fixtures.agent_fixtures import (
+    EntryPoint,
+    ScriptedAgent,
+    ScriptedReport,
+    node_state,
+)
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
 
 # The first LLM phase answers in text, the structured-output phase fills the report.
 TURNS = ("Looked at the robot.", ToolCall("ScriptedReport", {"done": True}))
 INPUTS: dict[str, Any] = {"task": "Recover the robot"}
+
+
+class _Task(BaseModel):
+    task: str
 
 
 @tool
@@ -71,7 +81,7 @@ async def test_run_node_returns_what_call_returns_as_a_model(
     as_dict = await agent(invocation_state={"websocket": None}, **INPUTS)
 
     agent, _ = scripted_agent(*TURNS)
-    run = await agent.run_node({"websocket": None}, INPUTS)
+    run = await agent.run_node(node_state(INPUTS, websocket=None), {})
 
     assert isinstance(run, NodeRun)
     assert isinstance(run.output, ScriptedReport)
@@ -93,7 +103,7 @@ async def test_run_node_validates_its_inputs(scripted_agent: ScriptedAgent) -> N
     agent, model = scripted_agent(*TURNS)
 
     with pytest.raises(ValueError, match="Expected 1 arguments"):
-        _ = await agent.run_node({"websocket": None}, {})
+        _ = await agent.run_node(node_state({}, websocket=None), {})
     assert model.calls == 0
 
 
@@ -188,3 +198,38 @@ async def test_agent_as_a_tool_answers_with_its_structured_response(
     ]
     assert tool_result["status"] == "success"
     assert tool_result["content"] == [{"text": json.dumps({"done": True})}]
+
+
+def test_bind_inputs_follows_the_input_map_before_names(
+    scripted_agent: ScriptedAgent,
+) -> None:
+    agent, _ = scripted_agent(*TURNS)
+    context = AgentGraphContext(recovery_inputs={"task": "by name", "goal": "mapped"})
+
+    assert agent.bind_inputs(context, {}) == {"task": "by name"}
+    assert agent.bind_inputs(context, {"task": "recovery.goal"}) == {"task": "mapped"}
+
+
+def test_bind_inputs_falls_back_to_the_latest_output(
+    scripted_agent: ScriptedAgent,
+) -> None:
+    agent, _ = scripted_agent(*TURNS)
+    context = AgentGraphContext(recovery_inputs={})
+
+    assert agent.bind_inputs(context, {}) == {}
+    context.record("first", _Task(task="older"))
+    context.record("second", _Task(task="newer"))
+    assert agent.bind_inputs(context, {}) == {"task": "newer"}
+
+
+@pytest.mark.asyncio
+async def test_run_node_rejects_a_mapped_path_without_a_value(
+    scripted_agent: ScriptedAgent,
+) -> None:
+    agent, model = scripted_agent(*TURNS)
+
+    with pytest.raises(ValueError, match="maps argument 'task' to 'triage.task'"):
+        _ = await agent.run_node(
+            node_state({}, websocket=None), {"task": "triage.task"}
+        )
+    assert model.calls == 0

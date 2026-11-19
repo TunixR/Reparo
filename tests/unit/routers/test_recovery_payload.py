@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agent_graphs.runner import NodeRun
+from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
 from database.agents.models import Agent
 from database.logging.models import RecoveryContext, RobotException
 from robot.capabilities import CAPABILITIES_STATE_KEY
@@ -47,9 +47,11 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         raising=True,
     )
 
-    async def _fake_run_node(_self, invocation_state, inputs):  # pyright: ignore[reportMissingParameterType]
+    async def _fake_run_node(self, invocation_state, input_map):  # pyright: ignore[reportMissingParameterType]
         captured_invocation["invocation_state"] = invocation_state
-        captured_invocation["inputs"] = inputs
+        captured_invocation["inputs"] = self.bind_inputs(
+            invocation_state[AGENT_GRAPH_CONTEXT_KEY], input_map
+        )
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
             continue_from_model_event_id="click_submit",
@@ -187,7 +189,7 @@ def test_recovery_ws_ingest_stores_declared_capabilities(
     }
     captured: dict[str, Any] = {}
 
-    async def _fake_run_node(_self, invocation_state, _inputs):  # pyright: ignore[reportMissingParameterType]
+    async def _fake_run_node(_self, invocation_state, _input_map):  # pyright: ignore[reportMissingParameterType]
         captured["capabilities"] = invocation_state[CAPABILITIES_STATE_KEY]
         return NodeRun(output=ResponseToRPA(success=False))
 
@@ -219,7 +221,8 @@ def test_recovery_ws_accepts_recovery_task_and_does_not_pass_it_to_the_agent(
 ):
     calls: list[dict[str, Any]] = []
 
-    async def _fake_run_node(_self, invocation_state, inputs):  # pyright: ignore[reportMissingParameterType]
+    async def _fake_run_node(self, invocation_state, input_map):  # pyright: ignore[reportMissingParameterType]
+        inputs = self.bind_inputs(invocation_state[AGENT_GRAPH_CONTEXT_KEY], input_map)
         calls.append({"invocation_state": invocation_state, "inputs": inputs})
         return NodeRun(output=ResponseToRPA(success=False))
 

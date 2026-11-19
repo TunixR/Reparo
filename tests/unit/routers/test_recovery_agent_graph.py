@@ -133,10 +133,10 @@ def node_runs(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]
     original = Agent.run_node
 
     async def _spy(
-        self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
     ) -> NodeRun:
         runs.append((self.name, invocation_state))
-        return await original(self, invocation_state, inputs)
+        return await original(self, invocation_state, input_map)
 
     monkeypatch.setattr(Agent, "run_node", _spy)
     return runs
@@ -297,10 +297,10 @@ def test_leftover_state_is_cleaned_but_never_copied_between_nodes(
     spy = Agent.run_node
 
     async def _leave_leftovers(
-        self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
     ) -> NodeRun:
         seen.append(set(invocation_state))
-        run = await spy(self, invocation_state, inputs)
+        run = await spy(self, invocation_state, input_map)
         invocation_state.update(
             {"parent_trace_id": "x", "event_loop_cycle_id": "y", "agent": "z"}
         )
@@ -345,7 +345,7 @@ def test_a_passed_execution_timeout_is_done_without_success(
     ran: list[str] = []
 
     async def _slow_node(
-        self: Agent, _state: dict[str, Any], _inputs: Mapping[str, Any]
+        self: Agent, _state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         ran.append(self.name)
         await asyncio.sleep(0.05)
@@ -370,7 +370,7 @@ def test_a_node_timeout_is_an_internal_error(
     linear_graph(node_timeout_s=0.05)
 
     async def _hanging_node(
-        _self: Agent, _state: dict[str, Any], _inputs: Mapping[str, Any]
+        _self: Agent, _state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         await asyncio.sleep(1)
         return NodeRun(output=Triage(diagnosis="too late"))

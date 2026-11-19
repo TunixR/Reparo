@@ -264,7 +264,7 @@ async def _run_agent_graph(
             recovery_inputs=_recovery_inputs(recovery_context)
         ),
     }
-    graph = AgentGraph.load(session, graph_id)
+    graph = session.get(AgentGraph, graph_id)
     if graph is None:
         raise LookupError(f"The agent graph {graph_id} is gone.")
     with turn.agent_graph_run():

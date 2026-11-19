@@ -22,7 +22,7 @@ from sqlmodel import Session, select
 import routers.recovery as recovery_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agent_graphs.runner import NodeRun
+from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
 from database.agents.models import (
     Agent,
     AgentTool,
@@ -558,7 +558,7 @@ def test_a_last_output_without_success_is_not_a_success(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def _fake_run_node(
-        _self: Agent, invocation_state: dict[str, Any], _inputs: Mapping[str, Any]
+        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
@@ -585,8 +585,9 @@ def test_variables_come_from_code_not_from_the_llm(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def _fake_run_node(
-        _self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
     ) -> NodeRun:
+        inputs = self.bind_inputs(invocation_state[AGENT_GRAPH_CONTEXT_KEY], input_map)
         invocation_state["variables"]["retry"] = 2
         inputs["variables"]["invoice_id"] = "HALLUCINATED"
         return NodeRun(

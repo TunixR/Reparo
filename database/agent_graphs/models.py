@@ -1,5 +1,4 @@
 import asyncio
-from contextlib import suppress
 import uuid
 from datetime import UTC, datetime
 from time import monotonic
@@ -8,7 +7,6 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy import Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import joinedload, selectinload
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
 from database.agent_graphs.runner import (
@@ -57,7 +55,9 @@ class AgentGraph(SQLModel, table=True):
     )
 
     nodes: list["AgentGraphNode"] = Relationship(
-        back_populates="agent_graph", cascade_delete=True
+        back_populates="agent_graph",
+        cascade_delete=True,
+        sa_relationship_kwargs={"lazy": "selectin"},
     )
     edges: list["AgentGraphEdge"] = Relationship(
         back_populates="agent_graph", cascade_delete=True
@@ -72,24 +72,6 @@ class AgentGraph(SQLModel, table=True):
         return session.exec(
             select(cls.id).where(
                 col(cls.is_default_recovery).is_(True), col(cls.enabled).is_(True)
-            )
-        ).first()
-
-    @classmethod
-    def load(cls, session: Session, graph_id: uuid.UUID) -> "AgentGraph | None":
-        """The graph with its nodes, edges and node agents (with their routers,
-        tools and arguments), so nothing lazy-loads during a run."""
-        return session.exec(
-            select(cls)
-            .where(cls.id == graph_id)
-            .options(
-                selectinload(cls.nodes).options(  # pyright: ignore[reportArgumentType] - a relationship attribute
-                    joinedload(AgentGraphNode.agent),  # pyright: ignore[reportArgumentType] - a relationship attribute
-                    selectinload(AgentGraphNode.outgoing).joinedload(  # pyright: ignore[reportArgumentType] - a relationship attribute
-                        AgentGraphEdge.target  # pyright: ignore[reportArgumentType] - a relationship attribute
-                    ),
-                ),
-                selectinload(cls.edges),  # pyright: ignore[reportArgumentType] - a relationship attribute
             )
         ).first()
 
@@ -135,9 +117,8 @@ class AgentGraph(SQLModel, table=True):
                     terminal_node, output, nodes_run, "execution_timeout"
                 )
             clean_state(state)
-            inputs = node.bind(context)
             async with asyncio.timeout(self.node_timeout_s):
-                run = await node.agent.run_node(state, inputs)
+                run = await node.agent.run_node(state, node.input_map)
             context.record(node.key, run.output)
             terminal_node, output = node.key, run.output
             nodes_run += 1
@@ -159,7 +140,9 @@ class AgentGraphNode(SQLModel, table=True):
         description="The node's identity in its graph, and the key of its output."
     )
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="RESTRICT")
-    agent: "Agent" = Relationship(back_populates="graph_nodes")  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
+    agent: "Agent" = Relationship(  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
+        back_populates="graph_nodes", sa_relationship_kwargs={"lazy": "joined"}
+    )
     is_entry: bool = Field(default=False, description="Whether the run starts here.")
     input_map: dict[str, str] = Field(
         default_factory=dict,
@@ -175,33 +158,9 @@ class AgentGraphNode(SQLModel, table=True):
         sa_relationship_kwargs={
             "foreign_keys": "AgentGraphEdge.source_node_id",
             "passive_deletes": True,
+            "lazy": "selectin",
         },
     )
-
-    def bind(self, context: AgentGraphContext) -> dict[str, Any]:
-        """The agent's arguments: from ``input_map``, else by name.
-
-        By name looks in the recovery inputs, then in the outputs from the most
-        recent back. An argument found nowhere is left out, for the agent to reject.
-        """
-        inputs: dict[str, Any] = {}
-        for argument in self.agent.arguments:
-            name = argument.name
-            if name in self.input_map:
-                path = self.input_map[name]
-                try:
-                    inputs[name] = context.resolve(path)
-                except KeyError as exc:
-                    raise ValueError(
-                        f"Node '{self.key}' maps argument '{name}' to '{path}', "
-                        "which has no value."
-                    ) from exc
-            elif name in context.recovery_inputs:
-                inputs[name] = context.recovery_inputs[name]
-            else:
-                with suppress(KeyError):
-                    inputs[name] = context.latest(name)
-        return inputs
 
     def next_node(self) -> "AgentGraphNode | None":
         """The target of the lowest-priority unconditional outgoing edge."""
@@ -236,7 +195,10 @@ class AgentGraphEdge(SQLModel, table=True):
         foreign_key="agentgraphnode.id", ondelete="CASCADE"
     )
     target: AgentGraphNode = Relationship(
-        sa_relationship_kwargs={"foreign_keys": "AgentGraphEdge.target_node_id"}
+        sa_relationship_kwargs={
+            "foreign_keys": "AgentGraphEdge.target_node_id",
+            "lazy": "joined",
+        }
     )
     priority: int = Field(default=0)
     condition: dict[str, Any] | None = Field(

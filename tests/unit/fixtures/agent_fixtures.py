@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 import database.agents.models as agent_models
+from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
 from database.agents.models import Agent, AgentType, Argument
 from database.provider.models import Router
 from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
@@ -148,6 +149,18 @@ type EntryPoint = Callable[
 """Runs an agent on a state and inputs and returns its structured output as a dict."""
 
 
+def node_state(inputs: dict[str, Any], **state: Any) -> dict[str, Any]:
+    """An invocation state whose graph context holds ``inputs`` as recovery inputs,
+    so ``run_node`` binds them by name."""
+    return with_graph_context(state, inputs)
+
+
+def with_graph_context(state: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """Put a graph context holding ``inputs`` into ``state`` itself, and return it."""
+    state[AGENT_GRAPH_CONTEXT_KEY] = AgentGraphContext(recovery_inputs=inputs)
+    return state
+
+
 async def _via_call(
     agent: Agent, state: dict[str, Any], inputs: dict[str, Any]
 ) -> dict[str, Any]:
@@ -157,7 +170,9 @@ async def _via_call(
 async def _via_run_node(
     agent: Agent, state: dict[str, Any], inputs: dict[str, Any]
 ) -> dict[str, Any]:
-    return (await agent.run_node(state, inputs)).output.model_dump()
+    return (
+        await agent.run_node(with_graph_context(state, inputs), {})
+    ).output.model_dump()
 
 
 @pytest.fixture(params=[_via_call, _via_run_node], ids=["__call__", "run_node"])

@@ -150,7 +150,7 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
     robot_key = make_robot_key(name="Integration", key_raw=key_raw)
 
     async def _gateway(
-        _self: Agent, invocation_state: dict[str, Any], _inputs: Mapping[str, Any]
+        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         # A real Strands agent with a scripted model: its spans must join the turn.
         from strands import Agent as StrandsAgent
