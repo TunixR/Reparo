@@ -22,11 +22,11 @@ from agent_tools.utils import (
     declared_not_recovered,
     stored_continuation,
 )
+from database.agent_graphs.loader import load_agent_graph
 from database.agent_graphs.runner import (
     AGENT_GRAPH_CONTEXT_KEY,
     AgentGraphContext,
     GraphOutcome,
-    LoadedAgentGraph,
     run_graph,
 )
 from database.agents.models import Agent, AgentType
@@ -58,8 +58,6 @@ ROBOT_KEY_HEADER = "X-ROBOT-KEY"
 INVALID_RECOVERY_PAYLOAD = "INVALID_RECOVERY_PAYLOAD"
 NO_GATEWAY_AGENT = "NO_GATEWAY_AGENT"
 INTERNAL_ERROR = "INTERNAL_ERROR"
-
-GATEWAY_NODE_KEY = "gateway"
 
 # Websocket close code (RFC 6455): unsupported data.
 CLOSE_INVALID_PAYLOAD = 1003
@@ -205,10 +203,6 @@ def _build_answer(
     return answer, failure_reason
 
 
-def _load_agent_graph(gateway: Agent) -> LoadedAgentGraph:
-    return LoadedAgentGraph.single(GATEWAY_NODE_KEY, gateway)
-
-
 def _recovery_inputs(recovery_context: RecoveryContext) -> dict[str, Any]:
     """The gateway's arguments, from the recovery payload."""
     ui_log = [
@@ -260,6 +254,7 @@ def _recovery_inputs(recovery_context: RecoveryContext) -> dict[str, Any]:
 
 
 async def _run_agent_graph(
+    session: database.SessionDep,
     gateway: Agent,
     robot: RobotConnection,
     exception: RobotException,
@@ -277,8 +272,9 @@ async def _run_agent_graph(
             recovery_inputs=_recovery_inputs(recovery_context)
         ),
     }
+    graph = load_agent_graph(session, gateway)
     with turn.agent_graph_run():
-        outcome = await run_graph(_load_agent_graph(gateway), invocation_state)
+        outcome = await run_graph(graph, invocation_state)
     return outcome, invocation_state
 
 
@@ -341,7 +337,7 @@ async def _run_recovery_turn(
         # The agent graph run is a child span of this turn. It is cancelled as
         # soon as the robot aborts or goes away.
         outcome, invocation_state = await robot.run(
-            _run_agent_graph(agent, robot, exception, recovery_context, turn)
+            _run_agent_graph(session, agent, robot, exception, recovery_context, turn)
         )
         answer, failure_reason = _build_answer(
             outcome.output,

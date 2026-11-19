@@ -56,6 +56,25 @@ def mock_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
     return make_agent(router=mock_router)
 
 
+_RECOVERY_ARGUMENTS = (
+    ("task_name", "str", "string"),
+    ("platform", "str", "string"),
+    ("os", "str", "string"),
+    ("variables", "dict", "object"),
+    ("ui_log", "list", "array"),
+    ("errored_act", "dict", "object"),
+    ("model", "str", "string"),
+)
+
+
+def recovery_arguments() -> list[Argument]:
+    """The seeded gateway's arguments: the seven recovery inputs."""
+    return [
+        Argument(name=name, description=name, type=type_, json_type=json_type)
+        for name, type_, json_type in _RECOVERY_ARGUMENTS
+    ]
+
+
 @pytest.fixture
 def gateway_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
     """Create a Gateway Orchestrator agent for recovery websocket tests."""
@@ -66,6 +85,7 @@ def gateway_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agen
         prompt="prompt",
         response_model=None,
         type=AgentType.GatewayAgent,
+        arguments=recovery_arguments(),
     )
 
 

@@ -217,6 +217,10 @@ class Agent(SQLModel, table=True):
         },
     )
 
+    graph_nodes: list["AgentGraphNode"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
+        back_populates="agent"
+    )
+
     traces: list["AgentTrace"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
         back_populates="agent",
         sa_relationship_kwargs={"lazy": "joined"},

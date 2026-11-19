@@ -9,6 +9,7 @@ from sqlmodel import SQLModel
 import database.populators as populators
 from database.engine import SessionDep, general_engine, get_session, postgres_url
 
+from .agent_graphs.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in agent_graphs.models
 from .agents.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in agents.models
 from .auth.models import *  # noqa: F403 # Needed for SQLModel to recognize the models defined in auth.models
 from .keys.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in keys.models

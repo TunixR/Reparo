@@ -4,6 +4,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
+from database.agent_graphs.models import *  # noqa: F403 Registers the agent graph tables with SQLModel.metadata
 from database.agents.models import *  # noqa: F403
 from database.auth.models import *  # noqa: F403
 from database.logging.models import *  # noqa: F403

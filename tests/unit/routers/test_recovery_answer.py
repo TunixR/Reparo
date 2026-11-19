@@ -22,12 +22,7 @@ from sqlmodel import Session, select
 import routers.recovery as recovery_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agent_graphs.runner import (
-    AgentGraphEdge,
-    AgentGraphNode,
-    LoadedAgentGraph,
-    NodeRun,
-)
+from database.agent_graphs.runner import NodeRun
 from database.agents.models import (
     Agent,
     AgentTool,
@@ -39,6 +34,7 @@ from database.logging.models import RobotException
 from database.provider.models import Router
 from database.tools.models import Tool
 from templates.gateway import ResponseToRPA
+from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 from tests.unit.agent_tools._shared.process_models import (
     COMPACT_MODEL,
     SPENDING_APPROVAL_MODEL,
@@ -332,24 +328,19 @@ def test_a_failed_agent_graph_is_done_without_success(
     spending_payload: dict[str, Any],
     script: Callable[..., dict[str, ScriptedModel]],
     span_exporter: InMemorySpanExporter,
-    monkeypatch: pytest.MonkeyPatch,
+    agents: tuple[Agent, Agent],
+    make_agent_graph: MakeAgentGraph,
 ):
     models = script(
         gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(True)],
         error_turns=[_continuation("click_approve", [2]), "Recovered.", _report(True)],
     )
-
-    def _capped_graph(agent: Agent) -> LoadedAgentGraph:
-        return LoadedAgentGraph(
-            nodes=(
-                AgentGraphNode(key="gateway", agent=agent),
-                AgentGraphNode(key="gateway_again", agent=agent),
-            ),
-            max_node_executions=1,
-            edges=(AgentGraphEdge("gateway", "gateway_again"),),
-        )
-
-    monkeypatch.setattr(recovery_module, "_load_agent_graph", _capped_graph)
+    gateway, _ = agents
+    _ = make_agent_graph(
+        Node("gateway", gateway),
+        Node("gateway_again", gateway),
+        max_node_executions=1,
+    )
 
     message = _recover(client, robot_key_raw, spending_payload)
 

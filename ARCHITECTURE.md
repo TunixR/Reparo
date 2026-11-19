@@ -14,7 +14,7 @@ tries to recover them with LLM agents. Its main parts:
 | --- | --- | --- |
 | Recovery ingress | WebSocket a robot opens when it fails; one recovery per connection | `routers/recovery.py` |
 | Agents | Database-configured Strands agents: a gateway agent and the sub-agents it delegates to | `database/agents/` |
-| Agent graphs | The runner that executes a recovery one agent node at a time, starting at the gateway | `database/agent_graphs/` |
+| Agent graphs | Database-defined graphs of agent nodes, and the runner that executes a recovery one node at a time, starting at the gateway | `database/agent_graphs/` |
 | Tools | Python functions agents can call, registered in the database | `database/tools/`, `agent_tools/`, `gateway/` |
 | Provider routers | Which LLM backend and model each agent uses | `database/provider/`, `routers/provider.py` |
 | Trace logging | Per-recovery record of agent, tool and GUI steps, with screenshots in S3 | `database/logging/`, `agent_tools/hooks.py`, `s3/` |
@@ -65,12 +65,15 @@ sequenceDiagram
    capabilities (see [Robot protocol](#robot-protocol)).
 3. **Persist.** The raw payload is saved as a robot exception together with its recovery context
    (`database/logging/models.py`). The exception id is the recovery id used everywhere afterwards.
-4. **Run the gateway.** The backend loads the agent of type `GatewayAgent` and runs it, with the
-   recovery context as its inputs, as the entry node of an agent graph. Reparo's agent graph runner
-   (`database/agent_graphs/runner.py`) awaits one node at a time inside the recovery, so an abort
-   cancels it; today the graph is the gateway alone. The WebSocket and the exception id travel in
-   the shared Strands invocation state, so every node and every nested agent and tool can reach the
-   robot and attach its traces to the right recovery.
+4. **Run the agent graph.** The backend loads the agent of type `GatewayAgent` and the enabled
+   agent graph whose entry node it is, with every node's agent, before the run; without one, the
+   graph is the gateway alone. Reparo's agent graph runner (`database/agent_graphs/runner.py`)
+   awaits one node at a time inside the recovery, so an abort cancels it, and follows each node's
+   outgoing edge until none is left or a graph limit is hit. Each node's arguments bind from its
+   input map, else by name from the recovery context and then from the earlier nodes' structured
+   outputs. The WebSocket, the exception id and those outputs travel in the shared Strands
+   invocation state, so every node and every nested agent and tool can reach the robot and attach
+   its traces to the right recovery.
 5. **Delegate.** Agents call sub-agents as tools. In the seeded configuration the gateway hands UI
    errors to an error agent, which in turn uses a GUI agent to act on the desktop and then states
    whether the process was repaired and, if so, names the task of the process model the robot should
