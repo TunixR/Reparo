@@ -10,6 +10,7 @@ from observability import (
     setup_strands_telemetry,
     shutdown_observability,
 )
+from routers.agent_graphs import router as agent_graphs_router
 from routers.agents import router as agents_router
 from routers.auth import router as auth_router
 from routers.evals import router as evals_router
@@ -36,6 +37,7 @@ app.include_router(keys_router)
 app.include_router(recovery_router)
 app.include_router(evals_router)
 app.include_router(agents_router)
+app.include_router(agent_graphs_router)
 app.include_router(tools_router)
 app.include_router(provider_router)
 app.include_router(auth_router)

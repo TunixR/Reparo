@@ -176,6 +176,10 @@ inputs, runs it, and asks for a structured response using the configured Pydanti
   prompts in `default_prompts/`). Seeding only creates what is missing, so a changed default prompt
   reaches fresh databases only. After that, agents and routers can be changed at runtime through
   the API without a deploy.
+- **Editing agent graphs.** Administrators edit graphs, their nodes and their edges through the
+  API. A disabled graph is a draft and accepts any structure; enabling a graph, and every write to
+  an enabled one, must leave it runnable. Making a graph the default recovery graph takes over from
+  the previous default. The rules live in one module, `database/agent_graphs/service.py`.
 
 ## 4. Tools
 
