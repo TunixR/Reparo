@@ -10,6 +10,7 @@ from database.agent_graphs import service
 from database.agent_graphs.models import (
     AgentGraph,
     AgentGraphCreate,
+    AgentGraphDetail,
     AgentGraphEdge,
     AgentGraphEdgeCreate,
     AgentGraphEdgeRead,
@@ -96,9 +97,8 @@ def _edge(graph: AgentGraph, edge_id: UUID) -> AgentGraphEdge:
     return edge
 
 
-def _read(session: Session, graph: AgentGraph) -> AgentGraphRead:
-    session.refresh(graph)
-    return AgentGraphRead.model_validate(graph, from_attributes=True)
+def _detail(graph: AgentGraph) -> AgentGraphDetail:
+    return AgentGraphDetail.model_validate(graph, from_attributes=True)
 
 
 @router.get(
@@ -112,49 +112,49 @@ def list_agent_graphs(session: SessionDep) -> Sequence[AgentGraphRead]:
 
 
 @router.get(
-    "/{graph_id}", response_model=AgentGraphRead, summary="Get agent graph by ID"
+    "/{graph_id}", response_model=AgentGraphDetail, summary="Get agent graph by ID"
 )
-def get_agent_graph(graph_id: UUID, session: SessionDep) -> AgentGraphRead:
-    return AgentGraphRead.model_validate(
-        _graph(session, graph_id), from_attributes=True
-    )
+def get_agent_graph(graph_id: UUID, session: SessionDep) -> AgentGraphDetail:
+    return _detail(_graph(session, graph_id))
 
 
 @router.post(
     "/",
-    response_model=AgentGraphRead,
+    response_model=AgentGraphDetail,
     status_code=status.HTTP_201_CREATED,
     summary="Create agent graph",
     responses=_REJECTIONS,
 )
 def create_agent_graph(
     payload: AgentGraphCreate, session: SessionDep, _admin: AdminDep
-) -> AgentGraphRead:
+) -> AgentGraphDetail:
     graph = _write(
         session,
         "create agent graph",
         lambda: service.create_graph(session, payload),
     )
-    return _read(session, graph)
+    session.refresh(graph)
+    return _detail(graph)
 
 
 @router.patch(
     "/{graph_id}",
-    response_model=AgentGraphRead,
+    response_model=AgentGraphDetail,
     summary="Update agent graph",
     description="Enabling a graph, or changing an enabled one, validates it.",
     responses=_REJECTIONS,
 )
 def update_agent_graph(
     graph_id: UUID, payload: AgentGraphUpdate, session: SessionDep, _admin: AdminDep
-) -> AgentGraphRead:
+) -> AgentGraphDetail:
     graph = _graph(session, graph_id)
     _ = _write(
         session,
         "update agent graph",
         lambda: service.update_graph(session, graph, payload),
     )
-    return _read(session, graph)
+    session.refresh(graph)
+    return _detail(graph)
 
 
 @router.delete(

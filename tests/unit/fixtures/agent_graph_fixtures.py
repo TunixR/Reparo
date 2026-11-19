@@ -12,11 +12,38 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from httpx import Headers
 from httpx2 import Response
+from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
 from database.agent_graphs.models import AgentGraph, AgentGraphEdge, AgentGraphNode
-from database.agents.models import Agent, AgentType
+from agent_tools.utils import SET_CONTINUATION_FN_MODULE
+from database.agents.models import Agent, AgentTool, AgentType, Argument
 from database.provider.models import Router
+from database.tools.models import Tool
+
+
+class Finding(BaseModel):
+    reason: str
+    tags: list[str]
+
+
+class GraphReport(BaseModel):
+    """Output model of ``graph_agents``."""
+
+    done: bool
+    success: bool
+    attempts: int
+    note: str | None
+    finding: Finding
+    extra: dict[str, int]
+
+
+GRAPH_REPORT = f"{__name__}.GraphReport"
+
+
+def argument(name: str) -> Argument:
+    """A string argument called ``name``."""
+    return Argument(name=name, description=name, type="str", json_type="string")
 
 
 @dataclass(frozen=True)
@@ -148,8 +175,12 @@ def enable_via_api(client: TestClient, headers: Headers, graph_id: str) -> Respo
     )
 
 
-type NodeSpec = tuple[str, Agent] | tuple[str, Agent, bool]
-"""``(key, agent[, is_entry])``."""
+type NodeSpec = (
+    tuple[str, Agent]
+    | tuple[str, Agent, bool]
+    | tuple[str, Agent, bool, Mapping[str, str]]
+)
+"""``(key, agent[, is_entry[, input_map]])``."""
 
 type EdgeSpec = (
     tuple[str, str] | tuple[str, str, int] | tuple[str, str, int, dict[str, Any]]
@@ -189,14 +220,22 @@ def build_agent_graph(client: TestClient, admin_headers: Headers) -> BuildAgentG
         graph_id: str = created.json()["id"]
         ids: dict[str, str] = {}
         for index, spec in enumerate(nodes):
+            input_map: Mapping[str, str] = {}
             match spec:
                 case (key, agent):
                     is_entry = index == 0
                 case (key, agent, is_entry):
                     pass
+                case (key, agent, is_entry, input_map):
+                    pass
             response = client.post(
                 f"/agent_graphs/{graph_id}/nodes",
-                json={"key": key, "agent_id": str(agent.id), "is_entry": is_entry},
+                json={
+                    "key": key,
+                    "agent_id": str(agent.id),
+                    "is_entry": is_entry,
+                    "input_map": dict(input_map),
+                },
                 headers=admin_headers,
             )
             assert response.status_code == status.HTTP_201_CREATED, response.text
@@ -232,11 +271,22 @@ def build_agent_graph(client: TestClient, admin_headers: Headers) -> BuildAgentG
 def graph_agents(
     make_agent: Callable[..., Agent], mock_router: Router
 ) -> dict[str, Agent]:
-    """Three enabled agents, by name, to back graph nodes."""
+    """Three enabled agents, by name, to back graph nodes; each outputs a `GraphReport`."""
     return {
-        name: make_agent(router=mock_router, name=name)
+        name: make_agent(router=mock_router, name=name, response_model=GRAPH_REPORT)
         for name in ("Alpha", "Beta", "Gamma")
     }
+
+
+@pytest.fixture
+def gui_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
+    """A GUI agent taking a ``task``; it outputs a `GuiRunReport`."""
+    return make_agent(
+        router=mock_router,
+        name="Clicker",
+        type=AgentType.GuiAgent,
+        arguments=[argument("task")],
+    )
 
 
 @pytest.fixture
@@ -254,3 +304,37 @@ def disabled_agent(
 def graphless_gateway(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
     """A gateway agent in no graph, unlike ``gateway_agent``."""
     return make_agent(router=mock_router, name="Gateway", type=AgentType.GatewayAgent)
+
+
+@pytest.fixture
+def tasked_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
+    """An agent taking a ``task``; it outputs a `GraphReport`."""
+    return make_agent(
+        router=mock_router,
+        name="Tasked",
+        arguments=[argument("task")],
+        response_model=GRAPH_REPORT,
+    )
+
+
+@pytest.fixture
+def continuation_agent(
+    session: Session, make_agent: Callable[..., Agent], mock_router: Router
+) -> Agent:
+    """An agent with the set_continuation tool; it outputs a `GraphReport`."""
+    agent = make_agent(
+        router=mock_router, name="Continuer", response_model=GRAPH_REPORT
+    )
+    tool = Tool(
+        name="set_continuation",
+        description="Set where the robot continues.",
+        fn_module=SET_CONTINUATION_FN_MODULE,
+    )
+    session.add(tool)
+    session.commit()
+    session.add(
+        AgentTool(agent_id=agent.id, tool_id=tool.id, limit=None, required=True)
+    )
+    session.commit()
+    session.refresh(agent)
+    return agent

@@ -13,7 +13,7 @@ from database.agents.models import Agent
 from database.logging.models import RecoveryContext, RobotException
 from robot.capabilities import CAPABILITIES_STATE_KEY
 from templates.gateway import ResponseToRPA
-from templates.recovery_payload import RecoveryPayload
+from templates.recovery_payload import RecoveryInputs, RecoveryPayload
 
 
 @pytest.fixture
@@ -126,6 +126,8 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     state_variables = captured_invocation["invocation_state"]["variables"]
     assert state_variables == valid_recovery_payload["variables"]
     assert state_variables is not recovery_context.variables
+    inputs = captured_invocation["inputs"]
+    assert RecoveryInputs.model_validate(inputs).model_dump() == inputs
     assert (
         captured_invocation["inputs"]["task_name"]
         == valid_recovery_payload["task_name"]

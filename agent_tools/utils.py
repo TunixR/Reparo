@@ -173,3 +173,6 @@ def set_continuation(
     else:
         where = "in no loop"
     return f"ok: the robot continues from {target}, {where}."
+
+
+SET_CONTINUATION_FN_MODULE = f"{__name__}.set_continuation"
