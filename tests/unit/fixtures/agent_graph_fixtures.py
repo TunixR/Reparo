@@ -2,11 +2,12 @@
 Agent graph fixtures for unit tests.
 """
 
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from database.agent_graphs.models import AgentGraph, AgentGraphEdge, AgentGraphNode
 from database.agents.models import Agent
@@ -30,22 +31,32 @@ def make_agent_graph(session: Session) -> MakeAgentGraph:
     """Return a factory that persists an agent graph.
 
     The first node is the entry node. ``edges`` are unconditional ``(source,
-    target)`` key pairs; without them, the nodes are chained in order.
+    target)`` key pairs; without them, the nodes are chained in order. A new default
+    recovery graph takes over from the previous one.
     """
 
     def _make_agent_graph(
         *nodes: Node,
         edges: Sequence[tuple[str, str]] | None = None,
-        name: str = "Test Graph",
+        name: str | None = None,
         enabled: bool = True,
+        is_default_recovery: bool = True,
         max_node_executions: int | None = None,
         execution_timeout_s: float | None = None,
         node_timeout_s: float | None = None,
     ) -> AgentGraph:
+        if is_default_recovery:
+            for previous in session.exec(
+                select(AgentGraph).where(col(AgentGraph.is_default_recovery).is_(True))
+            ):
+                previous.is_default_recovery = False
+                session.add(previous)
+            session.commit()
         graph = AgentGraph(
-            name=name,
+            name=name or f"Test Graph {uuid.uuid4()}",
             description="A graph for testing.",
             enabled=enabled,
+            is_default_recovery=is_default_recovery,
             max_node_executions=max_node_executions,
             execution_timeout_s=execution_timeout_s,
             node_timeout_s=node_timeout_s,

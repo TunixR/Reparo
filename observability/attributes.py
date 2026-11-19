@@ -48,6 +48,7 @@ RECOVERY_PAYLOAD_HAS_ERRORED_ACTIVITY = "recovery.payload.has_errored_activity"
 RECOVERY_PAYLOAD_INVALID_FIELDS = "recovery.payload.invalid_fields"
 
 AGENT_ID = "agent.id"
+AGENT_GRAPH_ID = "agent_graph.id"
 AGENT_TRACE_ID = "agent_trace.id"
 AGENT_COST = "agent.cost"
 
@@ -85,7 +86,7 @@ EVENT_HTTP_UNHANDLED_EXCEPTION = "http.unhandled_exception"
 
 EVENT_RECOVERY_AUTH_FAILED = "recovery.auth_failed"
 EVENT_RECOVERY_KEEP_ALIVE_FAILED = "recovery.keep_alive_failed"
-EVENT_RECOVERY_NO_GATEWAY_AGENT = "recovery.no_gateway_agent"
+EVENT_RECOVERY_NO_AGENT_GRAPH = "recovery.no_agent_graph"
 EVENT_RECOVERY_PAYLOAD_INVALID = "recovery.payload_invalid"
 EVENT_RECOVERY_TURN_FAILED = "recovery.turn_failed"
 EVENT_RECOVERY_EVAL_INVALID = "recovery.eval_invalid"

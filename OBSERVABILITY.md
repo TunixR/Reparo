@@ -157,7 +157,7 @@ the model's text, so its `gui.action` and `gui.screenshot` spans sit directly un
 
 | Span | Attributes |
 | --- | --- |
-| `recovery.turn` | `robot_key.id`, `agent.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_gateway_agent`, `internal_error`, `robot_aborted`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`, `not_recovered`, `agent_graph_failed`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span events `missing_continuation`, `not_recovered` or `agent_graph_failed`, and `robot_aborted` with `recovery.abort.code` and `recovery.abort.description` (bounded). The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
+| `recovery.turn` | `robot_key.id`, `agent_graph.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_agent_graph`, `internal_error`, `robot_aborted`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`, `not_recovered`, `agent_graph_failed`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span events `missing_continuation`, `not_recovered` or `agent_graph_failed`, and `robot_aborted` with `recovery.abort.code` and `recovery.abort.description` (bounded). The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
 | `recovery.persist` | none |
 | `invoke_agent` (Strands) | `agent.id`, `agent_trace.id` (joins the trace to the `AgentTrace` row) |
 | `execute_tool` (GUI agent) | `gui.task.name`, `gui.task.process_model`, `gui.task.ui_log_count`, `gui.task.has_errored_activity`, `gui.task.iterations`, `gui.task.outcome` (`done`, `model_stopped`, `client_disconnected`, `error`; UI-TARS also `max_actions_exceeded`, `unparseable_response`); errors carry a redacted exception |
@@ -172,7 +172,7 @@ Log events:
 | --- | --- | --- |
 | `recovery.auth_failed` | WARN | `error.type`, `client.address` |
 | `recovery.keep_alive_failed` | WARN | `error.type` |
-| `recovery.no_gateway_agent` | ERROR | none |
+| `recovery.no_agent_graph` | ERROR | none |
 | `recovery.payload_invalid` | WARN | `recovery.payload.invalid_fields` (paths only) |
 | `recovery.turn_failed` | ERROR | `recovery.id`, `error.type`, redacted `exception.*` |
 | `recovery.eval_invalid` | WARN | `error.type` |

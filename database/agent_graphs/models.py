@@ -1,21 +1,44 @@
+import asyncio
+from contextlib import suppress
 import uuid
 from datetime import UTC, datetime
+from time import monotonic
 from typing import Any
 
-from sqlalchemy import UniqueConstraint
+from pydantic import BaseModel
+from sqlalchemy import Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy.orm import joinedload, selectinload
+from sqlmodel import Field, Relationship, Session, SQLModel, col, select
+
+from database.agent_graphs.runner import (
+    AGENT_GRAPH_CONTEXT_KEY,
+    AgentGraphContext,
+    GraphOutcome,
+    clean_state,
+)
 
 
 class AgentGraph(SQLModel, table=True):
-    """A recovery pipeline: agents as nodes, run one at a time along the edges."""
+    """A pipeline of agents as nodes, run one at a time along the edges."""
+
+    __table_args__ = (
+        Index(
+            "uq_agentgraph_default_recovery",
+            "is_default_recovery",
+            unique=True,
+            postgresql_where=text("is_default_recovery"),
+            sqlite_where=text("is_default_recovery"),
+        ),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     name: str = Field(unique=True, description="Name of the agent graph.")
-    description: str = Field(description="What the agent graph recovers.")
-    enabled: bool = Field(
+    description: str = Field(description="What the agent graph does.")
+    enabled: bool = Field(default=False, description="Whether the graph may run.")
+    is_default_recovery: bool = Field(
         default=False,
-        description="Whether recoveries entering at its gateway run this graph.",
+        description="Whether recoveries run this graph; at most one graph is.",
     )
     max_node_executions: int | None = Field(
         default=None,
@@ -43,6 +66,84 @@ class AgentGraph(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
+    @classmethod
+    def default_recovery_id(cls, session: Session) -> uuid.UUID | None:
+        """The id of the enabled graph recoveries run, if there is one."""
+        return session.exec(
+            select(cls.id).where(
+                col(cls.is_default_recovery).is_(True), col(cls.enabled).is_(True)
+            )
+        ).first()
+
+    @classmethod
+    def load(cls, session: Session, graph_id: uuid.UUID) -> "AgentGraph | None":
+        """The graph with its nodes, edges and node agents (with their routers,
+        tools and arguments), so nothing lazy-loads during a run."""
+        return session.exec(
+            select(cls)
+            .where(cls.id == graph_id)
+            .options(
+                selectinload(cls.nodes).options(  # pyright: ignore[reportArgumentType] - a relationship attribute
+                    joinedload(AgentGraphNode.agent),  # pyright: ignore[reportArgumentType] - a relationship attribute
+                    selectinload(AgentGraphNode.outgoing).joinedload(  # pyright: ignore[reportArgumentType] - a relationship attribute
+                        AgentGraphEdge.target  # pyright: ignore[reportArgumentType] - a relationship attribute
+                    ),
+                ),
+                selectinload(cls.edges),  # pyright: ignore[reportArgumentType] - a relationship attribute
+            )
+        ).first()
+
+    @property
+    def entry(self) -> "AgentGraphNode":
+        entry = next((node for node in self.nodes if node.is_entry), None)
+        if entry is None:
+            raise ValueError(f"The agent graph '{self.name}' has no entry node.")
+        return entry
+
+    @property
+    def node_limit(self) -> int:
+        """``max_node_executions``, or the node count, so every run ends."""
+        return self.max_node_executions or len(self.nodes)
+
+    async def run(self, state: dict[str, Any]) -> GraphOutcome:
+        """Run from the entry node until a node has no outgoing edge to follow.
+
+        Nodes are awaited in the caller's task, so cancelling the caller cancels the
+        running node. Anything a node raises propagates unchanged, including the
+        `TimeoutError` of a node that runs past ``node_timeout_s``. ``state`` holds an
+        `AgentGraphContext` under `AGENT_GRAPH_CONTEXT_KEY` and is shared, never
+        copied, by every node.
+        """
+        context: AgentGraphContext = state[AGENT_GRAPH_CONTEXT_KEY]
+        context.nodes = {node.key: node for node in self.nodes}
+        deadline = (
+            None
+            if self.execution_timeout_s is None
+            else monotonic() + self.execution_timeout_s
+        )
+        terminal_node: str | None = None
+        output: BaseModel | None = None
+        nodes_run = 0
+        node: AgentGraphNode | None = self.entry
+        while node is not None:
+            if nodes_run >= self.node_limit:
+                return GraphOutcome(
+                    terminal_node, output, nodes_run, "max_node_executions"
+                )
+            if deadline is not None and monotonic() > deadline:
+                return GraphOutcome(
+                    terminal_node, output, nodes_run, "execution_timeout"
+                )
+            clean_state(state)
+            inputs = node.bind(context)
+            async with asyncio.timeout(self.node_timeout_s):
+                run = await node.agent.run_node(state, inputs)
+            context.record(node.key, run.output)
+            terminal_node, output = node.key, run.output
+            nodes_run += 1
+            node = node.next_node()
+        return GraphOutcome(terminal_node, output, nodes_run)
+
 
 class AgentGraphNode(SQLModel, table=True):
     """An agent's place in an agent graph; one agent may back several nodes."""
@@ -69,6 +170,47 @@ class AgentGraphNode(SQLModel, table=True):
         ),
     )
 
+    outgoing: list["AgentGraphEdge"] = Relationship(
+        back_populates="source",
+        sa_relationship_kwargs={
+            "foreign_keys": "AgentGraphEdge.source_node_id",
+            "passive_deletes": True,
+        },
+    )
+
+    def bind(self, context: AgentGraphContext) -> dict[str, Any]:
+        """The agent's arguments: from ``input_map``, else by name.
+
+        By name looks in the recovery inputs, then in the outputs from the most
+        recent back. An argument found nowhere is left out, for the agent to reject.
+        """
+        inputs: dict[str, Any] = {}
+        for argument in self.agent.arguments:
+            name = argument.name
+            if name in self.input_map:
+                path = self.input_map[name]
+                try:
+                    inputs[name] = context.resolve(path)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Node '{self.key}' maps argument '{name}' to '{path}', "
+                        "which has no value."
+                    ) from exc
+            elif name in context.recovery_inputs:
+                inputs[name] = context.recovery_inputs[name]
+            else:
+                with suppress(KeyError):
+                    inputs[name] = context.latest(name)
+        return inputs
+
+    def next_node(self) -> "AgentGraphNode | None":
+        """The target of the lowest-priority unconditional outgoing edge."""
+        edges = sorted(
+            (edge for edge in self.outgoing if edge.condition is None),
+            key=lambda edge: edge.priority,
+        )
+        return edges[0].target if edges else None
+
 
 class AgentGraphEdge(SQLModel, table=True):
     """A step from one node to the next; lower priorities are evaluated first."""
@@ -86,8 +228,15 @@ class AgentGraphEdge(SQLModel, table=True):
     source_node_id: uuid.UUID = Field(
         foreign_key="agentgraphnode.id", ondelete="CASCADE"
     )
+    source: AgentGraphNode = Relationship(
+        back_populates="outgoing",
+        sa_relationship_kwargs={"foreign_keys": "AgentGraphEdge.source_node_id"},
+    )
     target_node_id: uuid.UUID = Field(
         foreign_key="agentgraphnode.id", ondelete="CASCADE"
+    )
+    target: AgentGraphNode = Relationship(
+        sa_relationship_kwargs={"foreign_keys": "AgentGraphEdge.target_node_id"}
     )
     priority: int = Field(default=0)
     condition: dict[str, Any] | None = Field(

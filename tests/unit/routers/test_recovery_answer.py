@@ -111,8 +111,13 @@ def span_exporter(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemorySpanExpor
 
 
 @pytest.fixture
-def agents(session: Session, mock_router: Router) -> tuple[Agent, Agent]:
-    """A gateway whose only sub-agent is an error agent with `set_continuation`."""
+def agents(
+    session: Session, mock_router: Router, make_agent_graph: MakeAgentGraph
+) -> tuple[Agent, Agent]:
+    """A gateway whose only sub-agent is an error agent with `set_continuation`.
+
+    The gateway is the one node of the default recovery graph.
+    """
     tool = Tool(
         id=uuid.uuid4(),
         name="set_continuation",
@@ -172,6 +177,7 @@ def agents(session: Session, mock_router: Router) -> tuple[Agent, Agent]:
     session.commit()
     session.refresh(gateway)
     session.refresh(error_agent)
+    _ = make_agent_graph(Node("gateway", gateway))
     return gateway, error_agent
 
 

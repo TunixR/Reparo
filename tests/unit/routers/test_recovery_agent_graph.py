@@ -15,10 +15,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
 from database.agents.models import Agent, AgentTool, AgentType, Argument
+from database.logging.models import RobotException
 from database.provider.models import Router
 from database.tools.models import Tool
 from tests.unit.agent_tools._shared.process_models import SPENDING_APPROVAL_MODEL
@@ -401,9 +402,7 @@ def test_an_exception_in_a_later_node_is_an_internal_error(
     assert models[CONTINUATION].calls == 0
 
 
-@pytest.mark.parametrize("graph", ["disabled", "other_gateway"])
-def test_without_an_enabled_graph_at_the_gateway_only_the_gateway_runs(
-    graph: str,
+def test_the_run_starts_at_the_entry_node_even_inside_a_cycle(
     client: TestClient,
     robot_key_raw: str,
     payload: dict[str, Any],
@@ -412,21 +411,46 @@ def test_without_an_enabled_graph_at_the_gateway_only_the_gateway_runs(
     script: Callable[..., dict[str, ScriptedModel]],
     node_runs: list[tuple[str, dict[str, Any]]],
 ):
-    if graph == "disabled":
-        _ = make_agent_graph(
-            Node("gateway", agents[GATEWAY]),
-            Node("inferer", agents[INFERER]),
-            enabled=False,
-        )
-    else:
-        _ = make_agent_graph(
-            Node("inferer", agents[INFERER]),
-            Node("gateway", agents[GATEWAY]),
-        )
-    _ = script(gateway=_triage())
+    _ = make_agent_graph(
+        Node("gateway", agents[GATEWAY]),
+        Node("inferer", agents[INFERER], {"symptom": "gateway.diagnosis"}),
+        edges=[("gateway", "inferer"), ("inferer", "gateway")],
+        max_node_executions=3,
+    )
+    _ = script(gateway=[*_triage(), *_triage()], inferer=_inference())
 
     message = _recover(client, robot_key_raw, payload)
 
     assert message["type"] == "done"
     assert message["content"]["success"] is False
-    assert [name for name, _ in node_runs] == [GATEWAY]
+    assert [name for name, _ in node_runs] == [GATEWAY, INFERER, GATEWAY]
+
+
+@pytest.mark.parametrize("graph", ["disabled_default", "enabled_not_default"])
+def test_without_an_enabled_default_recovery_graph_nothing_runs(
+    graph: str,
+    session: Session,
+    client: TestClient,
+    robot_key_raw: str,
+    payload: dict[str, Any],
+    agents: dict[str, Agent],
+    make_agent_graph: MakeAgentGraph,
+    script: Callable[..., dict[str, ScriptedModel]],
+    node_runs: list[tuple[str, dict[str, Any]]],
+):
+    _ = make_agent_graph(
+        Node("gateway", agents[GATEWAY]),
+        enabled=graph == "enabled_not_default",
+        is_default_recovery=graph == "disabled_default",
+    )
+    _ = script(gateway=_triage())
+
+    message = _recover(client, robot_key_raw, payload)
+
+    assert message == {
+        "type": "error",
+        "code": "NO_AGENT_GRAPH",
+        "content": "No enabled default recovery agent graph in the database.",
+    }
+    assert node_runs == []
+    assert session.exec(select(RobotException)).first() is None

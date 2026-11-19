@@ -9,10 +9,11 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 import routers.recovery as recovery_module
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
+from database.agent_graphs.models import AgentGraph, AgentGraphNode
 from database.agent_graphs.runner import NodeRun
 from database.agents.models import Agent
 from observability.attributes import OTEL_EVENT_NAME, RECOVERY_PAYLOAD_INVALID_FIELDS
@@ -67,7 +68,7 @@ def _assert_no_secret(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_recovery_turn_is_traced_without_lifecycle_logs(
-    session: Session,  # pyright: ignore[reportUnusedParameter]
+    session: Session,
     client: TestClient,
     valid_recovery_payload: dict[str, Any],
     gateway_agent: Agent,
@@ -111,7 +112,12 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
     assert turn.attributes["recovery.id"] == recovery_id
     assert turn.attributes["recovery.success"] is True
     assert turn.attributes["recovery.outcome"] == "success"
-    assert turn.attributes["agent.id"] == str(gateway_agent.id)
+    graph = session.exec(
+        select(AgentGraph)
+        .join(AgentGraphNode)
+        .where(AgentGraphNode.agent_id == gateway_agent.id)
+    ).one()
+    assert turn.attributes["agent_graph.id"] == str(graph.id)
     assert turn.attributes["robot_key.id"]
     assert turn.attributes["recovery.payload.ui_log_count"] == 1
     assert turn.attributes["recovery.payload.size"] > 0  # pyright: ignore[reportOperatorIssue]

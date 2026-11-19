@@ -13,6 +13,7 @@ from sqlmodel import Session
 import database.agents.models as agent_models
 from database.agents.models import Agent, AgentType, Argument
 from database.provider.models import Router
+from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 from tests.unit.shared.scripted_model import ScriptedModel, Turn
 
 
@@ -76,9 +77,13 @@ def recovery_arguments() -> list[Argument]:
 
 
 @pytest.fixture
-def gateway_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
-    """Create a Gateway Orchestrator agent for recovery websocket tests."""
-    return make_agent(
+def gateway_agent(
+    make_agent: Callable[..., Agent],
+    mock_router: Router,
+    make_agent_graph: MakeAgentGraph,
+) -> Agent:
+    """Create a Gateway Orchestrator agent, the one node of the default recovery graph."""
+    gateway = make_agent(
         router=mock_router,
         name="Gateway Orchestrator",
         description="Routes recovery",
@@ -87,6 +92,8 @@ def gateway_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agen
         type=AgentType.GatewayAgent,
         arguments=recovery_arguments(),
     )
+    _ = make_agent_graph(Node("gateway", gateway))
+    return gateway
 
 
 type ScriptedAgent = Callable[..., tuple[Agent, ScriptedModel]]

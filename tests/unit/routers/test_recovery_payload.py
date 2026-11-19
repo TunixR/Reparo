@@ -285,7 +285,7 @@ def test_recovery_ws_ingest_rejects_non_json_payload(
     assert closed["code"] == 1003
 
 
-def test_missing_gateway_agent_is_an_error_not_done(
+def test_missing_agent_graph_is_an_error_not_done(
     session: Session,
     client: TestClient,
     valid_robot_key_raw: str,
@@ -301,8 +301,8 @@ def test_missing_gateway_agent_is_an_error_not_done(
 
     assert message == {
         "type": "error",
-        "code": "NO_GATEWAY_AGENT",
-        "content": "No GatewayAgent found in the database.",
+        "code": "NO_AGENT_GRAPH",
+        "content": "No enabled default recovery agent graph in the database.",
     }
     assert closed["code"] == 1011
     # No recovery was instantiated, so nothing was persisted.

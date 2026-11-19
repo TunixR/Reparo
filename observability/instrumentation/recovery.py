@@ -129,8 +129,8 @@ class RecoveryTurnTelemetry:
             }
         )
 
-    def agent_selected(self, agent_id: UUID) -> None:
-        self.span.set_attribute(attrs.AGENT_ID, str(agent_id))
+    def agent_graph_selected(self, agent_graph_id: UUID) -> None:
+        self.span.set_attribute(attrs.AGENT_GRAPH_ID, str(agent_graph_id))
 
     def context_built(self, context: RecoveryContext) -> None:
         self.span.set_attributes(
@@ -172,9 +172,9 @@ class RecoveryTurnTelemetry:
 
     # --- Failures ------------------------------------------------------------
 
-    def no_gateway_agent(self) -> None:
-        log_event(logger, attrs.EVENT_RECOVERY_NO_GATEWAY_AGENT, None, logging.ERROR)
-        self._fail("no_gateway_agent")
+    def no_agent_graph(self) -> None:
+        log_event(logger, attrs.EVENT_RECOVERY_NO_AGENT_GRAPH, None, logging.ERROR)
+        self._fail("no_agent_graph")
 
     def robot_aborted(self, abort: RobotAbort) -> None:
         """The robot gave up; not a server error, so the span status stays unset."""
