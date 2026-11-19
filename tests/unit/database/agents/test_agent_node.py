@@ -9,7 +9,8 @@ from sqlmodel import Session
 from strands import Agent as StrandsAgent
 from strands import tool
 
-from database.agents.models import Agent, AgentTool, NodeRun
+from database.agent_graphs.runner import NodeRun
+from database.agents.models import Agent, AgentTool
 from database.tools.models import Tool
 from tests.unit.fixtures.agent_fixtures import EntryPoint, ScriptedAgent, ScriptedReport
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall

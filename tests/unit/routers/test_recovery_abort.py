@@ -17,7 +17,8 @@ from sqlmodel import Session, select
 
 import routers.evals as evals_module
 import routers.recovery as recovery_module
-from database.agents.models import Agent, AgentType, NodeRun
+from database.agent_graphs.runner import NodeRun
+from database.agents.models import Agent, AgentType
 from database.logging.models import RobotException
 from database.provider.models import Router
 from robot.channel import AbortedByRobot, RobotConnection

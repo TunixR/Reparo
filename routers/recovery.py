@@ -13,7 +13,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from opentelemetry import trace
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlmodel import select
 
 import database.general as database
@@ -167,22 +167,30 @@ def _record_abort(
 
 
 def _build_answer(
-    reported_success: bool, invocation_state: dict[str, Any]
+    last_output: BaseModel | None,
+    invocation_state: dict[str, Any],
+    *,
+    graph_failed: bool = False,
 ) -> tuple[ResponseToRPA, str | None]:
-    """Build ``done.content``: ``success`` as reported, the rest from the state.
+    """Build ``done.content``: ``success`` from the last output, the rest from the state.
 
-    A success needs both the report and a continuation from `set_continuation`; a
-    failure carries no continuation.
+    ``success`` is the last output's ``success`` field, false when it is missing. A
+    success also needs a continuation from `set_continuation`; a failure carries no
+    continuation.
 
     Returns:
-        The answer, and why a reported success had to be sent as a failure:
-        ``missing_continuation`` if `set_continuation` was never called, or
-        ``not_recovered`` if it was called with ``recovered`` false.
+        The answer, and why it had to be sent as a failure: ``agent_graph_failed``
+        if the graph hit a limit, ``missing_continuation`` if a reported success
+        came without `set_continuation`, or ``not_recovered`` if it was called with
+        ``recovered`` false.
     """
     continuation = stored_continuation(invocation_state)
     failure_reason = None
-    success = reported_success
-    if success and continuation is None:
+    success = getattr(last_output, "success", False) is True
+    if graph_failed:
+        success = False
+        failure_reason = attrs.EVENT_RECOVERY_AGENT_GRAPH_FAILED
+    elif success and continuation is None:
         success = False
         failure_reason = (
             attrs.EVENT_RECOVERY_NOT_RECOVERED
@@ -195,20 +203,6 @@ def _build_answer(
         **(continuation.model_dump() if success and continuation else {}),
     )
     return answer, failure_reason
-
-
-def _answer_from_outcome(
-    outcome: GraphOutcome, invocation_state: dict[str, Any]
-) -> tuple[ResponseToRPA, str | None]:
-    """Build the answer of a run: ``success`` is the last executed node's ``success``."""
-    if outcome.failure_reason is not None:
-        answer, _ = _build_answer(
-            reported_success=False, invocation_state=invocation_state
-        )
-        return answer, attrs.EVENT_RECOVERY_AGENT_GRAPH_FAILED
-    return _build_answer(
-        getattr(outcome.output, "success", False) is True, invocation_state
-    )
 
 
 def _load_agent_graph(gateway: Agent) -> LoadedAgentGraph:
@@ -274,10 +268,8 @@ async def _run_agent_graph(
 ) -> tuple[GraphOutcome, dict[str, Any]]:
     """Run the gateway's agent graph; returns its outcome and the final invocation state."""
     invocation_state: dict[str, Any] = {
-        # The GUI tools talk to the robot through the connection, never the raw socket.
         "websocket": robot,
         "robot_exception_id": exception.id,
-        # Read by set_continuation to validate the continuation the error agent names.
         PROCESS_MODEL_STATE_KEY: recovery_context.model,
         "variables": copy.deepcopy(recovery_context.variables),
         CAPABILITIES_STATE_KEY: recovery_context.capabilities,
@@ -351,7 +343,11 @@ async def _run_recovery_turn(
         outcome, invocation_state = await robot.run(
             _run_agent_graph(agent, robot, exception, recovery_context, turn)
         )
-        answer, failure_reason = _answer_from_outcome(outcome, invocation_state)
+        answer, failure_reason = _build_answer(
+            outcome.output,
+            invocation_state,
+            graph_failed=outcome.failure_reason is not None,
+        )
         turn.answered(answer, failure_reason)
         success = answer.success
 

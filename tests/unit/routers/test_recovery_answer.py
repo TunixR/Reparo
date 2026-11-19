@@ -22,13 +22,17 @@ from sqlmodel import Session, select
 import routers.recovery as recovery_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agent_graphs.runner import LoadedAgentGraph, LoadedEdge, LoadedNode
+from database.agent_graphs.runner import (
+    AgentGraphEdge,
+    AgentGraphNode,
+    LoadedAgentGraph,
+    NodeRun,
+)
 from database.agents.models import (
     Agent,
     AgentTool,
     AgentType,
     Argument,
-    NodeRun,
     SubAgent,
 )
 from database.logging.models import RobotException
@@ -335,13 +339,17 @@ def test_a_failed_agent_graph_is_done_without_success(
         error_turns=[_continuation("click_approve", [2]), "Recovered.", _report(True)],
     )
 
-    def _looping_graph(agent: Agent) -> LoadedAgentGraph:
-        node = LoadedNode(key="gateway", agent=agent)
+    def _capped_graph(agent: Agent) -> LoadedAgentGraph:
         return LoadedAgentGraph(
-            entry=node, nodes=(node,), edges=(LoadedEdge("gateway", "gateway"),)
+            nodes=(
+                AgentGraphNode(key="gateway", agent=agent),
+                AgentGraphNode(key="gateway_again", agent=agent),
+            ),
+            max_node_executions=1,
+            edges=(AgentGraphEdge("gateway", "gateway_again"),),
         )
 
-    monkeypatch.setattr(recovery_module, "_load_agent_graph", _looping_graph)
+    monkeypatch.setattr(recovery_module, "_load_agent_graph", _capped_graph)
 
     message = _recover(client, robot_key_raw, spending_payload)
 

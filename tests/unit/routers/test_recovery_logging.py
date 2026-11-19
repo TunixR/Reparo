@@ -13,7 +13,8 @@ from sqlmodel import Session
 
 import routers.recovery as recovery_module
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agents.models import Agent, NodeRun
+from database.agent_graphs.runner import NodeRun
+from database.agents.models import Agent
 from observability.attributes import OTEL_EVENT_NAME, RECOVERY_PAYLOAD_INVALID_FIELDS
 from templates.gateway import ResponseToRPA
 

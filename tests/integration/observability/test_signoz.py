@@ -15,7 +15,8 @@ from opentelemetry import trace
 from sqlmodel import Session
 
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agents.models import Agent, NodeRun
+from database.agent_graphs.runner import NodeRun
+from database.agents.models import Agent
 from database.logging.models import RobotException
 from templates.gateway import ResponseToRPA
 from tests.integration.observability.conftest import SECRET, Telemetry

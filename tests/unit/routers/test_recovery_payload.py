@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
-from database.agents.models import Agent, NodeRun
+from database.agent_graphs.runner import NodeRun
+from database.agents.models import Agent
 from database.logging.models import RecoveryContext, RobotException
 from robot.capabilities import CAPABILITIES_STATE_KEY
 from templates.gateway import ResponseToRPA

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -20,39 +20,56 @@ type FailureReason = Literal["max_node_executions"]
 
 
 @dataclass(frozen=True, slots=True)
-class LoadedNode:
-    """A node of a loaded agent graph: its key in the graph and the agent it runs."""
+class NodeRun:
+    """What an agent produces as a node of an agent graph."""
 
+    output: BaseModel
+    """The node's structured output, an instance of the agent's `output_model()`."""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentGraphNode:
     key: str
     agent: Agent
 
 
 @dataclass(frozen=True, slots=True)
-class LoadedEdge:
+class AgentGraphEdge:
     source: str
     target: str
 
 
 @dataclass(frozen=True, slots=True)
 class LoadedAgentGraph:
-    """An agent graph with every row it needs loaded, ready to run."""
+    """An agent graph with every row it needs loaded, ready to run.
 
-    entry: LoadedNode
-    nodes: tuple[LoadedNode, ...]
-    edges: tuple[LoadedEdge, ...] = ()
+    Iterating it walks the run's path: the entry node, the one node without
+    incoming edges, then each node's outgoing edge until none is left.
+    """
+
+    nodes: tuple[AgentGraphNode, ...]
+    max_node_executions: int
+    """A cap on node executions, so a run of a cyclic graph always ends."""
+    edges: tuple[AgentGraphEdge, ...] = ()
 
     @classmethod
     def single(cls, key: str, agent: Agent) -> LoadedAgentGraph:
-        node = LoadedNode(key=key, agent=agent)
-        return cls(entry=node, nodes=(node,))
+        return cls(nodes=(AgentGraphNode(key=key, agent=agent),), max_node_executions=1)
 
-    @property
-    def node_limit(self) -> int:
-        """How many node executions a run may take."""
-        return len(self.nodes)
+    def __iter__(self) -> Iterator[AgentGraphNode]:
+        node: AgentGraphNode | None = self._entry()
+        while node is not None:
+            yield node
+            node = self._next(node)
 
-    def next_node(self, node: LoadedNode) -> LoadedNode | None:
-        """The node ``node``'s outgoing edge leads to, or ``None`` at the end of the path."""
+    def _entry(self) -> AgentGraphNode:
+        targets = {edge.target for edge in self.edges}
+        entry = next((n for n in self.nodes if n.key not in targets), None)
+        if entry is None:
+            raise ValueError("The agent graph has no node without incoming edges.")
+        return entry
+
+    def _next(self, node: AgentGraphNode) -> AgentGraphNode | None:
         target = next((e.target for e in self.edges if e.source == node.key), None)
         return next((n for n in self.nodes if n.key == target), None)
 
@@ -84,19 +101,17 @@ async def run_graph(graph: LoadedAgentGraph, state: dict[str, Any]) -> GraphOutc
     by every node.
     """
     context: AgentGraphContext = state[AGENT_GRAPH_CONTEXT_KEY]
-    node: LoadedNode | None = graph.entry
     terminal_node: str | None = None
     output: BaseModel | None = None
     nodes_run = 0
-    while node is not None:
-        if nodes_run >= graph.node_limit:
+    for node in graph:
+        if nodes_run >= graph.max_node_executions:
             return GraphOutcome(terminal_node, output, nodes_run, "max_node_executions")
         _clean_state(state)
         run = await node.agent.run_node(state, dict(context.recovery_inputs))
         context.outputs[node.key] = run.output
         terminal_node, output = node.key, run.output
         nodes_run += 1
-        node = graph.next_node(node)
     return GraphOutcome(terminal_node, output, nodes_run)
 
 
