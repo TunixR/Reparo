@@ -102,7 +102,7 @@ def test_output_model_is_the_response_model(
 async def test_run_node_validates_its_inputs(scripted_agent: ScriptedAgent) -> None:
     agent, model = scripted_agent(*TURNS)
 
-    with pytest.raises(ValueError, match="Expected 1 arguments"):
+    with pytest.raises(ValueError, match="Missing required argument: task"):
         _ = await agent.run_node(node_state({}, websocket=None), {})
     assert model.calls == 0
 
@@ -200,26 +200,30 @@ async def test_agent_as_a_tool_answers_with_its_structured_response(
     assert tool_result["content"] == [{"text": json.dumps({"done": True})}]
 
 
-def test_bind_inputs_follows_the_input_map_before_names(
-    scripted_agent: ScriptedAgent,
-) -> None:
-    agent, _ = scripted_agent(*TURNS)
-    context = AgentGraphContext(recovery_inputs={"task": "by name", "goal": "mapped"})
-
-    assert agent.bind_inputs(context, {}) == {"task": "by name"}
-    assert agent.bind_inputs(context, {"task": "recovery.goal"}) == {"task": "mapped"}
-
-
-def test_bind_inputs_falls_back_to_the_latest_output(
-    scripted_agent: ScriptedAgent,
-) -> None:
-    agent, _ = scripted_agent(*TURNS)
-    context = AgentGraphContext(recovery_inputs={})
-
-    assert agent.bind_inputs(context, {}) == {}
+def test_a_bare_name_is_a_recovery_input_else_the_latest_output() -> None:
+    context = AgentGraphContext(recovery_inputs={"task": "from recovery"})
     context.record("first", _Task(task="older"))
     context.record("second", _Task(task="newer"))
-    assert agent.bind_inputs(context, {}) == {"task": "newer"}
+
+    assert context.get("task") == "from recovery"
+    assert context.get("recovery.task") == "from recovery"
+    assert context.get("first.task") == "older"
+    del context.recovery_inputs["task"]  # pyright: ignore[reportIndexIssue] - a dict here
+    assert context.get("task") == "newer"
+    assert context.get("missing") is None
+    assert context.get("triage.task") is None
+
+
+@pytest.mark.asyncio
+async def test_run_node_binds_the_input_map_before_names(
+    scripted_agent: ScriptedAgent,
+) -> None:
+    agent, _ = scripted_agent(*TURNS)
+    state = node_state({"task": "by name", "goal": "mapped"}, websocket=None)
+
+    _ = await agent.run_node(state, {"task": "recovery.goal"})
+
+    assert state["inputs"] == {"task": "mapped"}
 
 
 @pytest.mark.asyncio
@@ -228,7 +232,7 @@ async def test_run_node_rejects_a_mapped_path_without_a_value(
 ) -> None:
     agent, model = scripted_agent(*TURNS)
 
-    with pytest.raises(ValueError, match="maps argument 'task' to 'triage.task'"):
+    with pytest.raises(ValueError, match="Missing required argument: task"):
         _ = await agent.run_node(
             node_state({}, websocket=None), {"task": "triage.task"}
         )

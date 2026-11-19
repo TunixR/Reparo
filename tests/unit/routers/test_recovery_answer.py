@@ -585,9 +585,9 @@ def test_variables_come_from_code_not_from_the_llm(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def _fake_run_node(
-        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
-        inputs = self.bind_inputs(invocation_state[AGENT_GRAPH_CONTEXT_KEY], input_map)
+        inputs = invocation_state[AGENT_GRAPH_CONTEXT_KEY].recovery_inputs
         invocation_state["variables"]["retry"] = 2
         inputs["variables"]["invoice_id"] = "HALLUCINATED"
         return NodeRun(

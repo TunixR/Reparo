@@ -2,7 +2,6 @@ import enum
 import logging
 import uuid
 from collections.abc import Mapping
-from contextlib import suppress
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, override
@@ -509,51 +508,21 @@ class Agent(SQLModel, table=True):
     ) -> NodeRun:
         """Run the agent as a node of an agent graph and return its structured output.
 
-        The agent binds its own inputs from the run's `AgentGraphContext` (see
-        `bind_inputs`), then validates and records them like ``__call__``. A GUI agent
-        drives the robot's desktop and reports a `GuiRunReport`.
+        Each argument comes from the graph context at its ``input_map`` path, else by
+        its name. Like ``__call__``, it records the inputs in ``invocation_state``. A
+        GUI agent drives the robot's desktop and reports a `GuiRunReport`.
         """
         context: AgentGraphContext = invocation_state[AGENT_GRAPH_CONTEXT_KEY]
-        inputs = self.bind_inputs(context, input_map)
+        inputs = {
+            a.name: context.get(input_map.get(a.name, a.name)) for a in self.arguments
+        }
         if self.type == AgentType.GuiAgent:
-            self._record_inputs(invocation_state, inputs)
+            self._bind_inputs(invocation_state, inputs)
             report = await TooledGuiAgent(self).run(invocation_state, inputs)
             return NodeRun(output=report)
         return NodeRun(output=await self._execute(invocation_state, inputs))
 
-    def bind_inputs(
-        self, context: AgentGraphContext, input_map: Mapping[str, str]
-    ) -> dict[str, Any]:
-        """The agent's arguments in an agent graph run: from ``input_map``, else by name.
-
-        ``input_map`` maps an argument to ``recovery.<field>`` or
-        ``<node_key>.<field>``. By name looks in the recovery inputs, then in the node
-        outputs from the most recent back. An argument found nowhere is left out, for
-        validation to reject.
-
-        Raises:
-            ValueError: a mapped path has no value.
-        """
-        inputs: dict[str, Any] = {}
-        for argument in self.arguments:
-            name = argument.name
-            if name in input_map:
-                path = input_map[name]
-                try:
-                    inputs[name] = context.resolve(path)
-                except KeyError as exc:
-                    raise ValueError(
-                        f"Agent '{self.name}' maps argument '{name}' to '{path}', "
-                        "which has no value."
-                    ) from exc
-            elif name in context.recovery_inputs:
-                inputs[name] = context.recovery_inputs[name]
-            else:
-                with suppress(KeyError):
-                    inputs[name] = context.latest(name)
-        return inputs
-
-    def _record_inputs(
+    def _bind_inputs(
         self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
     ) -> None:
         """Validate ``inputs`` and record them in ``invocation_state`` for the agent trace."""
@@ -571,7 +540,7 @@ class Agent(SQLModel, table=True):
         runs twice on one conversation: a free run on the inputs, then a
         structured-output call. Usage and cost of both are logged, even on failure.
         """
-        self._record_inputs(invocation_state, inputs)
+        self._bind_inputs(invocation_state, inputs)
 
         tools: list[DecoratedFunctionTool] = [  # pyright: ignore[reportMissingTypeArgument]
             t.get_tool_function() for t in self.get_tools()

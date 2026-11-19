@@ -41,19 +41,28 @@ class AgentGraphContext:
         _ = self.outputs.pop(key, None)
         self.outputs[key] = output
 
-    def resolve(self, path: str) -> Any:
+    def get(self, path: str) -> Any:
         """The value at ``recovery.<field>`` or ``<node_key>.<field>``, dotted.
 
-        Raises:
-            KeyError: the source has no output yet, or a field is missing.
+        A bare name is a recovery input, else that field of the most recent output
+        that has it. ``None`` when nothing has the value.
         """
         source, *fields = path.split(".")
         if not fields:
-            raise KeyError(path)
+            if source in self.recovery_inputs:
+                return self.recovery_inputs[source]
+            return next(
+                (
+                    getattr(output, source)
+                    for output in reversed(self.outputs.values())
+                    if source in type(output).model_fields
+                ),
+                None,
+            )
         value: Any = (
             self.recovery_inputs
             if source == RECOVERY_INPUTS_SOURCE
-            else self.outputs[source]
+            else self.outputs.get(source)
         )
         for name in fields:
             if isinstance(value, BaseModel) and name in type(value).model_fields:
@@ -61,19 +70,8 @@ class AgentGraphContext:
             elif isinstance(value, Mapping) and name in value:
                 value = value[name]  # pyright: ignore[reportUnknownVariableType] - JSON of unknown shape
             else:
-                raise KeyError(path)
+                return None
         return value  # pyright: ignore[reportUnknownVariableType] - JSON of unknown shape
-
-    def latest(self, name: str) -> Any:
-        """The field ``name`` of the most recent output that has one.
-
-        Raises:
-            KeyError: no output has the field.
-        """
-        for output in reversed(self.outputs.values()):
-            if name in type(output).model_fields:
-                return getattr(output, name)
-        raise KeyError(name)
 
 
 @dataclass(frozen=True, slots=True)

@@ -47,11 +47,11 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         raising=True,
     )
 
-    async def _fake_run_node(self, invocation_state, input_map):  # pyright: ignore[reportMissingParameterType]
+    async def _fake_run_node(_self, invocation_state, _input_map):  # pyright: ignore[reportMissingParameterType]
         captured_invocation["invocation_state"] = invocation_state
-        captured_invocation["inputs"] = self.bind_inputs(
-            invocation_state[AGENT_GRAPH_CONTEXT_KEY], input_map
-        )
+        captured_invocation["inputs"] = invocation_state[
+            AGENT_GRAPH_CONTEXT_KEY
+        ].recovery_inputs
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
             continue_from_model_event_id="click_submit",
@@ -221,8 +221,8 @@ def test_recovery_ws_accepts_recovery_task_and_does_not_pass_it_to_the_agent(
 ):
     calls: list[dict[str, Any]] = []
 
-    async def _fake_run_node(self, invocation_state, input_map):  # pyright: ignore[reportMissingParameterType]
-        inputs = self.bind_inputs(invocation_state[AGENT_GRAPH_CONTEXT_KEY], input_map)
+    async def _fake_run_node(_self, invocation_state, _input_map):  # pyright: ignore[reportMissingParameterType]
+        inputs = invocation_state[AGENT_GRAPH_CONTEXT_KEY].recovery_inputs
         calls.append({"invocation_state": invocation_state, "inputs": inputs})
         return NodeRun(output=ResponseToRPA(success=False))
 
