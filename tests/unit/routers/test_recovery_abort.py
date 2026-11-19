@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator, Mapping
 from typing import Any
 
 import pytest
@@ -17,11 +17,12 @@ from sqlmodel import Session, select
 
 import routers.evals as evals_module
 import routers.recovery as recovery_module
-from database.agents.models import Agent, AgentType
+from database.agents.models import Agent, AgentType, NodeRun
 from database.logging.models import RobotException
 from database.provider.models import Router
 from robot.channel import AbortedByRobot, RobotConnection
 from settings import TELEMETRY_MAX_TEXT_LENGTH
+from templates.gateway import ResponseToRPA
 
 WS_PATH = "/recovery/robot_exception/ws"
 LONG_DESCRIPTION = "page closed " * 50
@@ -31,7 +32,7 @@ ABORT = {
     "error_description": LONG_DESCRIPTION,
 }
 
-GatewayCall = Callable[..., Coroutine[Any, Any, dict[str, Any]]]
+GatewayRunNode = Callable[..., Coroutine[Any, Any, NodeRun]]
 
 
 @pytest.fixture
@@ -74,14 +75,13 @@ def _wait_for_turn(exporter: InMemorySpanExporter) -> ReadableSpan:
 
 def _gateway_cancelled_by_abort(
     run: Callable[[RobotConnection], Coroutine[Any, Any, None]],
-) -> tuple[GatewayCall, dict[str, bool]]:
+) -> tuple[GatewayRunNode, dict[str, bool]]:
     """A gateway that runs ``run`` and records whether it was cancelled."""
     seen = {"cancelled": False, "finished": False}
 
-    async def _call(
-        _self: Agent, invocation_state: dict[str, Any] | None = None, **_: Any
-    ) -> dict[str, Any]:
-        assert invocation_state is not None
+    async def _run_node(
+        _self: Agent, invocation_state: dict[str, Any], _inputs: Mapping[str, Any]
+    ) -> NodeRun:
         channel = invocation_state["websocket"]
         assert isinstance(channel, RobotConnection)
         try:
@@ -90,9 +90,9 @@ def _gateway_cancelled_by_abort(
             seen["cancelled"] = True
             raise
         seen["finished"] = True
-        return {"success": True}
+        return NodeRun(output=ResponseToRPA(success=True))
 
-    return _call, seen
+    return _run_node, seen
 
 
 def _assert_aborted(
@@ -155,8 +155,8 @@ def test_abort_mid_llm_turn_cancels_the_gateway(
         # The LLM is thinking: nothing reads the socket.
         await asyncio.sleep(60)
 
-    call, seen = _gateway_cancelled_by_abort(_thinking)
-    monkeypatch.setattr(Agent, "__call__", call)
+    run_node, seen = _gateway_cancelled_by_abort(_thinking)
+    monkeypatch.setattr(Agent, "run_node", run_node)
 
     _assert_aborted(
         session,
@@ -189,8 +189,8 @@ def test_abort_mid_action_is_not_read_as_the_action_result(
             results.append(exc)
         await asyncio.sleep(60)
 
-    call, seen = _gateway_cancelled_by_abort(_acting)
-    monkeypatch.setattr(Agent, "__call__", call)
+    run_node, seen = _gateway_cancelled_by_abort(_acting)
+    monkeypatch.setattr(Agent, "run_node", run_node)
 
     _assert_aborted(
         session,
@@ -245,8 +245,8 @@ def test_disconnect_mid_llm_turn_cancels_the_gateway_and_is_recorded(
         started.set()
         await asyncio.sleep(60)
 
-    call, seen = _gateway_cancelled_by_abort(_thinking)
-    monkeypatch.setattr(Agent, "__call__", call)
+    run_node, seen = _gateway_cancelled_by_abort(_thinking)
+    monkeypatch.setattr(Agent, "run_node", run_node)
 
     with client.websocket_connect(
         WS_PATH, headers={"X-ROBOT-KEY": robot_key_raw}

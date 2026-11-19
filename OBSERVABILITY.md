@@ -139,14 +139,15 @@ is truncated to 120 characters with `brief()`.
 WebSocket /recovery/robot_exception/ws            (FastAPI instrumentation)
 └── recovery.turn
     ├── recovery.persist                           (RobotException + RecoveryContext insert)
-    └── invoke_agent <gateway>                     (Strands)
-        ├── chat                                   (Strands, gen_ai.usage.*)
-        └── execute_tool tooled_guiagent           (Strands, enriched with gui.task.*)
-            ├── gui.screenshot                     (initial screen)
-            └── invoke_agent / chat                (the GUI agent's own loop, Strands)
-                └── execute_tool <action>          (Strands: click, type_text, scroll, ...)
-                    ├── gui.action                 (send the action, wait for the robot)
-                    └── gui.screenshot             (screen after the action)
+    └── agent_graph.run                            (the agent graph run)
+        └── invoke_agent <gateway>                 (Strands)
+            ├── chat                               (Strands, gen_ai.usage.*)
+            └── execute_tool tooled_guiagent       (Strands, enriched with gui.task.*)
+                ├── gui.screenshot                 (initial screen)
+                └── invoke_agent / chat            (the GUI agent's own loop, Strands)
+                    └── execute_tool <action>      (Strands: click, type_text, scroll, ...)
+                        ├── gui.action             (send the action, wait for the robot)
+                        └── gui.screenshot         (screen after the action)
 ```
 
 `TooledGuiAgent` (`database/agents/tooled_gui_agent.py`) is the GUI agent behind `AgentType.GuiAgent`.
@@ -156,7 +157,7 @@ the model's text, so its `gui.action` and `gui.screenshot` spans sit directly un
 
 | Span | Attributes |
 | --- | --- |
-| `recovery.turn` | `robot_key.id`, `agent.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_gateway_agent`, `internal_error`, `robot_aborted`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`, `not_recovered`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span events `missing_continuation` or `not_recovered`, and `robot_aborted` with `recovery.abort.code` and `recovery.abort.description` (bounded). The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
+| `recovery.turn` | `robot_key.id`, `agent.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_gateway_agent`, `internal_error`, `robot_aborted`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`, `not_recovered`, `agent_graph_failed`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span events `missing_continuation`, `not_recovered` or `agent_graph_failed`, and `robot_aborted` with `recovery.abort.code` and `recovery.abort.description` (bounded). The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
 | `recovery.persist` | none |
 | `invoke_agent` (Strands) | `agent.id`, `agent_trace.id` (joins the trace to the `AgentTrace` row) |
 | `execute_tool` (GUI agent) | `gui.task.name`, `gui.task.process_model`, `gui.task.ui_log_count`, `gui.task.has_errored_activity`, `gui.task.iterations`, `gui.task.outcome` (`done`, `model_stopped`, `client_disconnected`, `error`; UI-TARS also `max_actions_exceeded`, `unparseable_response`); errors carry a redacted exception |
@@ -314,7 +315,7 @@ uv run pytest tests/integration/observability -q
 One happy path per feature, exported through the real OTLP pipeline and read back from SigNoz:
 request tracing with `request.id`, typed and redacted log events in the request trace, client
 errors as WARN events, unhandled errors in the Exceptions index (redacted), a full recovery
-websocket turn (websocket span → `recovery.turn` → `recovery.persist` and a real Strands agent,
+websocket turn (websocket span → `recovery.turn` → `recovery.persist`, and a real Strands agent under `agent_graph.run`,
 joined to the `RobotException` row), and a GUI task whose spans all have their parent in the trace
 (`execute_tool finished` included), with the conversation on its `chat` spans.
 

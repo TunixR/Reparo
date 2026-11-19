@@ -3176,7 +3176,7 @@ requires-dist = [
     { name = "scalar-fastapi", specifier = ">=1.4.3" },
     { name = "scikit-image", specifier = ">=0.25.2" },
     { name = "sqlmodel", specifier = ">=0.0.39" },
-    { name = "strands-agents", extras = ["openai", "otel"], specifier = ">=1.51.0" },
+    { name = "strands-agents", extras = ["openai", "otel"], specifier = ">=1.64.0" },
     { name = "strands-agents-evals", specifier = ">=0.1.0" },
     { name = "strands-agents-tools", specifier = ">=0.8.5" },
     { name = "websockets", specifier = ">=17.0.1" },

@@ -22,6 +22,13 @@ from agent_tools.utils import (
     declared_not_recovered,
     stored_continuation,
 )
+from database.agent_graphs.runner import (
+    AGENT_GRAPH_CONTEXT_KEY,
+    AgentGraphContext,
+    GraphOutcome,
+    LoadedAgentGraph,
+    run_graph,
+)
 from database.agents.models import Agent, AgentType
 from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
@@ -51,6 +58,8 @@ ROBOT_KEY_HEADER = "X-ROBOT-KEY"
 INVALID_RECOVERY_PAYLOAD = "INVALID_RECOVERY_PAYLOAD"
 NO_GATEWAY_AGENT = "NO_GATEWAY_AGENT"
 INTERNAL_ERROR = "INTERNAL_ERROR"
+
+GATEWAY_NODE_KEY = "gateway"
 
 # Websocket close code (RFC 6455): unsupported data.
 CLOSE_INVALID_PAYLOAD = 1003
@@ -158,12 +167,12 @@ def _record_abort(
 
 
 def _build_answer(
-    response: dict[str, Any], invocation_state: dict[str, Any]
+    reported_success: bool, invocation_state: dict[str, Any]
 ) -> tuple[ResponseToRPA, str | None]:
-    """Build ``done.content``: ``success`` from the gateway, the rest from the state.
+    """Build ``done.content``: ``success`` as reported, the rest from the state.
 
-    A success needs both the gateway's report and a continuation from
-    `set_continuation`; a failure carries no continuation.
+    A success needs both the report and a continuation from `set_continuation`; a
+    failure carries no continuation.
 
     Returns:
         The answer, and why a reported success had to be sent as a failure:
@@ -172,7 +181,7 @@ def _build_answer(
     """
     continuation = stored_continuation(invocation_state)
     failure_reason = None
-    success = response.get("success") is True
+    success = reported_success
     if success and continuation is None:
         success = False
         failure_reason = (
@@ -188,23 +197,26 @@ def _build_answer(
     return answer, failure_reason
 
 
-async def _invoke_gateway_agent(
-    agent: Agent,
-    robot: RobotConnection,
-    exception: RobotException,
-    recovery_context: RecoveryContext,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Run the gateway agent; returns its report and the final invocation state."""
-    invocation_state: dict[str, Any] = {
-        # The GUI tools talk to the robot through the connection, never the raw socket.
-        "websocket": robot,
-        "robot_exception_id": exception.id,
-        # Read by set_continuation to validate the continuation the error agent names.
-        PROCESS_MODEL_STATE_KEY: recovery_context.model,
-        "variables": copy.deepcopy(recovery_context.variables),
-        CAPABILITIES_STATE_KEY: recovery_context.capabilities,
-    }
+def _answer_from_outcome(
+    outcome: GraphOutcome, invocation_state: dict[str, Any]
+) -> tuple[ResponseToRPA, str | None]:
+    """Build the answer of a run: ``success`` is the last executed node's ``success``."""
+    if outcome.failure_reason is not None:
+        answer, _ = _build_answer(
+            reported_success=False, invocation_state=invocation_state
+        )
+        return answer, attrs.EVENT_RECOVERY_AGENT_GRAPH_FAILED
+    return _build_answer(
+        getattr(outcome.output, "success", False) is True, invocation_state
+    )
 
+
+def _load_agent_graph(gateway: Agent) -> LoadedAgentGraph:
+    return LoadedAgentGraph.single(GATEWAY_NODE_KEY, gateway)
+
+
+def _recovery_inputs(recovery_context: RecoveryContext) -> dict[str, Any]:
+    """The gateway's arguments, from the recovery payload."""
     ui_log = [
         {
             "case_id": entry.case_id,
@@ -242,17 +254,40 @@ async def _invoke_gateway_agent(
             "error_description": act.error_description,
         }
 
-    response = await agent(
-        invocation_state=invocation_state,
-        task_name=recovery_context.task_name,
-        platform=recovery_context.platform,
-        os=recovery_context.os,
-        variables=recovery_context.variables,
-        ui_log=ui_log,
-        errored_act=errored_act,
-        model=recovery_context.model,
-    )
-    return response, invocation_state
+    return {
+        "task_name": recovery_context.task_name,
+        "platform": recovery_context.platform,
+        "os": recovery_context.os,
+        "variables": recovery_context.variables,
+        "ui_log": ui_log,
+        "errored_act": errored_act,
+        "model": recovery_context.model,
+    }
+
+
+async def _run_agent_graph(
+    gateway: Agent,
+    robot: RobotConnection,
+    exception: RobotException,
+    recovery_context: RecoveryContext,
+    turn: telemetry.RecoveryTurnTelemetry,
+) -> tuple[GraphOutcome, dict[str, Any]]:
+    """Run the gateway's agent graph; returns its outcome and the final invocation state."""
+    invocation_state: dict[str, Any] = {
+        # The GUI tools talk to the robot through the connection, never the raw socket.
+        "websocket": robot,
+        "robot_exception_id": exception.id,
+        # Read by set_continuation to validate the continuation the error agent names.
+        PROCESS_MODEL_STATE_KEY: recovery_context.model,
+        "variables": copy.deepcopy(recovery_context.variables),
+        CAPABILITIES_STATE_KEY: recovery_context.capabilities,
+        AGENT_GRAPH_CONTEXT_KEY: AgentGraphContext(
+            recovery_inputs=_recovery_inputs(recovery_context)
+        ),
+    }
+    with turn.agent_graph_run():
+        outcome = await run_graph(_load_agent_graph(gateway), invocation_state)
+    return outcome, invocation_state
 
 
 @router.websocket("/robot_exception/ws")
@@ -311,12 +346,12 @@ async def _run_recovery_turn(
             )
         turn.persisted(exception.id)
 
-        # Strands traces the agent run as a child span of this turn. The run is
-        # cancelled as soon as the robot aborts or goes away.
-        response, invocation_state = await robot.run(
-            _invoke_gateway_agent(agent, robot, exception, recovery_context)
+        # The agent graph run is a child span of this turn. It is cancelled as
+        # soon as the robot aborts or goes away.
+        outcome, invocation_state = await robot.run(
+            _run_agent_graph(agent, robot, exception, recovery_context, turn)
         )
-        answer, failure_reason = _build_answer(response, invocation_state)
+        answer, failure_reason = _answer_from_outcome(outcome, invocation_state)
         turn.answered(answer, failure_reason)
         success = answer.success
 
