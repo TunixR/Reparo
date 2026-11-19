@@ -184,32 +184,6 @@ def violations(session: Session, graph: AgentGraph) -> list[str]:
     return _agent_violations(graph.nodes) + _structure_violations(session, graph)
 
 
-def warnings(graph: AgentGraph) -> list[str]:
-    """What looks wrong with ``graph`` without making it invalid: a node, other than
-    a gateway, that can end a run but can't report a recovery."""
-    outputs, _ = _output_models(graph)
-    found: list[str] = []
-    for node in graph.nodes:
-        if node.agent.type == AgentType.GatewayAgent or node.key not in outputs:
-            continue
-        if any(e.condition is None for e in graph.edges if e.source_node_id == node.id):
-            continue
-        model = outputs[node.key]
-        if model is None:
-            lacks = f"its agent '{node.agent.name}' has no output model"
-        else:
-            success = model.model_fields.get("success")
-            if success is not None and success.annotation is bool:
-                continue
-            lacks = f"its output model {model.__name__} has no boolean 'success'"
-        found.append(
-            f"Node '{node.key}' can end the graph, but {lacks}, so a run that ends "
-            "there never reports a recovery; add 'success: bool' to the output, or "
-            "an unconditional edge out of the node."
-        )
-    return found
-
-
 def _structure_violations(session: Session, graph: AgentGraph) -> list[str]:
     outputs, broken = _output_models(graph)
     return [

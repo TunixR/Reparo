@@ -998,7 +998,7 @@ def gateway_like(make_agent: Callable[..., Agent], mock_router: Router) -> Agent
     return make_agent(router=mock_router, name="Reader", arguments=recovery_arguments())
 
 
-def test_a_node_that_can_end_the_graph_without_success_is_a_warning(
+def test_the_default_recovery_graph_notes_where_a_recovery_ends_unrecovered(
     client: TestClient,
     admin_headers: Headers,
     build_agent_graph: BuildAgentGraph,
@@ -1016,28 +1016,39 @@ def test_a_node_that_can_end_the_graph_without_success_is_a_warning(
         [("gateway", "a"), ("a", "gui", 0, on_done)],
     )
 
-    response = enable_via_api(client, admin_headers, graph.id)
+    enabled = enable_via_api(client, admin_headers, graph.id)
+    made_default = client.patch(
+        f"/agent_graphs/{graph.id}",
+        json={"is_default_recovery": True},
+        headers=admin_headers,
+    )
 
-    assert response.status_code == status.HTTP_200_OK, response.text
-    warnings: list[str] = response.json()["warnings"]
-    assert len(warnings) == 1, warnings
-    assert all(f in warnings[0] for f in ("Node 'gui'", "'success'", "GuiRunReport"))
+    assert enabled.status_code == status.HTTP_200_OK, enabled.text
+    assert enabled.json()["info"] == []
+    assert made_default.status_code == status.HTTP_200_OK, made_default.text
+    info: list[str] = made_default.json()["info"]
+    assert len(info) == 1, info
+    assert all(f in info[0] for f in ("node 'gui'", "'success'", "GuiRunReport"))
     got = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers)
-    assert got.json()["warnings"] == warnings
+    assert got.json()["info"] == info
+    listed = client.get("/agent_graphs/", headers=admin_headers).json()
+    assert "info" not in listed[0]
 
 
-def test_a_gateway_may_end_the_graph_without_success(
+def test_a_default_recovery_graph_may_end_at_the_gateway(
     client: TestClient,
     admin_headers: Headers,
     build_agent_graph: BuildAgentGraph,
     graphless_gateway: Agent,
 ):
-    graph = build_agent_graph([("gateway", graphless_gateway)])
+    graph = build_agent_graph(
+        [("gateway", graphless_gateway)], is_default_recovery=True
+    )
 
     response = enable_via_api(client, admin_headers, graph.id)
 
     assert response.status_code == status.HTTP_200_OK, response.text
-    assert response.json()["warnings"] == []
+    assert response.json()["info"] == []
 
 
 def test_a_write_to_an_enabled_graph_must_keep_its_bindings_valid(

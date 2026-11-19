@@ -19,6 +19,7 @@ from database.agent_graphs.runner import (
     GraphOutcome,
     clean_state,
 )
+from database.agents.models import AgentType
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
 
@@ -89,6 +90,36 @@ class AgentGraph(SQLModel, table=True):
         if entry is None:
             raise ValueError(f"The agent graph '{self.name}' has no entry node.")
         return entry
+
+    @property
+    def info(self) -> list[str]:
+        """For the default recovery graph, each node other than the gateway that can
+        end a run without a boolean ``success``: a recovery ending there is reported
+        as not recovered."""
+        if not self.is_default_recovery:
+            return []
+        notes: list[str] = []
+        for node in self.nodes:
+            if node.agent.type == AgentType.GatewayAgent or any(
+                e.condition is None for e in self.edges if e.source_node_id == node.id
+            ):
+                continue
+            try:
+                model = node.agent.output_model()
+            except (ImportError, ValueError):
+                continue
+            if model is None:
+                lacks = f"its agent '{node.agent.name}' has no output model"
+            else:
+                success = model.model_fields.get("success")
+                if success is not None and success.annotation is bool:
+                    continue
+                lacks = f"its output model {model.__name__} has no boolean 'success'"
+            notes.append(
+                f"A recovery that ends at node '{node.key}' is reported as not "
+                f"recovered, since {lacks}."
+            )
+        return notes
 
     @property
     def node_limit(self) -> int:
@@ -396,9 +427,16 @@ class AgentGraphRead(SQLModel):
     node_timeout_s: float | None
     nodes: list[AgentGraphNodeRead]
     edges: list[AgentGraphEdgeRead]
-    warnings: list[str] = Field(
-        default_factory=list,
-        description="What looks wrong with the graph without making it invalid.",
-    )
     created_at: datetime
     updated_at: datetime
+
+
+class AgentGraphDetail(AgentGraphRead):
+    """An agent graph with its nodes, its edges and notes on how it runs."""
+
+    info: list[str] = Field(
+        description=(
+            "How a recovery run by this graph ends at nodes that can't report one; "
+            "empty unless it is the default recovery graph."
+        )
+    )
