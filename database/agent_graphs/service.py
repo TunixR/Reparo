@@ -2,16 +2,16 @@
 
 A disabled graph is a draft and accepts any structure. Enabling a graph, and every
 write to an enabled one, must leave it valid: its node agents enabled and the
-structural rules passing. A rejected write raises `AgentGraphError`
-with the violations; the caller rolls back on it and commits otherwise.
+structural rules passing. A rejected write raises `AgentGraphError` with the
+violations; the caller rolls back on it and commits otherwise.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import status
@@ -31,32 +31,19 @@ from database.agent_graphs.models import (
 from database.agents.models import Agent, AgentType
 
 MAX_NODE_EXECUTIONS = 100
-"""The most node executions a graph may allow per run (S7)."""
-
-
-@dataclass(frozen=True, slots=True)
-class Violation:
-    """A broken rule, by its id in the agent graph spec, and how to fix it."""
-
-    rule: str
-    message: str
+"""The most node executions a graph may allow per run."""
 
 
 @dataclass(slots=True)
 class AgentGraphError(Exception):
-    """A rejected agent graph write, with the HTTP status that fits it."""
+    """A rejected agent graph write: why, and each broken rule with its fix."""
 
     status_code: int
     message: str
-    violations: Sequence[Violation] = field(default_factory=tuple)
+    violations: Sequence[str] = field(default_factory=tuple)
 
     def detail(self) -> dict[str, object]:
-        return {
-            "message": self.message,
-            "violations": [
-                {"rule": v.rule, "message": v.message} for v in self.violations
-            ],
-        }
+        return {"message": self.message, "violations": list(self.violations)}
 
 
 def create_graph(session: Session, payload: AgentGraphCreate) -> AgentGraph:
@@ -176,13 +163,12 @@ def remove_edge(session: Session, graph: AgentGraph, edge: AgentGraphEdge) -> No
         _validate_write(session, graph)
 
 
-def violations(session: Session, graph: AgentGraph) -> list[Violation]:
-    """Why ``graph`` may not be enabled: disabled node agents (V4) and broken
-    structure rules."""
-    return _agent_violations(graph.nodes, "V4") + _structure_violations(session, graph)
+def violations(session: Session, graph: AgentGraph) -> list[str]:
+    """Why ``graph`` may not be enabled: disabled node agents and broken structure."""
+    return _agent_violations(graph.nodes) + _structure_violations(session, graph)
 
 
-def _structure_violations(session: Session, graph: AgentGraph) -> list[Violation]:
+def _structure_violations(session: Session, graph: AgentGraph) -> list[str]:
     return [
         *_entry_violations(graph),
         *_reachability_violations(graph),
@@ -192,13 +178,10 @@ def _structure_violations(session: Session, graph: AgentGraph) -> list[Violation
     ]
 
 
-def _agent_violations(nodes: Sequence[AgentGraphNode], rule: str) -> list[Violation]:
+def _agent_violations(nodes: Sequence[AgentGraphNode]) -> list[str]:
     return [
-        Violation(
-            rule,
-            f"Node '{node.key}' runs the disabled agent '{node.agent.name}'; enable "
-            "the agent or use another one.",
-        )
+        f"Node '{node.key}' runs the disabled agent '{node.agent.name}'; enable "
+        "the agent or use another one."
         for node in nodes
         if not node.agent.enabled
     ]
@@ -229,8 +212,8 @@ def _validate_write(
 ) -> None:
     """Reject the write if it leaves an enabled ``graph`` invalid.
 
-    Enabling checks every node agent (V4); a write to an enabled graph checks the
-    agent of the ``written`` node (V5). Either way the structure must pass.
+    Enabling checks every node agent; a write to an enabled graph checks the agent
+    of the ``written`` node. Either way the structure must pass.
     """
     graph.updated_at = datetime.now(UTC)
     if not graph.enabled:
@@ -238,128 +221,101 @@ def _validate_write(
     if enabling:
         found = violations(session, graph)
     else:
-        written_nodes = [] if written is None else [written]
-        found = _agent_violations(written_nodes, "V5")
+        found = _agent_violations([] if written is None else [written])
         found += _structure_violations(session, graph)
     if found:
         action = "can't be enabled" if enabling else "would no longer be valid"
         raise AgentGraphError(
-            status.HTTP_409_CONFLICT,
+            status.HTTP_400_BAD_REQUEST,
             f"The agent graph '{graph.name}' {action}; fix the violations, or "
             "disable the graph to edit it as a draft.",
             found,
         )
 
 
-def _entry_violations(graph: AgentGraph) -> list[Violation]:
-    """S1: exactly one entry node, with no incoming edges."""
+def _entry_violations(graph: AgentGraph) -> list[str]:
+    """Exactly one entry node, with no incoming edges."""
     entries = [node for node in graph.nodes if node.is_entry]
     if not entries:
-        return [
-            Violation("S1", "The graph has no entry node; mark one node as the entry.")
-        ]
+        return ["The graph has no entry node; mark one node as the entry."]
     if len(entries) > 1:
         keys = ", ".join(f"'{node.key}'" for node in entries)
-        return [
-            Violation(
-                "S1",
-                f"The graph has {len(entries)} entry nodes ({keys}); keep exactly one.",
-            )
-        ]
+        return [f"The graph has {len(entries)} entry nodes ({keys}); keep exactly one."]
     entry = entries[0]
     incoming = [e for e in graph.edges if e.target_node_id == entry.id]
     if incoming:
         return [
-            Violation(
-                "S1",
-                f"The entry node '{entry.key}' has {len(incoming)} incoming edge(s); "
-                "a run only starts there, so remove them.",
+            (
+                f"The entry node '{entry.key}' has {len(incoming)} incoming "
+                "edge(s); a run only starts there, so remove them."
             )
         ]
     return []
 
 
-def _reachability_violations(graph: AgentGraph) -> list[Violation]:
-    """S2: every node is reachable from the entry, ignoring conditions."""
+def _reachability_violations(graph: AgentGraph) -> list[str]:
+    """Every node is reachable from the entry, ignoring conditions."""
     entries = [node for node in graph.nodes if node.is_entry]
     if len(entries) != 1:
         return []
     reached = _reachable(graph, entries[0].id)
     return [
-        Violation(
-            "S2",
-            f"Node '{node.key}' is unreachable from the entry node "
-            f"'{entries[0].key}'; add an edge into it or remove it.",
-        )
+        f"Node '{node.key}' is unreachable from the entry node "
+        f"'{entries[0].key}'; add an edge into it or remove it."
         for node in graph.nodes
         if node.id not in reached
     ]
 
 
-def _else_violations(graph: AgentGraph) -> list[Violation]:
-    """S4: at most one unconditional outgoing edge, evaluated last."""
-    found: list[Violation] = []
+def _else_violations(graph: AgentGraph) -> list[str]:
+    """At most one unconditional outgoing edge per node, evaluated last."""
+    found: list[str] = []
     for node in graph.nodes:
         outgoing = [e for e in graph.edges if e.source_node_id == node.id]
         unconditional = [e for e in outgoing if e.condition is None]
         if len(unconditional) > 1:
             found.append(
-                Violation(
-                    "S4",
-                    f"Node '{node.key}' has {len(unconditional)} unconditional "
-                    "outgoing edges; only the first could ever run, so keep one "
-                    "and give the others conditions.",
-                )
+                f"Node '{node.key}' has {len(unconditional)} unconditional "
+                "outgoing edges; only the first could ever run, so keep one "
+                "and give the others conditions."
             )
         elif unconditional and any(
             e.priority > unconditional[0].priority for e in outgoing
         ):
             found.append(
-                Violation(
-                    "S4",
-                    f"The unconditional edge of node '{node.key}' must have the "
-                    "lowest priority (the highest number), since edges after it are "
-                    "never evaluated.",
-                )
+                f"The unconditional edge of node '{node.key}' must have the "
+                "lowest priority (the highest number), since edges after it are "
+                "never evaluated."
             )
     return found
 
 
-def _cycle_violations(graph: AgentGraph) -> list[Violation]:
-    """S7: cycles only with ``max_node_executions``, which has a maximum."""
-    found: list[Violation] = []
+def _cycle_violations(graph: AgentGraph) -> list[str]:
+    """Cycles only with ``max_node_executions``, which has a maximum."""
+    found: list[str] = []
     limit = graph.max_node_executions
     if limit is not None and limit > MAX_NODE_EXECUTIONS:
         found.append(
-            Violation(
-                "S7",
-                f"max_node_executions is {limit}, above the maximum of "
-                f"{MAX_NODE_EXECUTIONS}; lower it.",
-            )
+            f"max_node_executions is {limit}, above the maximum of "
+            f"{MAX_NODE_EXECUTIONS}; lower it."
         )
     if limit is None and _has_cycle(graph):
         found.append(
-            Violation(
-                "S7",
-                "The graph has a cycle; set max_node_executions to bound its runs.",
-            )
+            "The graph has a cycle; set max_node_executions to bound its runs."
         )
     return found
 
 
-def _gateway_violations(session: Session, graph: AgentGraph) -> list[Violation]:
-    """S8: a gateway only as the entry node, and of one enabled graph at most."""
-    found: list[Violation] = []
+def _gateway_violations(session: Session, graph: AgentGraph) -> list[str]:
+    """A gateway only as the entry node, and of one enabled graph at most."""
+    found: list[str] = []
     for node in graph.nodes:
         if node.agent.type != AgentType.GatewayAgent:
             continue
         if not node.is_entry:
             found.append(
-                Violation(
-                    "S8",
-                    f"Node '{node.key}' runs the gateway '{node.agent.name}', which "
-                    "may only be the entry node.",
-                )
+                f"Node '{node.key}' runs the gateway '{node.agent.name}', which "
+                "may only be the entry node."
             )
             continue
         others = session.exec(
@@ -375,11 +331,8 @@ def _gateway_violations(session: Session, graph: AgentGraph) -> list[Violation]:
         if others:
             names = ", ".join(f"'{name}'" for name in others)
             found.append(
-                Violation(
-                    "S8",
-                    f"The gateway '{node.agent.name}' already enters the enabled "
-                    f"graph {names}; disable that graph first.",
-                )
+                f"The gateway '{node.agent.name}' already enters the enabled "
+                f"graph {names}; disable that graph first."
             )
     return found
 
@@ -421,8 +374,8 @@ def _has_cycle(graph: AgentGraph) -> bool:
     return any(visit(node, set()) for node in list(successors))
 
 
-def _violation_error(status_code: int, rule: str, message: str) -> AgentGraphError:
-    return AgentGraphError(status_code, message, (Violation(rule, message),))
+def _rejected(message: str) -> AgentGraphError:
+    return AgentGraphError(status.HTTP_400_BAD_REQUEST, message, (message,))
 
 
 def _agent(session: Session, agent_id: uuid.UUID) -> Agent:
@@ -437,46 +390,39 @@ def _ensure_unique_name(session: Session, name: str, graph_id: uuid.UUID) -> Non
         select(AgentGraph.id).where(AgentGraph.name == name, AgentGraph.id != graph_id)
     ).first()
     if taken is not None:
-        raise AgentGraphError(
-            status.HTTP_409_CONFLICT,
-            f"An agent graph named '{name}' already exists; choose another name.",
+        raise _rejected(
+            f"An agent graph named '{name}' already exists; choose another name."
         )
 
 
 def _ensure_unique_key(graph: AgentGraph, key: str, node_id: uuid.UUID | None) -> None:
     if any(n.key == key and n.id != node_id for n in graph.nodes):
-        raise AgentGraphError(
-            status.HTTP_409_CONFLICT,
-            f"The graph already has a node '{key}'; node keys are unique in a graph.",
+        raise _rejected(
+            f"The graph already has a node '{key}'; node keys are unique in a graph."
         )
 
 
 def _ensure_edge_fits(graph: AgentGraph, edge: AgentGraphEdge) -> None:
-    """S3, checked even in drafts since the database enforces it too."""
+    """Edges stay inside their graph and are unique; checked even in drafts, since
+    the database enforces it too."""
     nodes = {n.id for n in graph.nodes}
     for end in _ends(edge):
         if end not in nodes:
-            raise _violation_error(
-                status.HTTP_409_CONFLICT,
-                "S3",
+            raise _rejected(
                 f"Node {end} isn't a node of the graph '{graph.name}'; edges stay "
-                "inside one graph.",
+                "inside one graph."
             )
     for other in _others(graph, edge):
         if other.source_node_id != edge.source_node_id:
             continue
         if other.target_node_id == edge.target_node_id:
-            raise _violation_error(
-                status.HTTP_409_CONFLICT,
-                "S3",
-                "An edge between these nodes already exists; change that edge instead.",
+            raise _rejected(
+                "An edge between these nodes already exists; change that edge instead."
             )
         if other.priority == edge.priority:
-            raise _violation_error(
-                status.HTTP_409_CONFLICT,
-                "S3",
+            raise _rejected(
                 f"The source node already has an edge with priority {edge.priority}; "
-                "give each outgoing edge its own priority.",
+                "give each outgoing edge its own priority."
             )
 
 

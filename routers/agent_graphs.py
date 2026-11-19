@@ -3,6 +3,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from database.agent_graphs import service
@@ -35,19 +36,35 @@ AdminDep = Annotated[User, Depends(require_admin)]
 
 _REJECTIONS: dict[int | str, dict[str, Any]] = {
     status.HTTP_404_NOT_FOUND: {"description": "A referenced row doesn't exist."},
-    status.HTTP_409_CONFLICT: {
+    status.HTTP_400_BAD_REQUEST: {
         "description": "The write breaks a rule; the detail lists the violations."
     },
 }
 
 
 def _write[T](session: Session, action: str, write: Callable[[], T]) -> T:
-    """Run a service write and commit it, or roll it back and answer its rejection."""
+    """Run a service write and commit it, or roll it back and answer its rejection.
+
+    The service checks the unique constraints itself, so one that still fails at
+    flush lost a race with a concurrent write, and is rejected like the service
+    would have.
+    """
     try:
         result = write()
+        session.flush()
     except service.AgentGraphError as exc:
         session.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        message = (
+            "The write conflicts with a concurrent change to this agent graph, such "
+            "as a duplicate name, node key or edge; reload the graph and retry."
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": message, "violations": [message]},
+        ) from exc
     commit_or_500(session, action)
     return result
 
