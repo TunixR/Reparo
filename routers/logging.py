@@ -7,10 +7,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlmodel import select
+from sqlmodel import col, select
 
 from database.general import SessionDep
 from database.logging.models import (
+    AgentGraphTrace,
+    AgentGraphTraceRead,
     AgentTrace,
     GUITrace,
     RecoveryContext,
@@ -256,6 +258,57 @@ def delete_agent_trace(
             detail=f"Failed to delete AgentTrace: {e}",
         )
     return
+
+
+@router.get(
+    "/agent_graph_traces",
+    response_model=Sequence[AgentGraphTraceRead],
+    summary="List AgentGraphTraces",
+)
+def list_agent_graph_traces(
+    session: SessionDep, robot_exception_id: UUID | None = None
+) -> Sequence[AgentGraphTrace]:
+    """Agent graph runs, newest first; only those of one recovery if given."""
+    query = select(AgentGraphTrace).order_by(col(AgentGraphTrace.created_at).desc())
+    if robot_exception_id is not None:
+        query = query.where(AgentGraphTrace.robot_exception_id == robot_exception_id)
+    return session.exec(query).all()
+
+
+def _get_agent_graph_trace_or_404(
+    trace_id: UUID, session: SessionDep
+) -> AgentGraphTrace:
+    trace = session.get(AgentGraphTrace, trace_id)
+    if not trace:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="AgentGraphTrace not found"
+        )
+    return trace
+
+
+@router.get(
+    "/agent_graph_traces/{trace_id}",
+    response_model=AgentGraphTraceRead,
+    summary="Get AgentGraphTrace by ID",
+)
+def get_agent_graph_trace(trace_id: UUID, session: SessionDep) -> AgentGraphTrace:
+    return _get_agent_graph_trace_or_404(trace_id, session)
+
+
+@router.get(
+    "/agent_graph_traces/{trace_id}/markdown",
+    summary="Get AgentGraphTrace Markdown Log",
+    description="The run's header, then each node execution with its agent trace.",
+    responses={
+        404: {"description": "AgentGraphTrace not found"},
+        200: {"content": {"text/markdown": {}}},
+    },
+)
+async def get_agent_graph_trace_markdown(
+    trace_id: UUID, session: SessionDep
+) -> Response:
+    trace = _get_agent_graph_trace_or_404(trace_id, session)
+    return Response(content=await trace.get_markdown_log(), media_type="text/markdown")
 
 
 @router.get("/gui_traces", response_model=Sequence[GUITrace], summary="List GUITraces")

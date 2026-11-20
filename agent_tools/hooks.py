@@ -21,6 +21,7 @@ from strands.hooks import (
 from strands.types.content import ContentBlock, Message
 from strands.types.tools import ToolResultContent
 
+from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
 from observability import attributes as attrs
 from settings import MAX_GUI_IMAGES
 
@@ -285,8 +286,13 @@ class AgentLoggingHook(HookProvider):
         if self.created:
             return
         from database.engine import general_engine
-        from database.logging.models import AgentTrace, SubAgentTrace
+        from database.logging.models import (
+            AgentGraphNodeTrace,
+            AgentTrace,
+            SubAgentTrace,
+        )
 
+        node_trace_id = self._claim_open_node_trace()
         with Session(general_engine) as session:
             # We first register the agent trace here
             trace = AgentTrace(
@@ -306,6 +312,12 @@ class AgentLoggingHook(HookProvider):
                 )
                 session.add(sub_trace)
 
+            if node_trace_id is not None:
+                node_trace = session.get(AgentGraphNodeTrace, node_trace_id)
+                if node_trace is not None:
+                    node_trace.agent_trace_id = self.agent_trace_id
+                    session.add(node_trace)
+
             session.commit()
             self.created = True
             # BeforeInvocationEvent runs inside the Strands agent span: link the
@@ -316,6 +328,20 @@ class AgentLoggingHook(HookProvider):
                     attrs.AGENT_TRACE_ID: str(self.agent_trace_id),
                 }
             )
+
+    def _claim_open_node_trace(self) -> UUID | None:
+        """The open node trace of a traced agent graph run, if this agent is its node.
+
+        A node's agent trace is a root; sub-agents of the node have a parent.
+        """
+        context = self.invocation_state.get(AGENT_GRAPH_CONTEXT_KEY)
+        if (
+            self.parent_trace_id is not None
+            or not isinstance(context, AgentGraphContext)
+            or context.trace is None
+        ):
+            return None
+        return context.trace.claim_open_node()
 
     def log_message(self, event: MessageAddedEvent) -> None:
         message = {

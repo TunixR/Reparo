@@ -19,6 +19,11 @@ def get_session():
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
+def open_session() -> Session:
+    """A session of its own, outside any request, for writes that commit on their own."""
+    return Session(general_engine)
+
+
 def commit_or_500(session: Session, action: str) -> None:
     """Commit, or roll back and raise a generic 500.
 
