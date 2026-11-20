@@ -48,6 +48,7 @@ MANUAL_TYPE_LABELS = frozenset({"type: security"})
 AREA_PREFIX = "area: "
 DEPS_SCOPE = "deps"
 DEPS_LABEL = "dependencies"
+SKILLS_SCOPE = "skills"
 BREAKING_LABEL = "breaking"
 
 MAX_HEADER_LENGTH = 100  # hard limit; CONTRIBUTING.md asks for <= 72
@@ -96,6 +97,11 @@ def scopes(areas: Mapping[str, object]) -> list[str]:
         if label.startswith(AREA_PREFIX)
     ]
     return [*names, DEPS_SCOPE]
+
+
+def commit_scopes(areas: Mapping[str, object]) -> list[str]:
+    """Valid scopes for commit messages and PR titles: the area scopes, plus `skills`."""
+    return [*scopes(areas), SKILLS_SCOPE]
 
 
 def scope_label(scope: str) -> str:
@@ -270,11 +276,11 @@ def main(argv: list[str]) -> int:
         return 0
     if command == "check-commit":
         errors = check_commit_message(
-            Path(arg).read_text(encoding="utf-8"), scopes(areas)
+            Path(arg).read_text(encoding="utf-8"), commit_scopes(areas)
         )
         what = "commit message"
     else:
-        errors = check_header(arg.strip(), scopes(areas))
+        errors = check_header(arg.strip(), commit_scopes(areas))
         what = "PR title"
     for error in errors:
         print(f"{what}: {error}", file=sys.stderr)
