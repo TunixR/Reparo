@@ -19,9 +19,9 @@ Clone with `--recurse-submodules`:
 git clone --recurse-submodules https://github.com/TunixR/Reparo
 ```
 
-It fills `.agents/skills`, the agent skills shared from the private ReparoHome repo
-(`git submodule update --init` does it later). Without access to it the folder stays empty, and
-nothing else depends on it.
+It fills `.agents/reparo-skills`, the agent skills shared from the private ReparoHome repo
+(`git submodule update --init` does it later); `.agents/skills` links to each of them. Without
+access to it the folder stays empty, and nothing else depends on it.
 
 1. Start Postgres, SeaweedFS (S3) and SigNoz (observability). Details: [`docker/README.md`](docker/README.md).
 
@@ -141,7 +141,7 @@ routers. Change those through `/provider`.
 | `docker/` | Compose stacks for development and production |
 | `tests/` | `unit/` (SQLite, runs in CI) and `integration/` (needs the Docker stack) |
 | `modules/` | Reserved for recovery modules; currently empty |
-| `.agents/skills`, `.claude/skills` | Agent skills: a submodule of ReparoHome's `skills` branch, and a link to it for Claude Code. Edit skills in ReparoHome only |
+| `.agents/reparo-skills`, `.agents/skills`, `.claude/skills` | Agent skills: a submodule of ReparoHome's `skills` branch; one link per shared skill plus this repo's own skills; and a link to that for Claude Code. Edit shared skills in ReparoHome only |
 
 ## Documentation
 

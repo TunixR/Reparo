@@ -51,7 +51,7 @@ cross-cutting. The authoritative paths are the globs in `.github/labeler.yml`.
 | `docker` | `docker/` |
 | `ci` | `.github/`, `.pre-commit-config.yaml`, these conventions |
 | `deps` | dependency bumps (`pyproject.toml`, `uv.lock`); labelled `dependencies` |
-| `skills` | the skills submodule (`.agents/skills`, from ReparoHome's `skills` branch) and its `.claude/skills` link; commit scope only, no label |
+| `skills` | the skills submodule (`.agents/reparo-skills`, from ReparoHome's `skills` branch), `.agents/skills` (its links and this repo's own skills) and the `.claude/skills` link; commit scope only, no label |
 
 There are no `wip`, `telemetry` (use `observability`), `deps-dev` or `integration` scopes. A new
 area goes into `.github/labeler.yml`, `.github/labels.yml`, the "Area" dropdown of the issue forms
