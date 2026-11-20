@@ -12,12 +12,18 @@ from httpx import Headers
 from database.agent_graphs.models import AgentGraph
 from database.agents.models import Agent, AgentType
 from tests.unit.fixtures.agent_graph_fixtures import (
+    GRAPH_REPORT,
     Edge,
     MakeAgentGraph,
     Node,
+    field_spec,
 )
 
-FINDING = "tests.unit.fixtures.agent_graph_fixtures.Finding"
+FINDING: dict[str, Any] = {
+    "name": "Finding",
+    "description": "What was found.",
+    "fields": [field_spec("reason"), field_spec("tags", "list[str]")],
+}
 DONE = {"field": "done", "op": "eq", "value": True}
 
 
@@ -136,7 +142,7 @@ def routed_by_alpha(
     return _routed
 
 
-def test_a_response_model_change_that_breaks_a_condition_is_a_conflict(
+def test_an_output_model_change_that_breaks_a_condition_is_a_conflict(
     client: TestClient,
     admin_headers: Headers,
     graph_agents: dict[str, Agent],
@@ -147,7 +153,7 @@ def test_a_response_model_change_that_breaks_a_condition_is_a_conflict(
     alpha = graph_agents["Alpha"]
 
     response = client.patch(
-        f"/agents/{alpha.id}", json={"response_model": FINDING}, headers=admin_headers
+        f"/agents/{alpha.id}", json={"output_model": FINDING}, headers=admin_headers
     )
 
     assert response.status_code == status.HTTP_409_CONFLICT, response.text
@@ -157,7 +163,59 @@ def test_a_response_model_change_that_breaks_a_condition_is_a_conflict(
     assert violation.startswith("Routed: The condition on the edge 'alpha' → 'beta'")
     assert "'done'" in violation
     got = client.get(f"/agents/{alpha.id}", headers=admin_headers).json()
-    assert got["response_model"] == graph_agents["Alpha"].response_model
+    assert got["output_model"]["name"] == "GraphReport"
+
+
+def test_removing_an_argument_a_node_maps_is_a_conflict(
+    client: TestClient,
+    admin_headers: Headers,
+    tasked_agent: Agent,
+    graph_agents: dict[str, Agent],
+    make_agent_graph: MakeAgentGraph,
+):
+    _ = make_agent_graph(
+        Node("start", graph_agents["Alpha"]),
+        Node("worker", tasked_agent, input_map={"task": "start.note"}),
+        name="Mapped",
+        is_default_recovery=False,
+    )
+
+    response = client.patch(
+        f"/agents/{tasked_agent.id}",
+        json={"arguments": [field_spec("goal")]},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT, response.text
+    violations = response.json()["detail"]["violations"]
+    assert any("'task', which isn't an argument" in v for v in violations), violations
+    got = client.get(f"/agents/{tasked_agent.id}", headers=admin_headers).json()
+    assert [argument["name"] for argument in got["arguments"]] == ["task"]
+
+
+def test_re_sending_the_same_definitions_in_another_spelling_is_no_conflict(
+    client: TestClient,
+    admin_headers: Headers,
+    graph_agents: dict[str, Agent],
+    routed_by_alpha: MakeAgentGraph,
+):
+    _ = routed_by_alpha(name="Routed")
+    alpha = graph_agents["Alpha"]
+    respelled = GRAPH_REPORT | {
+        "fields": [
+            field | {"type": field["type"].replace(" ", "")}
+            for field in GRAPH_REPORT["fields"]
+        ]
+    }
+
+    response = client.patch(
+        f"/agents/{alpha.id}",
+        json={"output_model": respelled, "arguments": []},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["output_model"] == GRAPH_REPORT
 
 
 def test_a_type_change_that_breaks_a_condition_is_a_conflict(
@@ -193,12 +251,12 @@ def test_changes_that_keep_enabled_graphs_valid_still_succeed(
 
     response = client.patch(
         f"/agents/{beta.id}",
-        json={"response_model": FINDING, "prompt": "Be brief."},
+        json={"output_model": FINDING, "prompt": "Be brief."},
         headers=admin_headers,
     )
 
     assert response.status_code == status.HTTP_200_OK, response.text
-    assert response.json()["response_model"] == FINDING
+    assert response.json()["output_model"] == FINDING
 
 
 def test_violations_an_enabled_graph_already_had_dont_block_an_agent_change(
@@ -211,7 +269,7 @@ def test_violations_an_enabled_graph_already_had_dont_block_an_agent_change(
     beta = graph_agents["Beta"]
 
     response = client.patch(
-        f"/agents/{beta.id}", json={"response_model": FINDING}, headers=admin_headers
+        f"/agents/{beta.id}", json={"output_model": FINDING}, headers=admin_headers
     )
 
     assert response.status_code == status.HTTP_200_OK, response.text

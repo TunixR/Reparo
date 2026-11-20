@@ -45,6 +45,7 @@ from database.agent_graphs.models import (
 )
 from database.agent_graphs.runner import RECOVERY_INPUTS_SOURCE
 from database.agents.models import Agent, AgentUpdate
+from database.agents.specs import dump_fields
 from database.provider.models import Router
 from templates.recovery_payload import RecoveryInputs
 
@@ -195,7 +196,7 @@ def update_agent(
     """Apply ``payload`` to ``agent`` unless that breaks a graph using the agent.
 
     Disabling is rejected while an enabled graph uses the agent; enabling is always
-    allowed. A change to the agent's arguments, response model or type is rejected
+    allowed. A change to the agent's arguments, output model or type is rejected
     if it breaks a structural rule of an enabled graph using the agent. Raises
     `ValueError` for an update the agent itself rejects.
     """
@@ -231,9 +232,14 @@ def delete_agent(session: Session, agent: Agent) -> None:
 
 
 def _contract(agent: Agent) -> tuple[object, ...]:
-    """What graphs rely on in ``agent``: its arguments, response model and type."""
-    arguments = sorted((argument.name, argument.type) for argument in agent.arguments)
-    return agent.type, agent.response_model, tuple(arguments)
+    """What graphs rely on in ``agent``: its arguments, output model and type, in
+    their normalized form, so re-sending the same definitions changes nothing."""
+    output_model = agent.output_model
+    return (
+        agent.type,
+        dump_fields(agent.arguments),
+        None if output_model is None else output_model.model_dump(mode="json"),
+    )
 
 
 def _ensure_nothing_breaks(
@@ -303,13 +309,12 @@ def violations(graph: AgentGraph) -> list[str]:
 
 
 def _structure_violations(graph: AgentGraph) -> list[str]:
-    outputs, broken = _output_models(graph)
+    outputs = _output_models(graph)
     return [
         *_entry_violations(graph),
         *_reachability_violations(graph),
         *_else_violations(graph),
         *_cycle_violations(graph),
-        *broken,
         *_condition_violations(graph, outputs),
         *_input_map_violations(graph, outputs),
         *_binding_violations(graph, outputs),
@@ -331,20 +336,9 @@ def _recovery_violations(graph: AgentGraph) -> list[str]:
 type OutputModels = dict[str, type[BaseModel] | None]
 
 
-def _output_models(graph: AgentGraph) -> tuple[OutputModels, list[str]]:
-    """Each node's output model by key, and why the ones missing can't load."""
-    models: OutputModels = {}
-    broken: list[str] = []
-    for node in graph.nodes:
-        try:
-            models[node.key] = node.agent.output_model()
-        except (ImportError, ValueError) as exc:
-            broken.append(
-                f"Node '{node.key}' runs the agent '{node.agent.name}', whose "
-                f"response model can't be loaded ({exc}); fix the agent's "
-                "response model."
-            )
-    return models, broken
+def _output_models(graph: AgentGraph) -> OutputModels:
+    """Each node's output class by key."""
+    return {node.key: node.agent.output_class() for node in graph.nodes}
 
 
 def _condition_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]:
@@ -383,7 +377,7 @@ def _condition_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]
     return [
         f"Node '{node.key}' has conditional outgoing edges, but its agent "
         f"'{node.agent.name}' has no output model to evaluate them on; give the "
-        "agent a response model or remove the conditions."
+        "agent an output model or remove the conditions."
         for node in unroutable.values()
     ] + found
 

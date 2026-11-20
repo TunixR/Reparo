@@ -43,10 +43,7 @@ class AgentGraphFlag(str, enum.Enum):
 
 def _reports_success(node: "AgentGraphNode") -> bool:
     """Whether the node's output model has a boolean ``success``."""
-    try:
-        model = node.agent.output_model()
-    except (ImportError, ValueError):
-        return False
+    model = node.agent.output_class()
     success = None if model is None else model.model_fields.get("success")
     return success is not None and success.annotation is bool
 

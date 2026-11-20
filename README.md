@@ -121,7 +121,7 @@ routers. Change those through `/provider`.
 | `gateway/` | Tools for the gateway agent (human hand-off is a placeholder) |
 | `agent_tools/` | Strands tools and hooks shared by agents: screenshots, tool limits, trace logging |
 | `robot/` | The recovery WebSocket from accept to close: keep-alive, frame routing, `abort` and disconnects |
-| `templates/` | Pydantic models for recovery payloads and agent responses |
+| `templates/` | Pydantic models for recovery payloads and results sent to robots |
 | `security/`, `middlewares/` | Password and robot-key hashing, JWT handling, auth dependencies |
 | `s3/` | S3 client for screenshots |
 | `observability/` | OpenTelemetry tracing, logging, redaction and domain spans (see [`OBSERVABILITY.md`](OBSERVABILITY.md)) |
@@ -141,6 +141,7 @@ routers. Change those through `/provider`.
 | What is implemented and what is planned? | [`REQUIREMENTS.md`](REQUIREMENTS.md) |
 | How do I work in the repo (lint, tests, migrations, code style)? | [`AGENTS.md`](AGENTS.md) |
 | How do I name commits, branches, issues and PRs? How do labels work? | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| What technical debt do we know about? | [`TECH_DEBT.md`](TECH_DEBT.md) |
 | Traces, logs and SigNoz | [`OBSERVABILITY.md`](OBSERVABILITY.md) |
 | Docker services, ports, production | [`docker/README.md`](docker/README.md) |
 | Endpoints and payload schemas | `/scalar` on a running server |

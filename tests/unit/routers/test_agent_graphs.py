@@ -722,7 +722,7 @@ def test_a_condition_compares_a_field_of_the_source_output(
     graph_agents: dict[str, Agent],
 ):
     a, b, c = graph_agents.values()
-    typo = {"field": "finding.raeson", "op": "eq", "value": "timeout"}
+    typo = {"field": "nte", "op": "eq", "value": "timeout"}
     graph = build_agent_graph(
         [("a", a), ("b", b), ("c", c)], [("a", "b", 0, typo), ("a", "c", 1)]
     )
@@ -730,9 +730,9 @@ def test_a_condition_compares_a_field_of_the_source_output(
     _rejected(
         enable_via_api(client, admin_headers, graph.id),
         "'a' → 'b'",
-        "'raeson'",
-        "Finding",
-        "reason",
+        "'nte'",
+        "GraphReport",
+        "note",
     )
 
 
@@ -849,7 +849,7 @@ def test_a_gui_node_is_routed_on_its_run_report(
             ("'recovery.ui_log.case_id'", "no fields"),
         ),
         ({"task": "ghost.reason"}, ("'ghost.reason'", "no node 'ghost'")),
-        ({"task": "a.finding.raeson"}, ("'a.finding.raeson'", "'raeson'", "Finding")),
+        ({"task": "a.nte"}, ("'a.nte'", "'nte'", "GraphReport", "note")),
         (
             {"task": "task_name"},
             ("'task_name'", "recovery.<field>", "<node_key>.<field>"),
@@ -1178,11 +1178,11 @@ def test_a_write_to_an_enabled_graph_must_keep_its_bindings_valid(
 
     response = client.patch(
         f"/agent_graphs/{graph.id}/nodes/{graph.nodes['b']}",
-        json={"input_map": {"task": "a.finding.raeson"}},
+        json={"input_map": {"task": "a.nte"}},
         headers=admin_headers,
     )
 
-    _rejected(response, "Node 'b'", "'raeson'")
+    _rejected(response, "Node 'b'", "'nte'")
     body = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers).json()
     assert body["nodes"][1]["input_map"] == {"task": "recovery.task_name"}
 

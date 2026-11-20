@@ -12,6 +12,7 @@ from strands import tool
 
 from database.agent_graphs.runner import AgentGraphContext, NodeRun
 from database.agents.models import Agent, AgentTool
+from database.agents.specs import FieldSpec, OutputModelSpec
 from database.tools.models import Tool
 from tests.unit.fixtures.agent_fixtures import (
     EntryPoint,
@@ -85,17 +86,54 @@ async def test_run_node_returns_what_call_returns_as_a_model(
 
     assert isinstance(run, NodeRun)
     assert isinstance(run.output, ScriptedReport)
-    assert run.output == ScriptedReport(done=True)
+    assert run.output == ScriptedReport.model_validate({"done": True})
     assert run.output.model_dump() == as_dict == {"done": True}
 
 
-def test_output_model_is_the_response_model(
+def test_output_class_is_built_from_the_output_model(
     scripted_agent: ScriptedAgent, mock_agent: Agent
 ) -> None:
     agent, _ = scripted_agent(*TURNS)
 
-    assert agent.output_model() is ScriptedReport
-    assert mock_agent.output_model() is None
+    assert agent.output_class() is ScriptedReport
+    assert mock_agent.output_class() is None
+
+
+EVERY_TYPE: list[tuple[str, str, Any]] = [
+    ("kind", "Literal['ui', 'data']", "ui"),
+    ("note", "str | None", None),
+    ("passes", "list[int]", [0, 2]),
+    ("found", "dict[str, Any]", {"button": {"x": 1}}),
+    ("ratio", "float", 0.5),
+]
+
+
+@pytest.mark.asyncio
+async def test_an_agent_defined_with_every_type_form_runs_and_reports_its_class(
+    scripted_agent: ScriptedAgent, session: Session
+) -> None:
+    report = {name: value for name, _, value in EVERY_TYPE}
+    agent, _ = scripted_agent("Looked.", ToolCall("Everything", report))
+    fields = [
+        FieldSpec(name=name, type=type_, description=name)
+        for name, type_, _ in EVERY_TYPE
+    ]
+    agent.arguments = [
+        *fields,
+        FieldSpec(name="tries", type="int", description="Tries.", default=1),
+    ]
+    agent.output_model = OutputModelSpec(
+        name="Everything", description="Every type form.", fields=fields
+    )
+    session.add(agent)
+    session.commit()
+
+    run = await agent.run_node(node_state(report, websocket=None), {})
+
+    output_class = agent.output_class()
+    assert output_class is not None
+    assert isinstance(run.output, output_class)
+    assert run.output.model_dump() == report
 
 
 @pytest.mark.asyncio

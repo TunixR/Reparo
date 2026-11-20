@@ -15,16 +15,21 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from httpx import Headers
-from pydantic import BaseModel
 from sqlmodel import Session
 
 from database.agent_graphs.runner import NodeRun
-from database.agents.models import Agent, AgentTool, AgentType, Argument, SubAgent
+from database.agents.models import Agent, AgentTool, AgentType, SubAgent
 from database.logging.models import AgentGraphTrace
 from database.provider.models import Router
 from database.tools.models import Tool
 from tests.unit.agent_tools._shared.process_models import SPENDING_APPROVAL_MODEL
-from tests.unit.fixtures.agent_graph_fixtures import Edge, MakeAgentGraph, Node
+from tests.unit.fixtures.agent_graph_fixtures import (
+    Edge,
+    MakeAgentGraph,
+    Node,
+    argument,
+    output_model,
+)
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 GATEWAY = "Gateway Orchestrator"
@@ -35,24 +40,17 @@ CONTINUATION = "Continuation Inferer"
 UI_EXCEPTION = {"field": "ui_exception", "op": "eq", "value": True}
 
 
-class Triage(BaseModel):
-    diagnosis: str
-    ui_exception: bool
-
-
-class Inference(BaseModel):
-    recovery_task: str
-
-
-class Hint(BaseModel):
-    hint: str
-
-
-def _arguments(*names: str) -> list[Argument]:
-    return [
-        Argument(name=name, description=name, type="str", json_type="string")
-        for name in names
-    ]
+TRIAGE = output_model("Triage", diagnosis="str", ui_exception="bool")
+INFERENCE = output_model("Inference", recovery_task="str")
+HINT = output_model("Hint", hint="str")
+REPORT = output_model(
+    "UiExceptionReport",
+    result="str",
+    success="bool",
+    process_finished="bool",
+    continue_from_model_event_id="str | None",
+    loop_iteration="list[int]",
+)
 
 
 @pytest.fixture
@@ -71,29 +69,29 @@ def payload(valid_recovery_payload: dict[str, Any]) -> dict[str, Any]:
 def agents(session: Session, mock_router: Router) -> dict[str, Agent]:
     """A gateway, an inferer with a helper sub-agent, and a continuation setter."""
 
-    def _agent(name: str, type_: AgentType, model: str, *arguments: str) -> Agent:
+    def _agent(
+        name: str, type_: AgentType, model: dict[str, Any], *arguments: str
+    ) -> Agent:
         return Agent(
             id=uuid.uuid4(),
             name=name,
             description=name,
             prompt=f"You are the {name}.",
-            response_model=model,
+            output_model=model,
             input_type=Agent.InputType.TEXT,
             router=mock_router,
             router_id=mock_router.id,
             type=type_,
-            arguments=_arguments(*arguments),
+            arguments=[argument(name) for name in arguments],
         )
 
-    gateway = _agent(GATEWAY, AgentType.Agent, f"{__name__}.Triage", "task_name")
-    inferer = _agent(
-        INFERER, AgentType.Agent, f"{__name__}.Inference", "task_name", "symptom"
-    )
-    helper = _agent(HELPER, AgentType.Agent, f"{__name__}.Hint", "symptom")
+    gateway = _agent(GATEWAY, AgentType.Agent, TRIAGE, "task_name")
+    inferer = _agent(INFERER, AgentType.Agent, INFERENCE, "task_name", "symptom")
+    helper = _agent(HELPER, AgentType.Agent, HINT, "symptom")
     continuation = _agent(
         CONTINUATION,
         AgentType.Agent,
-        "templates.error_handler.UiExceptionReport",
+        REPORT,
         "recovery_task",
     )
     tool = Tool(

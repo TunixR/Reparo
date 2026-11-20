@@ -30,7 +30,7 @@ class NodeRun:
     """What an agent produces as a node of an agent graph."""
 
     output: BaseModel
-    """The node's structured output, an instance of the agent's `output_model()`."""
+    """The node's structured output, an instance of the agent's `output_class()`."""
 
 
 @dataclass(slots=True)
@@ -47,11 +47,11 @@ class AgentGraphContext:
         _ = self.outputs.pop(key, None)
         self.outputs[key] = output
 
-    def get(self, path: str) -> Any:
+    def get(self, path: str, default: Any = None) -> Any:
         """The value at ``recovery.<field>`` or ``<node_key>.<field>``, dotted.
 
         A bare name is a recovery input, else that field of the most recent output
-        that has it. ``None`` when nothing has the value.
+        that has it. ``default`` when nothing has the value.
         """
         source, *fields = path.split(".")
         if not fields:
@@ -63,7 +63,7 @@ class AgentGraphContext:
                     for output in reversed(self.outputs.values())
                     if source in type(output).model_fields
                 ),
-                None,
+                default,
             )
         value: Any = (
             self.recovery_inputs
@@ -76,7 +76,7 @@ class AgentGraphContext:
             elif isinstance(value, Mapping) and name in value:
                 value = value[name]  # pyright: ignore[reportUnknownVariableType] - JSON of unknown shape
             else:
-                return None
+                return default
         return value  # pyright: ignore[reportUnknownVariableType] - JSON of unknown shape
 
 

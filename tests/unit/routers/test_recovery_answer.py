@@ -13,10 +13,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 import observability.instrumentation.agent_graph as agent_graph_telemetry
@@ -28,17 +28,21 @@ from database.agents.models import (
     Agent,
     AgentTool,
     AgentType,
-    Argument,
     SubAgent,
 )
 from database.logging.models import RobotException
 from database.provider.models import Router
 from database.tools.models import Tool
 from templates.gateway import ResponseToRPA
-from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 from tests.unit.agent_tools._shared.process_models import (
     COMPACT_MODEL,
     SPENDING_APPROVAL_MODEL,
+)
+from tests.unit.fixtures.agent_graph_fixtures import (
+    MakeAgentGraph,
+    Node,
+    argument,
+    output_model,
 )
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
@@ -130,38 +134,37 @@ def agents(
         name="UI Exception Handler",
         description="Recovers UI errors.",
         prompt="Recover the robot.",
-        response_model="templates.error_handler.UiExceptionReport",
+        output_model=output_model(
+            "UiExceptionReport",
+            result="str",
+            success="bool",
+            process_finished="bool",
+            continue_from_model_event_id="str | None",
+            loop_iteration="list[int]",
+        ),
         input_type=Agent.InputType.TEXT,
         router=mock_router,
         router_id=mock_router.id,
         type=AgentType.Agent,
-        arguments=[
-            Argument(
-                name="task_name",
-                description="Task name.",
-                type="str",
-                json_type="string",
-            )
-        ],
+        arguments=[argument("task_name")],
     )
     gateway = Agent(
         id=uuid.uuid4(),
         name="Gateway Orchestrator",
         description="Routes recoveries.",
         prompt="Route the recovery.",
-        response_model="templates.gateway.ResponseToRPA",
+        output_model=output_model(
+            "ResponseToRPA",
+            success="bool",
+            process_finished="bool",
+            continue_from_model_event_id="str | None",
+            loop_iteration="list[int]",
+        ),
         input_type=Agent.InputType.TEXT,
         router=mock_router,
         router_id=mock_router.id,
         type=AgentType.Agent,
-        arguments=[
-            Argument(
-                name="task_name",
-                description="Task name.",
-                type="str",
-                json_type="string",
-            )
-        ],
+        arguments=[argument("task_name")],
     )
     session.add_all([tool, error_agent, gateway])
     session.commit()
@@ -200,7 +203,7 @@ def script(
         # Agent traces are written through the production engine; not under test.
         monkeypatch.setattr(Agent, "get_logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
         monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
-        monkeypatch.setattr(Agent, "validate_input", lambda self, *a, **k: None)  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(Agent, "validate_input", lambda self, **k: k)  # pyright: ignore[reportUnknownLambdaType]
         return models
 
     return _script

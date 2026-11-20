@@ -25,7 +25,6 @@ def make_agent() -> Agent:
         name="Markdown Logger",
         description="Agent used for testing markdown log generation.",
         prompt="You are a test agent.",
-        response_model=None,
         input_type=Agent.InputType.TEXT,
         enabled=True,
         router=make_router(),

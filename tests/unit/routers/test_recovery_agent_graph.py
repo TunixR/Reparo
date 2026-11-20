@@ -15,38 +15,42 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
-from database.agents.models import Agent, AgentTool, AgentType, Argument
+from database.agents.models import Agent, AgentTool, AgentType
 from database.logging.models import RobotException
 from database.provider.models import Router
 from database.tools.models import Tool
 from tests.unit.agent_tools._shared.process_models import SPENDING_APPROVAL_MODEL
-from tests.unit.fixtures.agent_graph_fixtures import Edge, MakeAgentGraph, Node
-from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
+from tests.unit.fixtures.agent_graph_fixtures import (
+    Edge,
+    MakeAgentGraph,
+    Node,
+    argument,
+    output_class,
+    output_model,
+)
 from tests.unit.shared.log_events import logged_events
+from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 GATEWAY = "Gateway Orchestrator"
 INFERER = "Recovery Inferer"
 CONTINUATION = "Continuation Inferer"
 
 
-class Triage(BaseModel):
-    diagnosis: str
-    ui_exception: bool
-
-
-class Inference(BaseModel):
-    recovery_task: str
-
-
-def _arguments(*names: str) -> list[Argument]:
-    return [
-        Argument(name=name, description=name, type="str", json_type="string")
-        for name in names
-    ]
+TRIAGE = output_model("Triage", diagnosis="str", ui_exception="bool")
+INFERENCE = output_model("Inference", recovery_task="str")
+REPORT = output_model(
+    "UiExceptionReport",
+    result="str",
+    success="bool",
+    process_finished="bool",
+    continue_from_model_event_id="str | None",
+    loop_iteration="list[int]",
+)
+Triage = output_class(TRIAGE)
+Inference = output_class(INFERENCE)
 
 
 @pytest.fixture
@@ -65,28 +69,28 @@ def payload(valid_recovery_payload: dict[str, Any]) -> dict[str, Any]:
 def agents(session: Session, mock_router: Router) -> dict[str, Agent]:
     """A gateway, an inferring error agent and a continuation-setting agent."""
 
-    def _agent(name: str, type_: AgentType, model: str, *arguments: str) -> Agent:
+    def _agent(
+        name: str, type_: AgentType, model: dict[str, Any], *arguments: str
+    ) -> Agent:
         return Agent(
             id=uuid.uuid4(),
             name=name,
             description=name,
             prompt=f"You are the {name}.",
-            response_model=model,
+            output_model=model,
             input_type=Agent.InputType.TEXT,
             router=mock_router,
             router_id=mock_router.id,
             type=type_,
-            arguments=_arguments(*arguments),
+            arguments=[argument(name) for name in arguments],
         )
 
-    gateway = _agent(GATEWAY, AgentType.Agent, f"{__name__}.Triage", "task_name")
-    inferer = _agent(
-        INFERER, AgentType.Agent, f"{__name__}.Inference", "task_name", "symptom"
-    )
+    gateway = _agent(GATEWAY, AgentType.Agent, TRIAGE, "task_name")
+    inferer = _agent(INFERER, AgentType.Agent, INFERENCE, "task_name", "symptom")
     continuation = _agent(
         CONTINUATION,
         AgentType.Agent,
-        "templates.error_handler.UiExceptionReport",
+        REPORT,
         "recovery_task",
     )
     tool = Tool(
@@ -284,9 +288,11 @@ def test_one_agent_backing_two_nodes_runs_once_per_node(
     assert _instruction(models[INFERER], run=2).endswith("symptom: First guess")
     context = node_runs[-1][1][AGENT_GRAPH_CONTEXT_KEY]
     assert context.outputs == {
-        "gateway": Triage(diagnosis="Submit is disabled", ui_exception=True),
-        "infer": Inference(recovery_task="First guess"),
-        "check": Inference(recovery_task="Second guess"),
+        "gateway": Triage.model_validate(
+            {"diagnosis": "Submit is disabled", "ui_exception": True}
+        ),
+        "infer": Inference.model_validate({"recovery_task": "First guess"}),
+        "check": Inference.model_validate({"recovery_task": "Second guess"}),
     }
 
 
@@ -357,7 +363,9 @@ def test_a_passed_execution_timeout_is_done_without_success(
     ) -> NodeRun:
         ran.append(self.name)
         await asyncio.sleep(0.05)
-        return NodeRun(output=Triage(diagnosis="slow", ui_exception=True))
+        return NodeRun(
+            output=Triage.model_validate({"diagnosis": "slow", "ui_exception": True})
+        )
 
     monkeypatch.setattr(Agent, "run_node", _slow_node)
 
@@ -381,7 +389,11 @@ def test_a_node_timeout_is_an_internal_error(
         _self: Agent, _state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         await asyncio.sleep(1)
-        return NodeRun(output=Triage(diagnosis="too late", ui_exception=True))
+        return NodeRun(
+            output=Triage.model_validate(
+                {"diagnosis": "too late", "ui_exception": True}
+            )
+        )
 
     monkeypatch.setattr(Agent, "run_node", _hanging_node)
 

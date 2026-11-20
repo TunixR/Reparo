@@ -1,13 +1,14 @@
 import enum
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from importlib import import_module
 from typing import Any, override
 
-from pydantic import BaseModel
-from sqlalchemy import Column
+from pydantic import BaseModel, ValidationError
+from sqlalchemy import Column, Dialect, TypeDecorator
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import validates
 from sqlmodel import Enum, Field, Relationship, SQLModel
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
@@ -28,6 +29,15 @@ from database.agent_graphs.runner import (
     AgentGraphContext,
     NodeRun,
 )
+from database.agents.specs import (
+    FIELD_SPECS,
+    FieldSpec,
+    FieldSpecs,
+    OutputModelSpec,
+    build_input_model,
+    build_output_model,
+    dump_fields,
+)
 from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
 from database.agents.tooled_gui_agent import GuiRunReport, TooledGuiAgent
 from database.provider.models import Router
@@ -38,105 +48,57 @@ from observability.events import log_event
 logger = logging.getLogger(__name__)
 
 # Module level: inside `Agent` the name `type` is the agent type field.
-type ResponseModel = type[BaseModel]
+type ModelClass = type[BaseModel]
+
+_UNBOUND = object()
+"""What the graph context gives for an argument it has no value for."""
 
 
-class Argument(SQLModel, table=True):
-    """
-    Defines an argument for an agent's input argument when calling it
-    """
+class FieldSpecsType(TypeDecorator[list[FieldSpec]]):
+    """A JSONB column that stores, and always loads, a valid list of `FieldSpec`."""
 
-    id: uuid.UUID = Field(
-        default_factory=uuid.uuid4,
-        description="Unique identifier for the argument.",
-        primary_key=True,
-    )
-    name: str = Field(..., description="Name of the argument.")
-    description: str = Field(..., description="Description of the argument.")
-    type: str = Field(..., description="Python Type of the argument (e.g., str, int).")
-    json_type: str = Field(
-        ..., description="JSON Schema type of the argument (e.g., string, number)."
-    )
+    impl = JSONB
+    cache_ok = True
 
-    agent_id: uuid.UUID = Field(
-        foreign_key="agent.id",
-        description="Foreign key to the agent this argument belongs to.",
-    )
-    agent: "Agent" = Relationship(
-        back_populates="arguments",
-    )
+    def process_bind_param(
+        self, value: Sequence[FieldSpec | Mapping[str, Any]] | None, dialect: Dialect
+    ) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        return dump_fields(FIELD_SPECS.validate_python(_as_json(value)))
 
-    @property
-    def python_type(self) -> type:  # pyright: ignore[reportInvalidTypeForm]
-        match self.type:
-            case "str":
-                return str
-            case "int":
-                return int
-            case "float":
-                return float
-            case "bool":
-                return bool
-            case "list":
-                return list
-            case "dict":
-                return dict
-            case "None":
-                return None
-            case _:
-                raise ValueError(f"Unsupported type: {self.type}")
+    def process_result_value(
+        self, value: list[dict[str, Any]] | None, dialect: Dialect
+    ) -> list[FieldSpec] | None:
+        return None if value is None else FIELD_SPECS.validate_python(value)
 
-    @override
-    def __str__(self) -> str:
-        return f"{self.name}: {self.type} ({self.json_type}) - {self.description}"
 
-    def __init__(self, **data: Any):
-        super().__init__(**data)
-        # Validate that the type is a valid Python type
-        valid_python_types = {
-            "str",
-            "int",
-            "float",
-            "bool",
-            "list",
-            "dict",
-            "None",
-        }
-        if self.type not in valid_python_types:
-            raise ValueError(
-                f"Invalid type '{self.type}' for argument '{self.name}': Must be one of {valid_python_types}."
-            )
+class OutputModelSpecType(TypeDecorator[OutputModelSpec]):
+    """A JSONB column that stores, and always loads, a valid `OutputModelSpec`."""
 
-        valid_json_types = {
-            "string",
-            "number",
-            "integer",
-            "boolean",
-            "array",
-            "object",
-            "null",
-        }
-        if self.json_type not in valid_json_types:
-            raise ValueError(
-                f"Invalid JSON type '{self.json_type}' for argument '{self.name}'. Must be one of {valid_json_types}."
-            )
+    impl = JSONB
+    cache_ok = True
 
-        # Check python type and json type compatibility
-        type_mapping = {
-            "str": "string",
-            "int": "integer",
-            "float": "number",
-            "bool": "boolean",
-            "list": "array",
-            "dict": "object",
-            "None": "null",
-        }
-        if self.type in type_mapping:
-            expected_json_type = type_mapping[self.type]
-            if self.json_type != expected_json_type:
-                raise ValueError(
-                    f"Type '{self.type}' is not compatible with JSON type '{self.json_type}' for argument '{self.name}'. Expected JSON type: '{expected_json_type}'."
-                )
+    def process_bind_param(
+        self, value: OutputModelSpec | Mapping[str, Any] | None, dialect: Dialect
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return OutputModelSpec.model_validate(_as_json(value)).model_dump(mode="json")
+
+    def process_result_value(
+        self, value: dict[str, Any] | None, dialect: Dialect
+    ) -> OutputModelSpec | None:
+        return None if value is None else OutputModelSpec.model_validate(value)
+
+
+def _as_json(value: Any) -> Any:
+    """``value`` with its pydantic models dumped to JSON, so they validate as data."""
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return [_as_json(item) for item in value]  # pyright: ignore[reportUnknownVariableType] - JSON
+    return value
 
 
 class AgentType(str, enum.Enum):
@@ -166,10 +128,13 @@ class Agent(SQLModel, table=True):
     name: str = Field(..., description="Name of the agent.")
     description: str = Field(..., description="Description of the agent.")
     prompt: str = Field(..., description="The prompt used to initialize the agent.")
-    # Used to import the pydantic model at runtime
-    response_model: str | None = Field(
-        None,
-        description="The module path where the agent's structured response model is located.",
+    output_model: OutputModelSpec | None = Field(
+        default=None,
+        sa_type=OutputModelSpecType,
+        description=(
+            "The agent's structured output; null for none. A GUI agent always "
+            "reports a GuiRunReport."
+        ),
     )
     # TEXT, IMAGETEXT
     input_type: InputType = Field(
@@ -193,9 +158,10 @@ class Agent(SQLModel, table=True):
         ),
     )
 
-    arguments: list["Argument"] = Relationship(
-        back_populates="agent",
-        sa_relationship_kwargs={"lazy": "joined"},
+    arguments: list[FieldSpec] = Field(
+        default_factory=list,
+        sa_column=Column(FieldSpecsType, nullable=False, server_default="[]"),
+        description="The agent's inputs, in the order its instruction lists them.",
     )
 
     router_id: uuid.UUID = Field(
@@ -344,68 +310,65 @@ class Agent(SQLModel, table=True):
 
         return agent_tool_function
 
+    @override
+    def __setattr__(self, name: str, value: Any) -> None:
+        # SQLModel runs the @validates hooks below, then stores the assigned value
+        # over the validated one; validate first so these columns always hold specs.
+        if name == "arguments":
+            value = self.validate_arguments(name, value)
+        elif name == "output_model":
+            value = self.validate_output_model(name, value)
+        super().__setattr__(name, value)
+
+    @validates("arguments")
+    def validate_arguments(
+        self, key: str, arguments: Sequence[FieldSpec | Mapping[str, Any]]
+    ) -> list[FieldSpec]:
+        """Reject malformed arguments where they are assigned, not at flush."""
+        try:
+            return FIELD_SPECS.validate_python(_as_json(arguments))
+        except ValidationError as exc:
+            raise ValueError(f"Invalid {key}: {exc}") from exc
+
+    @validates("output_model")
+    def validate_output_model(
+        self, key: str, output_model: OutputModelSpec | Mapping[str, Any] | None
+    ) -> OutputModelSpec | None:
+        """Reject a malformed output model where it is assigned, not at flush."""
+        if output_model is None:
+            return None
+        try:
+            return OutputModelSpec.model_validate(_as_json(output_model))
+        except ValidationError as exc:
+            raise ValueError(f"Invalid {key}: {exc}") from exc
+
+    def input_class(self) -> ModelClass:
+        """Return the model that validates this agent's inputs (see `validate_input`)."""
+        return build_input_model(self.arguments)
+
     def get_input_schema(self) -> dict[str, Any]:
-        """
-        Dinamically computes the tool input schema override based on the agent's defined arguments.
+        """Return the tool input schema of this agent: its arguments as a JSON Schema."""
+        schema = self.input_class().model_json_schema()
+        _ = schema.pop("title", None)
+        return {"json": schema}
 
-        Example:
-            {
-                    "json": {
-                        "type": "object",
-                        "properties": {
-                            "shape": {
-                                "type": "string",
-                                "enum": ["circle", "rectangle"],
-                                "description": "The shape type"
-                            },
-                            "radius": {"type": "number", "description": "Radius for circle"},
-                            "width": {"type": "number", "description": "Width for rectangle"},
-                            "height": {"type": "number", "description": "Height for rectangle"}
-                        },
-                        "required": ["shape"]
-                    }
-                }
-        """
-        properties = {}
-        required = []
-        for arg in self.arguments:
-            prop = {"type": arg.json_type, "description": arg.description}
-            properties[arg.name] = prop
-            required.append(arg.name)
+    def validate_input(self, **kwargs: Any) -> dict[str, Any]:
+        """Validate inputs against this agent's arguments and return them with defaults.
 
-        input_schema = {
-            "json": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            }
+        Validation is strict: a bool is not an int and a string is not a number, but
+        an int is a float. None is a value, valid where the type allows it. Models,
+        such as those a graph context holds, are validated as their JSON.
+        """
+        values = {
+            name: value.model_dump(mode="json")
+            if isinstance(value, BaseModel)
+            else value
+            for name, value in kwargs.items()
         }
-        return input_schema
-
-    def validate_input(self, *args: Any, **kwargs: Any) -> None:
-        """
-        Validate the input arguments against the agent's defined arguments.
-        We expect all arguments to be provided either as keyword arguments.
-        """
-        if len(args) + len(kwargs) != len(self.arguments):
-            raise ValueError(
-                f"Expected {len(self.arguments)} arguments, got {len(args) + len(kwargs)}."
-            )
-
-        for i, arg in enumerate(self.arguments):
-            if i < len(args):
-                value = args[i]
-            else:
-                value = kwargs.get(arg.name)
-
-            if value is None:
-                raise ValueError(f"Missing required argument: {arg.name}")
-
-            expected_type = arg.python_type
-            if expected_type and not isinstance(value, expected_type):
-                raise TypeError(
-                    f"Argument '{arg.name}' expected type '{arg.type}', got '{type(value).__name__}'."
-                )
+        try:
+            return self.input_class().model_validate(values).model_dump()
+        except ValidationError as exc:
+            raise ValueError("; ".join(_input_errors(exc))) from exc
 
     @classmethod
     def required_capabilities_for(
@@ -442,7 +405,11 @@ class Agent(SQLModel, table=True):
 
     def apply_update(self, payload: "AgentUpdate", router: Router) -> None:
         """Apply an update payload, validating the resulting router alignment."""
-        data = payload.model_dump(exclude_unset=True, exclude_none=True)
+        data = {
+            key: value
+            for key, value in payload.model_dump(exclude_unset=True).items()
+            if value is not None
+        }
         input_type = data.get("input_type", self.input_type)
         self.validate_capabilities_support_input_type(
             router.capabilities,
@@ -450,9 +417,11 @@ class Agent(SQLModel, table=True):
             router_name=router.model_name,
         )
 
-        # An explicit null clears the effort back to the provider default.
-        if "reasoning_effort" in payload.model_fields_set:
-            data["reasoning_effort"] = payload.reasoning_effort
+        # An explicit null clears the effort back to the provider default, and the
+        # output model to none.
+        for key in ("reasoning_effort", "output_model"):
+            if key in payload.model_fields_set:
+                data[key] = getattr(payload, key)
 
         for key, value in data.items():
             try:
@@ -463,32 +432,17 @@ class Agent(SQLModel, table=True):
         self.router = router
         self.router_id = router.id
 
-    def output_model(self) -> ResponseModel | None:
-        """Return the model of this agent's structured output.
+    def output_class(self) -> ModelClass | None:
+        """Return the class of this agent's structured output, None if it has none.
 
-        A GUI agent reports a `GuiRunReport`; any other agent its `response_model`.
+        A GUI agent reports a `GuiRunReport`; any other agent the class built from its
+        ``output_model``.
         """
         if self.type == AgentType.GuiAgent:
             return GuiRunReport
-        if not self.response_model:
+        if self.output_model is None:
             return None
-
-        module_path, class_name = self.response_model.rsplit(".", 1)
-        try:
-            module = import_module(module_path)
-        except Exception as e:
-            raise ImportError(f"Could not import module '{module_path}': {e}") from e
-        try:
-            model_class: object = getattr(module, class_name)
-        except Exception as e:
-            raise ImportError(
-                f"Could not find class '{class_name}' in module '{module_path}': {e}"
-            ) from e
-        if not isinstance(model_class, type) or not issubclass(model_class, BaseModel):
-            raise ValueError(
-                f"The class '{self.response_model}' is not a valid Pydantic model."
-            )
-        return model_class
+        return build_output_model(self.output_model)
 
     async def __call__(
         self, invocation_state: dict[str, Any] | None = None, **kwargs: Any
@@ -511,23 +465,28 @@ class Agent(SQLModel, table=True):
         GUI agent drives the robot's desktop and reports a `GuiRunReport`.
         """
         context: AgentGraphContext = invocation_state[AGENT_GRAPH_CONTEXT_KEY]
+        # An argument nothing in the context has stays unbound, so validation reports
+        # it as missing; a None found in the context is a value.
         inputs = {
-            a.name: context.get(input_map.get(a.name, a.name)) for a in self.arguments
+            a.name: value
+            for a in self.arguments
+            if (value := context.get(input_map.get(a.name, a.name), _UNBOUND))
+            is not _UNBOUND
         }
         if self.type == AgentType.GuiAgent:
-            self._bind_inputs(invocation_state, inputs)
-            report = await TooledGuiAgent(self).run(invocation_state, inputs)
+            bound = self._bind_inputs(invocation_state, inputs)
+            report = await TooledGuiAgent(self).run(invocation_state, bound)
             return NodeRun(output=report)
         return NodeRun(output=await self._execute(invocation_state, inputs))
 
     def _bind_inputs(
         self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
-    ) -> None:
-        """Validate ``inputs`` and record them in ``invocation_state`` for the agent trace."""
-        self.validate_input(**inputs)
-        invocation_state["inputs"] = {
-            arg.name: inputs.get(arg.name) for arg in self.arguments
-        }
+    ) -> dict[str, Any]:
+        """Validate ``inputs``, record them in ``invocation_state`` for the agent trace,
+        and return them."""
+        bound = self.validate_input(**inputs)
+        invocation_state["inputs"] = bound
+        return bound
 
     async def _execute(
         self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
@@ -538,7 +497,7 @@ class Agent(SQLModel, table=True):
         runs twice on one conversation: a free run on the inputs, then a
         structured-output call. Usage and cost of both are logged, even on failure.
         """
-        self._bind_inputs(invocation_state, inputs)
+        inputs = self._bind_inputs(invocation_state, inputs)
 
         tools: list[DecoratedFunctionTool] = [  # pyright: ignore[reportMissingTypeArgument]
             t.get_tool_function() for t in self.get_tools()
@@ -608,7 +567,7 @@ class Agent(SQLModel, table=True):
             response = (
                 await strands_agent.invoke_async(
                     "Given our conversation so far, please provide a report using structured output with the given tool.",
-                    structured_output_model=self.output_model(),
+                    structured_output_model=self.output_class(),
                     invocation_state=invocation_state,
                 )
             ).structured_output
@@ -648,8 +607,6 @@ class Agent(SQLModel, table=True):
         # require a database lookup this model cannot perform during __init__.
         router = data.get("router")
         super().__init__(**data)
-        # Validate that the response model can be imported successfully
-        _ = self.output_model()
         if router is not None:
             self.validate_capabilities_support_input_type(
                 router.capabilities,
@@ -664,9 +621,13 @@ class AgentCreate(SQLModel):
     name: str = Field(description="Name of the agent.")
     description: str = Field(description="Description of the agent.")
     prompt: str = Field(description="The prompt used to initialize the agent.")
-    response_model: str | None = Field(
+    arguments: FieldSpecs = Field(
+        default_factory=list,
+        description="The agent's inputs, in the order its instruction lists them.",
+    )
+    output_model: OutputModelSpec | None = Field(
         default=None,
-        description="Optional module path for the agent's structured response model.",
+        description="The agent's structured output; a GUI agent ignores it.",
     )
     input_type: Agent.InputType = Field(
         default=Agent.InputType.TEXT,
@@ -696,9 +657,13 @@ class AgentUpdate(SQLModel):
     prompt: str | None = Field(
         default=None, description="The prompt used to initialize the agent."
     )
-    response_model: str | None = Field(
+    arguments: FieldSpecs | None = Field(
         default=None,
-        description="Optional module path for the agent's structured response model.",
+        description="The agent's inputs, in order; replaces the current list.",
+    )
+    output_model: OutputModelSpec | None = Field(
+        default=None,
+        description="The agent's structured output; null removes it.",
     )
     input_type: Agent.InputType | None = Field(
         default=None,
@@ -796,3 +761,19 @@ class AgentTool(SQLModel, table=True):
         default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the agent-tool association was created.",
     )
+
+
+def _input_errors(exc: ValidationError) -> list[str]:
+    """One message per invalid input, naming the argument."""
+    messages: list[str] = []
+    for error in exc.errors():
+        name, *inner = (str(part) for part in error["loc"])
+        match error["type"]:
+            case "missing" if not inner:
+                messages.append(f"Missing required argument: {name}")
+            case "extra_forbidden" if not inner:
+                messages.append(f"Unexpected argument: {name}")
+            case _:
+                at = f" at {'.'.join(inner)}" if inner else ""
+                messages.append(f"Argument '{name}'{at}: {error['msg']}")
+    return messages

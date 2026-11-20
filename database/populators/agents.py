@@ -5,11 +5,12 @@ This replaces the previous hardcoded definitions and loads agent configurations
 from a JSON file. Tool populators and router populators remain unchanged.
 
 Notes:
-- Idempotent: existing agents are matched by name and their argument contracts are kept in sync.
+- Idempotent: existing agents are matched by name and never overwritten.
 - Tools must have been populated previously (populate_tools) or they will be skipped.
 - Each agent names a router role from routers.json (`router`); populate_routers must run first.
 - Prompts are read from Markdown files in `default_prompts/`, named by each agent's `prompt_file`.
-- Response model paths are stored as import strings for dynamic loading at runtime.
+- Arguments and output models are inline data (`FieldSpec`, `OutputModelSpec` in
+  `database/agents/specs.py`), validated when the agent is built.
 - Supports sub-agent relationships and tool attachments via JSON.
 """
 
@@ -26,27 +27,11 @@ from database.agents.models import (
     Agent,
     AgentTool,
     AgentType,
-    Argument,
     SubAgent,
 )
 from database.populators.routers import find_router
 from database.provider.models import Router
 from database.tools.models import Tool
-
-
-def _argument(
-    name: str,
-    description: str,
-    py_type: str,
-    json_type: str,
-) -> Argument:
-    """Helper to create an Argument instance."""
-    return Argument(
-        name=name,
-        description=description,
-        type=py_type,
-        json_type=json_type,
-    )
 
 
 def _attach_tools(
@@ -103,8 +88,8 @@ def _create_agent(
     name: str,
     description: str,
     prompt: str,
-    response_model: str | None,
-    args: list[Argument],
+    arguments: list[dict[str, Any]],
+    output_model: dict[str, Any] | None,
     router: Router,
     agent_type: AgentType,
     input_type: Agent.InputType = Agent.InputType.TEXT,
@@ -120,45 +105,19 @@ def _create_agent(
         name=name,
         description=description,
         prompt=prompt,
-        response_model=response_model,
+        arguments=arguments,
+        output_model=output_model,
         input_type=input_type,
         enabled=enabled,
         reasoning_effort=reasoning_effort,
         router=router,
         type=agent_type,
-        arguments=args,
     )
     session.add(agent)
     session.commit()
     session.refresh(agent)
     print(f"[populate_agents] Created agent '{name}'.")
     return agent
-
-
-def _sync_agent_arguments(session: Session, agent: Agent, args: list[Argument]) -> None:
-    """Synchronize an agent's argument definitions with the JSON contract."""
-    existing_signature = {
-        arg.name: (arg.description, arg.type, arg.json_type) for arg in agent.arguments
-    }
-    desired_signature = {
-        arg.name: (arg.description, arg.type, arg.json_type) for arg in args
-    }
-
-    if existing_signature == desired_signature:
-        return
-
-    existing_arguments = list(agent.arguments)
-    for existing in existing_arguments:
-        session.delete(existing)
-    session.flush()
-
-    for arg in args:
-        arg.agent_id = agent.id
-        session.add(arg)
-
-    session.flush()
-    session.refresh(agent)
-    print(f"[populate_agents] Updated argument contract for agent '{agent.name}'.")
 
 
 def _create_sub_agent(
@@ -225,15 +184,19 @@ def _load_json_config() -> dict[str, Any]:
           "name": "...",
           "description": "...",
           "prompt_file": "agent_name.md",  // in default_prompts/
-          "response_model": "package.module.ClassName" | null,
           "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
           "agent_type": "Agent" | "GuiAgent",
           "input_type": "TEXT" | "IMAGETEXT",
           "enabled": true,
           "reasoning_effort": "medium",  // optional, unset keeps the provider default
-          "arguments": [
-            {"name": "...", "description": "...", "type": "str", "json_type": "string"}
+          "arguments": [  // FieldSpec: in order; a "default" makes one optional
+            {"name": "...", "type": "str | None", "description": "...", "default": null}
           ],
+          "output_model": {  // OutputModelSpec, or null; a GuiAgent ignores it
+            "name": "ClassName",  // the structured-output tool name the LLM sees
+            "description": "...",  // the tool description
+            "fields": [{"name": "...", "type": "Literal['a', 'b']", "description": "..."}]
+          },
           "tools": {"names": ["take_screenshot"], "limits": [null], "required": [false]}
           }
         ],
@@ -295,7 +258,6 @@ def populate_agents(engine: Engine) -> None:
             description = item.get("description", "") or ""
             prompt = _read_prompt(name, item.get("prompt_file"))
 
-            response_model = item.get("response_model")
             router = find_router(session, item.get("router", "text"))
 
             agent_type = _resolve_agent_type(item["agent_type"])
@@ -303,32 +265,19 @@ def populate_agents(engine: Engine) -> None:
             enabled = bool(item.get("enabled", True))
             reasoning_effort = _resolve_reasoning_effort(item.get("reasoning_effort"))
 
-            args_list = []
-            for arg in item.get("arguments", []):
-                args_list.append(
-                    _argument(
-                        name=arg["name"],
-                        description=arg.get("description", ""),
-                        py_type=arg.get("type", "str"),
-                        json_type=arg.get("json_type", "string"),
-                    )
-                )
-
             agent = _create_agent(
                 session=session,
                 name=name,
                 description=description,
                 prompt=prompt,
-                response_model=response_model,
-                args=args_list,
+                arguments=item.get("arguments", []),
+                output_model=item.get("output_model"),
                 router=router,
                 agent_type=agent_type,
                 input_type=input_type,
                 enabled=enabled,
                 reasoning_effort=reasoning_effort,
             )
-
-            _sync_agent_arguments(session, agent, args_list)
             created_agents[name] = agent
 
             # Tools

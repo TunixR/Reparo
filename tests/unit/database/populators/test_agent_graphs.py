@@ -11,10 +11,23 @@ from sqlmodel import Session, select
 
 from database.agent_graphs.models import AgentGraph
 from database.agents.models import Agent, SubAgent
+from database.agents.specs import OutputModelSpec
 from database.populators.agent_graphs import populate_agent_graphs
 from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 
 UI_EXCEPTION = {"field": "ui_exception", "op": "eq", "value": True}
+RESPONSE_TO_RPA = {
+    "name": "ResponseToRPA",
+    "description": "The recovery outcome sent to the robot.",
+    "fields": [
+        {
+            "name": "success",
+            "type": "bool",
+            "description": "Whether the recovery succeeded and the RPA can continue.",
+        }
+    ],
+}
+"""The gateway's output model before the UI Recovery graph."""
 
 
 def _graphs(session: Session) -> dict[str, AgentGraph]:
@@ -104,11 +117,11 @@ def old_database(session: Session, seeded_agents: dict[str, Agent]) -> dict[str,
     """Agents as a database seeded before the UI Recovery graph has them.
 
     The agent populator adds the new agents but never overwrites one, so the gateway
-    keeps its old prompt and response model and the UI Exception Handler stays enabled.
+    keeps its old prompt and output model and the UI Exception Handler stays enabled.
     """
     gateway = seeded_agents["Gateway Orchestrator"]
     gateway.prompt = "Route the failure to the UI Exception Handler."
-    gateway.response_model = "templates.gateway.ResponseToRPA"
+    gateway.output_model = OutputModelSpec.model_validate(RESPONSE_TO_RPA)
     handler = seeded_agents["UI Exception Handler"]
     handler.enabled = True
     session.add_all([gateway, handler])
@@ -144,13 +157,17 @@ def test_an_old_database_gets_a_disabled_graph_and_the_steps_to_migrate(
         ("PATCH", f"/agents/{handler.id}"),
         ("PATCH", f"/agent_graphs/{graphs['UI Recovery'].id}"),
     ]
-    assert steps[1].body["response_model"] == "templates.gateway.GatewayDecision"
+    assert steps[1].body["output_model"]["name"] == "GatewayDecision"
     assert steps[1].body["prompt"].startswith("You are the Gateway Orchestrator")
     printed = capsys.readouterr().out
     assert "recoveries run that agent alone" in printed
     for number, step in enumerate(steps, start=1):
         assert f"  {number}. {step.action}:\n     PATCH {step.path} " in printed
     assert "<the text of database/populators/default_prompts/gateway.md>" in printed
+
+
+def _dump(output_model: OutputModelSpec | None) -> str | None:
+    return None if output_model is None else output_model.model_dump_json()
 
 
 def _snapshot(session: Session) -> dict[str, object]:
@@ -162,7 +179,7 @@ def _snapshot(session: Session) -> dict[str, object]:
             for name, graph in _graphs(session).items()
         },
         "agents": sorted(
-            (a.name, a.enabled, a.response_model, a.prompt) for a in agents
+            (a.name, a.enabled, _dump(a.output_model), a.prompt) for a in agents
         ),
     }
 
