@@ -410,6 +410,45 @@ def test_an_exception_in_a_later_node_is_an_internal_error(
     assert models[CONTINUATION].calls == 0
 
 
+def test_a_node_whose_agent_was_disabled_mid_run_is_cancelled_as_an_internal_error(
+    client: TestClient,
+    robot_key_raw: str,
+    payload: dict[str, Any],
+    session: Session,
+    agents: dict[str, Agent],
+    script: Callable[..., dict[str, ScriptedModel]],
+    linear_graph: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    linear_graph()
+    models = script(gateway=_triage(), inferer=_inference(), continuation=_continued())
+    original = Agent.run_node
+
+    async def _disable_the_inferer_after_the_gateway(
+        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+    ) -> NodeRun:
+        run = await original(self, invocation_state, input_map)
+        if self.name == GATEWAY:
+            inferer = agents[INFERER]
+            inferer.enabled = False
+            session.add(inferer)
+            session.commit()
+        return run
+
+    monkeypatch.setattr(Agent, "run_node", _disable_the_inferer_after_the_gateway)
+
+    message = _recover(client, robot_key_raw, payload)
+
+    assert message["type"] == "error"
+    assert message["code"] == "INTERNAL_ERROR"
+    assert models[GATEWAY].calls > 0
+    assert models[INFERER].calls == 0
+    [cancelled] = logged_events(caplog, "agent_graph.node_cancelled")
+    assert vars(cancelled)["agent_graph.node.key"] == "inferer"
+    assert vars(cancelled)["agent.id"] == str(agents[INFERER].id)
+
+
 def test_the_run_starts_at_the_entry_node_even_inside_a_cycle(
     client: TestClient,
     robot_key_raw: str,

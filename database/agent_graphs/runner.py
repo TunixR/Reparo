@@ -20,6 +20,10 @@ _LEFTOVER_STATE_PREFIX = "event_loop_"
 type FailureReason = Literal["max_node_executions", "execution_timeout"]
 
 
+class NodeCancelledError(RuntimeError):
+    """A node's agent was disabled after the run started, so the node didn't run."""
+
+
 @dataclass(frozen=True, slots=True)
 class NodeRun:
     """What an agent produces as a node of an agent graph."""

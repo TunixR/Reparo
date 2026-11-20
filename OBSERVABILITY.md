@@ -181,6 +181,7 @@ Log events:
 | `gui.max_actions_exceeded` | WARN | `gui.task.max_actions` |
 | `agent.usage` | INFO | `agent.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `agent.cost` |
 | `agent_graph.condition_error` | WARN | `agent_graph.id`, `agent_graph.edge.id`, `error.type`, `exception.message` (bounded); the edge isn't followed |
+| `agent_graph.node_cancelled` | WARN | `agent_graph.id`, `agent_graph.node.key`, `agent.id`; the node's agent was disabled during the run, so the node doesn't run and the recovery ends with an internal error |
 | `http.server_error`, `http.unhandled_exception` | ERROR | `http.request.method`, `url.path`, `http.response.status_code` or `error.type` |
 | `http.client_error`, `http.validation_failed` | WARN | the same request keys, `exception.message` or `request.invalid_fields` |
 

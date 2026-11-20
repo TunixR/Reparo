@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 
+from database.agent_graphs import service
 from database.agents.models import Agent, AgentCreate, AgentUpdate
 from database.auth.models import User
 from database.engine import commit_or_500
@@ -94,12 +95,15 @@ def update_agent(
         )
 
     try:
-        agent.apply_update(payload, router_obj)
+        _ = service.update_agent(session, agent, payload, router_obj)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         ) from e
+    except service.AgentGraphError as e:
+        session.rollback()
+        raise HTTPException(status_code=e.status_code, detail=e.detail()) from e
 
     session.add(agent)
     commit_or_500(session, "update agent")
@@ -124,5 +128,9 @@ def delete_agent(
             detail="Agent not found",
         )
 
-    session.delete(agent)
+    try:
+        service.delete_agent(session, agent)
+    except service.AgentGraphError as e:
+        session.rollback()
+        raise HTTPException(status_code=e.status_code, detail=e.detail()) from e
     commit_or_500(session, "delete agent")

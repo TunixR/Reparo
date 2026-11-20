@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import Index, UniqueConstraint, text
-from sqlalchemy.orm import validates
+from sqlalchemy.orm import object_session, validates
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
@@ -19,9 +19,10 @@ from database.agent_graphs.runner import (
     AGENT_GRAPH_CONTEXT_KEY,
     AgentGraphContext,
     GraphOutcome,
+    NodeCancelledError,
     clean_state,
 )
-from database.agents.models import AgentType
+from database.agents.models import Agent, AgentType
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
 
@@ -159,9 +160,10 @@ class AgentGraph(SQLModel, table=True):
 
         Nodes are awaited in the caller's task, so cancelling the caller cancels the
         running node. Anything a node raises propagates unchanged, including the
-        `TimeoutError` of a node that runs past ``node_timeout_s``. ``state`` holds an
-        `AgentGraphContext` under `AGENT_GRAPH_CONTEXT_KEY` and is shared, never
-        copied, by every node.
+        `TimeoutError` of a node that runs past ``node_timeout_s``. A node whose agent
+        was disabled since the run started raises `NodeCancelledError` before it
+        runs. ``state`` holds an `AgentGraphContext` under `AGENT_GRAPH_CONTEXT_KEY`
+        and is shared, never copied, by every node.
         """
         context: AgentGraphContext = state[AGENT_GRAPH_CONTEXT_KEY]
         context.nodes = {node.key: node for node in self.nodes}
@@ -183,6 +185,7 @@ class AgentGraph(SQLModel, table=True):
                 return GraphOutcome(
                     terminal_node, output, nodes_run, "execution_timeout"
                 )
+            self._ensure_agent_enabled(node)
             clean_state(state)
             async with asyncio.timeout(self.node_timeout_s):
                 run = await node.agent.run_node(state, node.input_map)
@@ -191,6 +194,28 @@ class AgentGraph(SQLModel, table=True):
             nodes_run += 1
             node = node.next_node(run.output)
         return GraphOutcome(terminal_node, output, nodes_run)
+
+    def _ensure_agent_enabled(self, node: "AgentGraphNode") -> None:
+        """Raise `NodeCancelledError` unless the database has ``node``'s agent enabled."""
+        session = object_session(self)
+        if session is None:
+            raise RuntimeError(f"The agent graph '{self.name}' isn't in a session.")
+        if session.scalar(select(Agent.enabled).where(Agent.id == node.agent_id)):
+            return
+        log_event(
+            logger,
+            attrs.EVENT_AGENT_GRAPH_NODE_CANCELLED,
+            {
+                attrs.AGENT_GRAPH_ID: self.id,
+                attrs.AGENT_GRAPH_NODE_KEY: node.key,
+                attrs.AGENT_ID: node.agent_id,
+            },
+            logging.WARNING,
+        )
+        raise NodeCancelledError(
+            f"Node '{node.key}' of the agent graph '{self.name}' was cancelled: its "
+            f"agent '{node.agent.name}' was disabled during the run."
+        )
 
 
 class AgentGraphNode(SQLModel, table=True):
