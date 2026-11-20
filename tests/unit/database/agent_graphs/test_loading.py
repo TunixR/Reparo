@@ -29,7 +29,8 @@ def test_a_loaded_graph_walks_without_its_session(
     node = graph.entry
     while node is not None:
         walked.append((node.key, node.agent.name, node.agent.router))
-        node = node.next_node(None)
+        edge = node.next_edge(None)
+        node = None if edge is None else edge.target
     assert [(key, name) for key, name, _ in walked] == [
         ("a", "First"),
         ("b", "Second"),

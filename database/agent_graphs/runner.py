@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from database.agent_graphs.models import AgentGraphNode
+    from database.logging.agent_graph_tracing import AgentGraphRunTrace
 
 AGENT_GRAPH_CONTEXT_KEY = "agent_graph"
 RECOVERY_INPUTS_SOURCE = "recovery"
@@ -39,6 +40,7 @@ class AgentGraphContext:
     recovery_inputs: Mapping[str, Any]
     nodes: Mapping[str, AgentGraphNode] = field(default_factory=dict)
     outputs: dict[str, BaseModel] = field(default_factory=dict)
+    trace: AgentGraphRunTrace | None = None
 
     def record(self, key: str, output: BaseModel) -> None:
         """Store a node's output, the latest execution last."""

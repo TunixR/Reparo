@@ -29,6 +29,7 @@ from database.agent_graphs.runner import (
     GraphOutcome,
 )
 from database.keys.models import RobotKey
+from database.logging.agent_graph_tracing import AgentGraphRunTrace
 from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
 from observability.instrumentation import recovery as telemetry
@@ -252,6 +253,7 @@ async def _run_agent_graph(
     exception: RobotException,
     recovery_context: RecoveryContext,
     turn: telemetry.RecoveryTurnTelemetry,
+    run_trace: AgentGraphRunTrace,
 ) -> tuple[GraphOutcome, dict[str, Any]]:
     """Run the agent graph; returns its outcome and the final invocation state."""
     invocation_state: dict[str, Any] = {
@@ -261,7 +263,7 @@ async def _run_agent_graph(
         "variables": copy.deepcopy(recovery_context.variables),
         CAPABILITIES_STATE_KEY: recovery_context.capabilities,
         AGENT_GRAPH_CONTEXT_KEY: AgentGraphContext(
-            recovery_inputs=_recovery_inputs(recovery_context)
+            recovery_inputs=_recovery_inputs(recovery_context), trace=run_trace
         ),
     }
     graph = session.get(AgentGraph, graph_id)
@@ -330,16 +332,28 @@ async def _run_recovery_turn(
 
         # The agent graph run is a child span of this turn. It is cancelled as
         # soon as the robot aborts or goes away.
-        outcome, invocation_state = await robot.run(
-            _run_agent_graph(
-                session, graph_id, robot, exception, recovery_context, turn
+        run_trace = AgentGraphRunTrace.open(graph_id, exception.id)
+        try:
+            outcome, invocation_state = await robot.run(
+                _run_agent_graph(
+                    session,
+                    graph_id,
+                    robot,
+                    exception,
+                    recovery_context,
+                    turn,
+                    run_trace,
+                )
             )
-        )
-        answer, failure_reason = _build_answer(
-            outcome.output,
-            invocation_state,
-            graph_failed=outcome.failure_reason is not None,
-        )
+            answer, failure_reason = _build_answer(
+                outcome.output,
+                invocation_state,
+                graph_failed=outcome.failure_reason is not None,
+            )
+            run_trace.close(outcome, answer)
+        except BaseException as exc:
+            run_trace.fail(exc)
+            raise
         turn.answered(answer, failure_reason)
         success = answer.success
 

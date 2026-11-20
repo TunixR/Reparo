@@ -3,6 +3,7 @@ import enum
 import logging
 import uuid
 from collections.abc import Mapping
+from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from time import monotonic
 from typing import Any, NoReturn
@@ -203,6 +204,7 @@ class AgentGraph(SQLModel, table=True):
         output: BaseModel | None = None
         nodes_run = 0
         node: AgentGraphNode | None = self.entry
+        entered_by: AgentGraphEdge | None = None
         while node is not None:
             if nodes_run >= self.node_limit:
                 return GraphOutcome(
@@ -212,16 +214,30 @@ class AgentGraph(SQLModel, table=True):
                 return GraphOutcome(
                     terminal_node, output, nodes_run, "execution_timeout"
                 )
-            if not self.can_run:
-                self._cancel(node)
             clean_state(state)
-            async with asyncio.timeout(self.node_timeout_s):
-                run = await node.agent.run_node(state, node.input_map)
+            with self._node_trace(context, nodes_run, node, entered_by):
+                if not self.can_run:
+                    self._cancel(node)
+                async with asyncio.timeout(self.node_timeout_s):
+                    run = await node.agent.run_node(state, node.input_map)
             context.record(node.key, run.output)
             terminal_node, output = node.key, run.output
             nodes_run += 1
-            node = node.next_node(run.output)
+            entered_by = node.next_edge(run.output)
+            node = None if entered_by is None else entered_by.target
         return GraphOutcome(terminal_node, output, nodes_run)
+
+    @staticmethod
+    def _node_trace(
+        context: AgentGraphContext,
+        execution_index: int,
+        node: "AgentGraphNode",
+        entered_by: "AgentGraphEdge | None",
+    ) -> AbstractContextManager[None]:
+        """The node trace of this execution, when the run is traced."""
+        if context.trace is None:
+            return nullcontext()
+        return context.trace.node(execution_index, node.key, entered_by)
 
     def _cancel(self, node: "AgentGraphNode") -> NoReturn:
         """Log that ``node`` won't run, and raise `NodeCancelledError` to end the run."""
@@ -277,13 +293,13 @@ class AgentGraphNode(SQLModel, table=True):
         },
     )
 
-    def next_node(self, output: BaseModel | None) -> "AgentGraphNode | None":
-        """The target of the first outgoing edge, by priority, that holds over ``output``.
+    def next_edge(self, output: BaseModel | None) -> "AgentGraphEdge | None":
+        """The first outgoing edge, by priority, that holds over ``output``.
 
         Edges after that one aren't evaluated. ``None`` when no edge holds.
         """
         edges = sorted(self.outgoing, key=lambda edge: edge.priority)
-        return next((edge.target for edge in edges if edge.holds(output)), None)
+        return next((edge for edge in edges if edge.holds(output)), None)
 
 
 class AgentGraphEdge(SQLModel, table=True):

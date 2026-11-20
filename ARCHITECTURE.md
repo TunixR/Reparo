@@ -232,12 +232,21 @@ its token usage; other providers report the cost as unknown (-1).
 Recoveries are recorded in the database, separately from OpenTelemetry, so they can be reviewed and
 exported per recovery:
 
-- **Agent traces** with their messages, cost and parent/child links between agents; **tool traces**
-  with inputs, outputs and status; **GUI traces** with the action taken and the screenshot it was
-  based on. Hooks in `agent_tools/hooks.py` write them as agents run.
+- **Agent graph traces**, one per agent graph run, recording how it ended, and a flat, ordered
+  **node trace** per node execution that links to the node's agent trace. A node trace copies the
+  condition of the edge it was entered by, so it stays readable after the graph is edited or
+  deleted. The recovery opens and closes the agent graph trace; the runner opens and closes each
+  node trace (`database/logging/agent_graph_tracing.py`), and the node's agent links its agent trace
+  to it as soon as it starts.
+- **Agent traces** with their messages, cost and tool traces. Each node's agent trace is a root:
+  sequence lives in the node traces, while agents called as tools inside a node still nest under
+  their caller as sub-agent traces. **Tool traces** have inputs, outputs and status; **GUI traces**
+  the action taken and the screenshot it was based on. Hooks in `agent_tools/hooks.py` write them as
+  agents run.
 - Screenshots are stored in S3 (`s3/`), and deleted with their trace (`database/logging/orm_events.py`).
-- `routers/logging.py` serves traces, the recovery context, a markdown report of a run, and a ZIP
-  with the UI log as CSV plus its screenshots.
+- `routers/logging.py` serves traces, the recovery context, markdown reports of an agent trace and of
+  a whole agent graph run (each node in order, followed by its agent trace), and a ZIP with the UI
+  log as CSV plus its screenshots.
 
 ## 7. Authentication
 
