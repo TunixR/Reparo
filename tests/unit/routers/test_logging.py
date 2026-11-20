@@ -384,10 +384,14 @@ def test_logging_delete_blocked_by_a_referencing_row_is_a_conflict(
 ):
     headers = make_auth_headers(mock_user, session)
 
-    def _violate_foreign_key(_self: Session) -> None:
-        raise IntegrityError("DELETE", {}, Exception("foreign key violation"))
+    flush = Session.flush
 
-    monkeypatch.setattr(Session, "commit", _violate_foreign_key)
+    def _violate_foreign_key(self: Session, objects: None = None) -> None:
+        if self.deleted:
+            raise IntegrityError("DELETE", {}, Exception("foreign key violation"))
+        flush(self, objects)
+
+    monkeypatch.setattr(Session, "flush", _violate_foreign_key)
     response = client.delete(
         f"/logging/robot_exceptions/{mock_robot_exception.id}", headers=headers
     )
