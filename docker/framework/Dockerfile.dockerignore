@@ -1,6 +1,7 @@
 .git
 .github
 .claude
+.agents
 .zed
 .venv
 .env

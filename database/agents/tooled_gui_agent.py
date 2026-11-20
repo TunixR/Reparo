@@ -11,9 +11,9 @@ It runs two ways on one core: as the ``tooled_guiagent`` tool of a parent agent
 ``GuiRunReport``.
 
 Telemetry goes through ``GuiTaskTelemetry``: the current span (the
-``tooled_guiagent`` tool call or the graph node) carries ``gui.task.*`` and each
-action tool span gets ``gui.action`` and ``gui.screenshot`` children (see
-OBSERVABILITY.md).
+``tooled_guiagent`` tool call or the graph node) carries
+``gui.recovery_task.name`` and ``gui.task.*``, and each action tool span gets
+``gui.action`` and ``gui.screenshot`` children (see OBSERVABILITY.md).
 """
 
 from __future__ import annotations

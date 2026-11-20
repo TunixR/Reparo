@@ -1,7 +1,7 @@
 # Reparo backend
 
 Reparo recovers failed RPA runs. When a software robot hits an exception, it opens a
-WebSocket to this FastAPI backend and sends what it knows: the task, the UI log up to the failure,
+WebSocket to this FastAPI backend and sends what it knows: the Process name, the UI log up to the failure,
 the failed activity and the process variables. LLM agents built on
 [Strands](https://strandsagents.com) analyse the failure and, when they can, take over the robot's
 desktop through screenshots and UI actions to bring the process back to a state the robot can
@@ -12,6 +12,16 @@ step so a run can be inspected or exported afterwards.
 
 You need Docker with Compose v2, [uv](https://docs.astral.sh/uv/) and an OpenAI-compatible LLM
 endpoint (OpenRouter, OpenAI, vLLM...). The full development stack uses about 2 GB of RAM.
+
+Clone with `--recurse-submodules`:
+
+```bash
+git clone --recurse-submodules https://github.com/TunixR/Reparo
+```
+
+It fills `.agents/skills`, the agent skills shared from the private ReparoHome repo
+(`git submodule update --init` does it later). Without access to it the folder stays empty, and
+nothing else depends on it.
 
 1. Start Postgres, SeaweedFS (S3) and SigNoz (observability). Details: [`docker/README.md`](docker/README.md).
 
@@ -131,6 +141,7 @@ routers. Change those through `/provider`.
 | `docker/` | Compose stacks for development and production |
 | `tests/` | `unit/` (SQLite, runs in CI) and `integration/` (needs the Docker stack) |
 | `modules/` | Reserved for recovery modules; currently empty |
+| `.agents/skills`, `.claude/skills` | Agent skills: a submodule of ReparoHome's `skills` branch, and a link to it for Claude Code. Edit skills in ReparoHome only |
 
 ## Documentation
 

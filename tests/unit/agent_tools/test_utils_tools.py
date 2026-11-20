@@ -94,7 +94,7 @@ def test_rejects_an_unknown_model_event_id():
     _assert_rejected_and_refunded(
         state,
         result,
-        "'click_aprove' is not a task of the model",
+        "'click_aprove' is not an Event of the model",
         "click_approve (Click Approve)",
     )
 
@@ -106,7 +106,7 @@ def test_rejects_a_ui_log_event_id_that_is_not_a_task_id():
         state, process_finished=False, model_event_id="8", loop_iteration=[2]
     )
 
-    _assert_rejected_and_refunded(state, result, "'8' is not a task of the model")
+    _assert_rejected_and_refunded(state, result, "'8' is not an Event of the model")
 
 
 def test_rejects_a_loop_iteration_of_the_wrong_length():

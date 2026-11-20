@@ -206,10 +206,10 @@ def parse_model(model: str) -> ProcessModel | None:
 def _describe_tasks(tasks: Iterable[ModelEvent]) -> str:
     described = [f"{t.id} ({t.name})" if t.name else t.id for t in tasks]
     if not described:
-        return "the model defines no tasks"
+        return "the model defines no Events"
     extra = len(described) - _MAX_LISTED_TASKS
     listed = ", ".join(described[:_MAX_LISTED_TASKS])
-    return f"valid tasks: {listed}" + (f", and {extra} more" if extra > 0 else "")
+    return f"valid Events: {listed}" + (f", and {extra} more" if extra > 0 else "")
 
 
 def check_model_event(model: str, model_event_id: str) -> None:
@@ -229,14 +229,14 @@ def check_model_event(model: str, model_event_id: str) -> None:
     if parsed is None:
         if model_event_id not in model:
             raise ModelEventError(
-                f"{model_event_id!r} does not appear in the model. Use the id of a "
-                "task exactly as the model writes it, not a UI log event_id."
+                f"{model_event_id!r} does not appear in the model. Use the id of an "
+                "Event exactly as the model writes it, not a UI log event_id."
             )
         return
 
     if model_event_id not in parsed.tasks:
         raise ModelEventError(
-            f"{model_event_id!r} is not a task of the model; "
+            f"{model_event_id!r} is not an Event of the model; "
             f"{_describe_tasks(parsed.tasks.values())}."
         )
 

@@ -144,20 +144,20 @@ WebSocket /recovery/robot_exception/ws            (FastAPI instrumentation)
         ├── agent_graph.node <gateway>             (one per node execution)
         │   └── invoke_agent <gateway>             (Strands)
         │       ├── chat                           (Strands, gen_ai.usage.*)
-        │       └── execute_tool tooled_guiagent   (Strands, enriched with gui.task.*)
+        │       └── execute_tool tooled_guiagent   (Strands, gui.recovery_task.name, gui.task.*)
         │           ├── gui.screenshot             (initial screen)
         │           └── invoke_agent / chat        (the GUI agent's own loop, Strands)
         │               └── execute_tool <action>  (Strands: click, type_text, scroll, ...)
         │                   ├── gui.action         (send the action, wait for the robot)
         │                   └── gui.screenshot     (screen after the action)
-        └── agent_graph.node <GUI agent node>      (enriched with gui.task.*)
+        └── agent_graph.node <GUI agent node>      (gui.recovery_task.name, gui.task.*)
             ├── gui.screenshot                     (initial screen)
             └── invoke_agent / chat                (the GUI agent's loop, as above)
 ```
 
 A GUI agent runs either as a tool of another agent, under its `execute_tool` span, or as a
 node of the graph. As a node there is no tool span, so its `agent_graph.node` span carries
-the `gui.task.*` attributes.
+the `gui.recovery_task.name` and `gui.task.*` attributes.
 
 `TooledGuiAgent` (`database/agents/tooled_gui_agent.py`) is the GUI agent behind `AgentType.GuiAgent`.
 The UI-TARS loop (`database/agents/uitars.py`) uses the same telemetry, but it parses actions from
@@ -169,9 +169,9 @@ the model's text, so its `gui.action` and `gui.screenshot` spans sit directly un
 | `recovery.turn` | `robot_key.id`, `agent_graph.id`, `recovery.id`, `recovery.outcome` (`success`, `completed_unsuccessful`, `invalid_payload`, `client_disconnected`, `no_agent_graph`, `internal_error`, `robot_aborted`), `recovery.success`, `recovery.process_finished`, `recovery.continue_from_model_event_id`, `recovery.loop_iteration`, `recovery.failure_reason` (`missing_continuation`, `not_recovered`, `agent_graph_failed`), `recovery.task_name`, `recovery.platform`, `recovery.os`, `recovery.process_model`, `recovery.payload.size`, `recovery.payload.ui_log_count`, `recovery.payload.has_errored_activity`, `recovery.payload.invalid_fields`; span events `missing_continuation`, `not_recovered` or `agent_graph_failed`, and `robot_aborted` with `recovery.abort.code` and `recovery.abort.description` (bounded). The `set_continuation` tool span gets a `loop_depth_unchecked` event when the loop depth can't be read off the model |
 | `recovery.persist` | none |
 | `agent_graph.run` | `agent_graph.id`, `agent_graph.name`, `agent_graph.outcome` (`completed`, `max_node_executions`, `execution_timeout`, `node_cancelled`, `error`, `cancelled` when the robot aborts or goes away), `agent_graph.nodes_run` (completed node executions), `agent_graph.terminal_node.key` (the last completed node, if any); `ERROR` status for `node_cancelled` and `error` |
-| `agent_graph.node` | `agent_graph.node.key`, `agent.id`, `agent_graph.node.execution_index` (from 0 in run order); `gui.task.*` when its agent is a GUI agent; an error that escapes the node sets `error.type` and `ERROR` status (the agent's own span records the exception) |
+| `agent_graph.node` | `agent_graph.node.key`, `agent.id`, `agent_graph.node.execution_index` (from 0 in run order); `gui.recovery_task.name` and `gui.task.*` when its agent is a GUI agent; an error that escapes the node sets `error.type` and `ERROR` status (the agent's own span records the exception) |
 | `invoke_agent` (Strands) | `agent.id`, `agent_trace.id` (joins the trace to the `AgentTrace` row) |
-| `execute_tool` (GUI agent) or `agent_graph.node` (GUI node) | `gui.task.name`, `gui.task.process_model`, `gui.task.ui_log_count`, `gui.task.has_errored_activity`, `gui.task.iterations`, `gui.task.outcome` (`done`, `model_stopped`, `client_disconnected`, `error`; UI-TARS also `max_actions_exceeded`, `unparseable_response`); errors carry a redacted exception |
+| `execute_tool` (GUI agent) or `agent_graph.node` (GUI node) | `gui.recovery_task.name`, `gui.task.process_model`, `gui.task.ui_log_count`, `gui.task.has_errored_activity`, `gui.task.iterations`, `gui.task.outcome` (`done`, `model_stopped`, `client_disconnected`, `error`; UI-TARS also `max_actions_exceeded`, `unparseable_response`); errors carry a redacted exception |
 | `gui.action` | `gui.action.iteration`, `gui.action.type`, `gui.action.success`; failed actions carry a redacted exception without the action inputs. In `TooledGuiAgent` a failed action is returned to the model as a tool error, so it does not end the task |
 | `gui.screenshot` | `gui.screenshot.width`, `gui.screenshot.height`, `gui.screenshot.size` |
 | `POST /recovery/report_result/{recovery_id}` | `recovery.id`, `robot_key.id`, `recovery.success` |

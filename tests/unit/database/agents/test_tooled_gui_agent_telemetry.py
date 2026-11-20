@@ -83,7 +83,7 @@ async def test_finished_task_reports_actions_and_screenshots(
 
     assert sent == 1
     task = _task_attributes(exporter)
-    assert task["gui.task.name"] == "Fill the invoice"
+    assert task["gui.recovery_task.name"] == "Fill the invoice"
     assert task["gui.task.process_model"] == "invoice-process"
     assert task["gui.task.ui_log_count"] == 2
     assert task["gui.task.has_errored_activity"] is True

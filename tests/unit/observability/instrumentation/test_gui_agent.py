@@ -50,7 +50,7 @@ def test_task_describes_the_tool_span_and_outcome(
         telemetry.done(iterations=3)
 
     attributes = _spans(exporter)["execute_tool gui_agent"].attributes or {}
-    assert len(str(attributes["gui.task.name"])) == 120
+    assert len(str(attributes["gui.recovery_task.name"])) == 120
     assert attributes["gui.task.process_model"] == "invoice-process"
     assert attributes["gui.task.ui_log_count"] == 2
     assert attributes["gui.task.has_errored_activity"] is True
