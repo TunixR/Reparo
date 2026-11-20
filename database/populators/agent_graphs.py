@@ -137,7 +137,7 @@ def _populate_graph(session: Session, seed: AgentGraphSeed) -> list[ManualStep]:
         )
     else:
         return []
-    entered = _graphs_entered(session, entry, graph)
+    entered = _graphs_entered(session, entry, graph) if outdated else []
     if any(other.is_default_recovery for other in entered):
         why += "; from the first call to the last, recoveries end with NO_AGENT_GRAPH"
     steps = _manual_steps(session, seed, entry, graph, entered, outdated=outdated)
@@ -278,7 +278,11 @@ def _ensure_legacy_graph(session: Session, entry: Agent) -> None:
 def _graphs_entered(
     session: Session, entry: Agent, graph: AgentGraph
 ) -> list[AgentGraph]:
-    """The enabled graphs other than ``graph`` that start at ``entry``."""
+    """The enabled graphs other than ``graph`` that start at ``entry``.
+
+    Changing the outdated response model of ``entry`` is a conflict while one of
+    them relies on it.
+    """
     return list(
         session.exec(
             select(AgentGraph)
@@ -306,7 +310,8 @@ def _manual_steps(
     """The API calls left, in order, that make ``graph`` the default recovery graph."""
     steps = [
         ManualStep(
-            f"Disable the agent graph '{other.name}', which '{entry.name}' enters",
+            f"Disable the agent graph '{other.name}', which uses the response "
+            f"model '{entry.response_model}' of '{entry.name}'",
             "PATCH",
             f"/agent_graphs/{other.id}",
             {"enabled": False},

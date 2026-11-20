@@ -44,7 +44,7 @@ from database.agent_graphs.models import (
     AgentGraphUpdate,
 )
 from database.agent_graphs.runner import RECOVERY_INPUTS_SOURCE
-from database.agents.models import Agent, AgentType, AgentUpdate
+from database.agents.models import Agent, AgentUpdate
 from database.provider.models import Router
 from templates.recovery_payload import RecoveryInputs
 
@@ -80,7 +80,7 @@ def create_graph(session: Session, payload: AgentGraphCreate) -> AgentGraph:
         session.add(graph)
         if payload.is_default_recovery:
             _take_default(session, graph)
-        _validate_write(session, graph, enabling=graph.enabled)
+        _validate_write(graph, enabling=graph.enabled)
     return graph
 
 
@@ -102,7 +102,7 @@ def update_graph(
             graph.is_default_recovery = False
         elif make_default:
             _take_default(session, graph)
-        _validate_write(session, graph, enabling=enabling)
+        _validate_write(graph, enabling=enabling)
     return graph
 
 
@@ -120,7 +120,7 @@ def add_node(
         node = AgentGraphNode(agent_graph_id=graph.id, **payload.model_dump())
         node.agent = agent
         graph.nodes.append(node)
-        _validate_write(session, graph, written=node)
+        _validate_write(graph, written=node)
     return node
 
 
@@ -138,7 +138,7 @@ def update_node(
             node.agent = _agent(session, data["agent_id"])
         for key, value in data.items():
             setattr(node, key, value)
-        _validate_write(session, graph, written=node)
+        _validate_write(graph, written=node)
     return node
 
 
@@ -150,7 +150,7 @@ def remove_node(session: Session, graph: AgentGraph, node: AgentGraphNode) -> No
             session.delete(edge)
         graph.nodes.remove(node)
         session.delete(node)
-        _validate_write(session, graph)
+        _validate_write(graph)
 
 
 def add_edge(
@@ -162,7 +162,7 @@ def add_edge(
         )
         _ensure_edge_fits(graph, edge)
         graph.edges.append(edge)
-        _validate_write(session, graph)
+        _validate_write(graph)
     return edge
 
 
@@ -178,7 +178,7 @@ def update_edge(
         for key, value in data.items():
             setattr(edge, key, value)
         _ensure_edge_fits(graph, edge)
-        _validate_write(session, graph)
+        _validate_write(graph)
     return edge
 
 
@@ -186,7 +186,7 @@ def remove_edge(session: Session, graph: AgentGraph, edge: AgentGraphEdge) -> No
     with session.no_autoflush:
         graph.edges.remove(edge)
         session.delete(edge)
-        _validate_write(session, graph)
+        _validate_write(graph)
 
 
 def update_agent(
@@ -203,7 +203,7 @@ def update_agent(
     contract = _contract(agent)
     with session.no_autoflush:
         graphs = _graphs_using(session, agent, enabled_only=True)
-        before = {graph.id: _structure_violations(session, graph) for graph in graphs}
+        before = {graph.id: _structure_violations(graph) for graph in graphs}
         agent.apply_update(payload, router)
         if was_enabled and not agent.enabled and graphs:
             raise _in_use(
@@ -213,7 +213,7 @@ def update_agent(
                 kind="enabled agent graph",
             )
         if _contract(agent) != contract:
-            _ensure_nothing_breaks(session, agent, graphs, before)
+            _ensure_nothing_breaks(agent, graphs, before)
     return agent
 
 
@@ -237,7 +237,6 @@ def _contract(agent: Agent) -> tuple[object, ...]:
 
 
 def _ensure_nothing_breaks(
-    session: Session,
     agent: Agent,
     graphs: Sequence[AgentGraph],
     before: dict[uuid.UUID, list[str]],
@@ -251,7 +250,7 @@ def _ensure_nothing_breaks(
     for graph in graphs:
         added = [
             violation
-            for violation in _structure_violations(session, graph)
+            for violation in _structure_violations(graph)
             if violation not in before[graph.id]
         ]
         if added:
@@ -298,19 +297,18 @@ def _graphs_using(
     return list(session.exec(query).all())
 
 
-def violations(session: Session, graph: AgentGraph) -> list[str]:
+def violations(graph: AgentGraph) -> list[str]:
     """Why ``graph`` may not be enabled: disabled node agents and broken structure."""
-    return _agent_violations(graph.nodes) + _structure_violations(session, graph)
+    return _agent_violations(graph.nodes) + _structure_violations(graph)
 
 
-def _structure_violations(session: Session, graph: AgentGraph) -> list[str]:
+def _structure_violations(graph: AgentGraph) -> list[str]:
     outputs, broken = _output_models(graph)
     return [
         *_entry_violations(graph),
         *_reachability_violations(graph),
         *_else_violations(graph),
         *_cycle_violations(graph),
-        *_gateway_violations(session, graph),
         *broken,
         *_condition_violations(graph, outputs),
         *_input_map_violations(graph, outputs),
@@ -548,7 +546,6 @@ def _take_default(session: Session, graph: AgentGraph) -> None:
 
 
 def _validate_write(
-    session: Session,
     graph: AgentGraph,
     *,
     enabling: bool = False,
@@ -563,10 +560,10 @@ def _validate_write(
     if not graph.enabled:
         return
     if enabling:
-        found = violations(session, graph)
+        found = violations(graph)
     else:
         found = _agent_violations([] if written is None else [written])
-        found += _structure_violations(session, graph)
+        found += _structure_violations(graph)
     if found:
         action = "can't be enabled" if enabling else "would no longer be valid"
         raise AgentGraphError(
@@ -653,37 +650,6 @@ def _cycle_violations(graph: AgentGraph) -> list[str]:
         found.append(
             "The graph has a cycle; set max_node_executions to bound its runs."
         )
-    return found
-
-
-def _gateway_violations(session: Session, graph: AgentGraph) -> list[str]:
-    """A gateway only as the entry node, and of one enabled graph at most."""
-    found: list[str] = []
-    for node in graph.nodes:
-        if node.agent.type != AgentType.GatewayAgent:
-            continue
-        if not node.is_entry:
-            found.append(
-                f"Node '{node.key}' runs the gateway '{node.agent.name}', which "
-                "may only be the entry node."
-            )
-            continue
-        others = session.exec(
-            select(AgentGraph.name)
-            .join(AgentGraphNode)
-            .where(
-                AgentGraphNode.agent_id == node.agent_id,
-                col(AgentGraphNode.is_entry).is_(True),
-                col(AgentGraph.enabled).is_(True),
-                AgentGraph.id != graph.id,
-            )
-        ).all()
-        if others:
-            names = ", ".join(f"'{name}'" for name in others)
-            found.append(
-                f"The gateway '{node.agent.name}' already enters the enabled "
-                f"graph {names}; disable that graph first."
-            )
     return found
 
 

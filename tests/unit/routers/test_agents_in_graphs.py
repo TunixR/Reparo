@@ -160,23 +160,26 @@ def test_a_response_model_change_that_breaks_a_condition_is_a_conflict(
     assert got["response_model"] == graph_agents["Alpha"].response_model
 
 
-def test_a_type_change_that_puts_a_gateway_past_the_entry_is_a_conflict(
+def test_a_type_change_that_breaks_a_condition_is_a_conflict(
     client: TestClient,
     admin_headers: Headers,
     graph_agents: dict[str, Agent],
     routed_by_alpha: MakeAgentGraph,
 ):
     _ = routed_by_alpha(name="Routed")
-    beta = graph_agents["Beta"]
+    alpha = graph_agents["Alpha"]
 
     response = client.patch(
-        f"/agents/{beta.id}",
-        json={"type": AgentType.GatewayAgent.value},
+        f"/agents/{alpha.id}",
+        json={"type": AgentType.GuiAgent.value},
         headers=admin_headers,
     )
 
     assert response.status_code == status.HTTP_409_CONFLICT, response.text
-    assert _listed(response.json()["detail"]["graphs"]) == ["Routed"]
+    detail = response.json()["detail"]
+    assert _listed(detail["graphs"]) == ["Routed"]
+    [violation] = detail["violations"]
+    assert violation.startswith("Routed: The condition on the edge 'alpha' → 'beta'")
 
 
 def test_changes_that_keep_enabled_graphs_valid_still_succeed(

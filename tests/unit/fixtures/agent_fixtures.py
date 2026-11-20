@@ -90,7 +90,7 @@ def gateway_agent(
         description="Routes recovery",
         prompt="prompt",
         response_model=None,
-        type=AgentType.GatewayAgent,
+        type=AgentType.Agent,
         arguments=recovery_arguments(),
     )
     _ = make_agent_graph(Node("gateway", gateway))

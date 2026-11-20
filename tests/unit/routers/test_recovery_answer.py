@@ -134,7 +134,7 @@ def agents(
         input_type=Agent.InputType.TEXT,
         router=mock_router,
         router_id=mock_router.id,
-        type=AgentType.ErrorAgent,
+        type=AgentType.Agent,
         arguments=[
             Argument(
                 name="task_name",
@@ -153,7 +153,7 @@ def agents(
         input_type=Agent.InputType.TEXT,
         router=mock_router,
         router_id=mock_router.id,
-        type=AgentType.GatewayAgent,
+        type=AgentType.Agent,
         arguments=[
             Argument(
                 name="task_name",
