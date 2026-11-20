@@ -59,7 +59,7 @@ AGENT_GRAPH_NODE_EXECUTION_INDEX = "agent_graph.node.execution_index"
 AGENT_TRACE_ID = "agent_trace.id"
 AGENT_COST = "agent.cost"
 
-GUI_TASK_NAME = "gui.task.name"
+GUI_RECOVERY_TASK_NAME = "gui.recovery_task.name"
 GUI_TASK_PROCESS_MODEL = "gui.task.process_model"
 GUI_TASK_UI_LOG_COUNT = "gui.task.ui_log_count"
 GUI_TASK_HAS_ERRORED_ACTIVITY = "gui.task.has_errored_activity"

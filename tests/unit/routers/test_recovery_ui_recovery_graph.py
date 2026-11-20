@@ -334,7 +334,9 @@ def test_the_gui_node_span_describes_the_gui_task(
         if (span.attributes or {})["agent_graph.node.key"] == "tooled_guiagent"
     ]
     attributes = gui_node.attributes or {}
-    assert attributes["gui.task.name"] == "Approve the current spending request"
+    assert (
+        attributes["gui.recovery_task.name"] == "Approve the current spending request"
+    )
     assert attributes["gui.task.outcome"] == "done"
     assert attributes["gui.task.iterations"] == 1
     assert attributes["gui.task.ui_log_count"] == len(payload["ui_log"])

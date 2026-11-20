@@ -82,7 +82,7 @@ class GuiTaskTelemetry:
         self.outcome: str | None = None
         self._span.set_attributes(
             {
-                attrs.GUI_TASK_NAME: brief(task),
+                attrs.GUI_RECOVERY_TASK_NAME: brief(task),
                 attrs.GUI_TASK_PROCESS_MODEL: brief(model),
                 attrs.GUI_TASK_UI_LOG_COUNT: len(ui_log),
                 attrs.GUI_TASK_HAS_ERRORED_ACTIVITY: bool(errored_act),
