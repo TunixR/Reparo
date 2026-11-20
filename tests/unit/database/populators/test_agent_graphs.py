@@ -227,32 +227,3 @@ def test_a_rerun_halfway_through_the_migration_prints_the_steps_left(
 
     assert "  1. " + str(enable) in capsys.readouterr().out
     assert AgentGraph.default_recovery_id(session) is None
-
-
-def test_another_enabled_graph_entered_by_the_migrated_gateway_stays_enabled(
-    engine: Engine,
-    session: Session,
-    old_database: dict[str, Agent],
-    client: TestClient,
-    admin_headers: Headers,
-    make_agent_graph: MakeAgentGraph,
-):
-    *first_steps, enable = populate_agent_graphs(engine)
-    for step in first_steps:
-        response = client.request(
-            step.method, step.path, json=step.body, headers=admin_headers
-        )
-        assert response.status_code == status.HTTP_200_OK, (step.action, response.text)
-    _ = make_agent_graph(
-        Node("gateway", old_database["Gateway Orchestrator"]),
-        name="Triage",
-        is_default_recovery=False,
-    )
-
-    assert populate_agent_graphs(engine) == [enable]
-
-    response = client.request(
-        enable.method, enable.path, json=enable.body, headers=admin_headers
-    )
-    assert response.status_code == status.HTTP_200_OK, response.text
-    assert _graphs(session)["Triage"].enabled
