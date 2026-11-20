@@ -148,11 +148,6 @@ class RecoveryTurnTelemetry:
         with self._tracer.start_as_current_span(attrs.SPAN_RECOVERY_PERSIST):
             yield
 
-    @contextmanager
-    def agent_graph_run(self) -> Iterator[None]:
-        with self._tracer.start_as_current_span(attrs.SPAN_AGENT_GRAPH_RUN):
-            yield
-
     def persisted(self, recovery_id: UUID) -> None:
         self._recovery_id = str(recovery_id)
         self.span.set_attribute(attrs.RECOVERY_ID, self._recovery_id)

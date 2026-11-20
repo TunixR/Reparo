@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlmodel import Session, select
 
+import observability.instrumentation.agent_graph as agent_graph_telemetry
 import routers.recovery as recovery_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
@@ -101,9 +102,9 @@ def span_exporter(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemorySpanExpor
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(
-        recovery_module, "tracer", provider.get_tracer("tests.recovery")
-    )
+    tracer = provider.get_tracer("tests.recovery")
+    monkeypatch.setattr(recovery_module, "tracer", tracer)
+    monkeypatch.setattr(agent_graph_telemetry, "tracer", tracer)
     try:
         yield exporter
     finally:

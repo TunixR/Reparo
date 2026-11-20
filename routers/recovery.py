@@ -252,7 +252,6 @@ async def _run_agent_graph(
     robot: RobotConnection,
     exception: RobotException,
     recovery_context: RecoveryContext,
-    turn: telemetry.RecoveryTurnTelemetry,
     run_trace: AgentGraphRunTrace,
 ) -> tuple[GraphOutcome, dict[str, Any]]:
     """Run the agent graph; returns its outcome and the final invocation state."""
@@ -269,8 +268,7 @@ async def _run_agent_graph(
     graph = session.get(AgentGraph, graph_id)
     if graph is None:
         raise LookupError(f"The agent graph {graph_id} is gone.")
-    with turn.agent_graph_run():
-        outcome = await graph.run(invocation_state)
+    outcome = await graph.run(invocation_state)
     return outcome, invocation_state
 
 
@@ -341,7 +339,6 @@ async def _run_recovery_turn(
                     robot,
                     exception,
                     recovery_context,
-                    turn,
                     run_trace,
                 )
             )

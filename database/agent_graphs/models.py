@@ -26,6 +26,10 @@ from database.agent_graphs.runner import (
 from database.agents.models import Agent, AgentType
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
+from observability.instrumentation.agent_graph import (
+    AgentGraphRunTelemetry,
+    agent_graph_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +197,14 @@ class AgentGraph(SQLModel, table=True):
         `AgentGraphContext` under `AGENT_GRAPH_CONTEXT_KEY` and is shared, never
         copied, by every node.
         """
+        with agent_graph_run(self.id, self.name) as telemetry:
+            outcome = await self._run(state, telemetry)
+            telemetry.completed(outcome.failure_reason)
+            return outcome
+
+    async def _run(
+        self, state: dict[str, Any], telemetry: AgentGraphRunTelemetry
+    ) -> GraphOutcome:
         context: AgentGraphContext = state[AGENT_GRAPH_CONTEXT_KEY]
         context.nodes = {node.key: node for node in self.nodes}
         deadline = (
@@ -215,7 +227,10 @@ class AgentGraph(SQLModel, table=True):
                     terminal_node, output, nodes_run, "execution_timeout"
                 )
             clean_state(state)
-            with self._node_trace(context, nodes_run, node, entered_by):
+            with (
+                telemetry.node(nodes_run, node.key, node.agent_id),
+                self._node_trace(context, nodes_run, node, entered_by),
+            ):
                 if not self.can_run:
                     self._cancel(node)
                 async with asyncio.timeout(self.node_timeout_s):

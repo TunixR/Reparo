@@ -183,7 +183,7 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
             f"name = 'recovery.turn' AND attributes_string['recovery.id'] = '{recovery_id}'"
         )
     )
-    spans = _trace_spans(telemetry, turn["trace_id"], at_least=4)
+    spans = _trace_spans(telemetry, turn["trace_id"], at_least=5)
     by_name = _by_name(spans)
 
     # Turn attributes describe the payload by shape only.
@@ -193,14 +193,17 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
     assert turn["attributes_number"]["recovery.payload.ui_log_count"] == 1
 
     # Nesting: websocket span -> recovery.turn -> persist, and the agent graph run
-    # with the Strands agent beneath it.
+    # with its node and the Strands agent beneath it.
     websocket_span = next(s for s in spans if s["span_id"] == turn["parent_span_id"])
     assert "robot_exception/ws" in websocket_span["name"]
     assert by_name["recovery.persist"]["parent_span_id"] == turn["span_id"]
     graph_run = by_name["agent_graph.run"]
     assert graph_run["parent_span_id"] == turn["span_id"]
+    assert graph_run["attributes_string"]["agent_graph.outcome"] == "completed"
+    node = by_name["agent_graph.node"]
+    assert node["parent_span_id"] == graph_run["span_id"]
     agent_span = next(s for s in spans if s["name"].startswith("invoke_agent"))
-    assert agent_span["parent_span_id"] == graph_run["span_id"]
+    assert agent_span["parent_span_id"] == node["span_id"]
     assert any(s["name"] == "chat" for s in spans)
 
     # Correlation: the span attribute is the primary key of the audit row.

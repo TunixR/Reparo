@@ -1,4 +1,4 @@
-"""Telemetry for a GUI agent task: one Strands tool call driving the robot.
+"""Telemetry for a GUI agent task: a Strands tool call or a graph node driving the robot.
 
 The agent loop reports milestones (screenshot taken, action sent, retry...)
 and this module turns them into spans, span attributes and log events.
@@ -62,10 +62,11 @@ class GuiScreenshotTelemetry:
 
 
 class GuiTaskTelemetry:
-    """Describes the task on the current span (Strands ``execute_tool``).
+    """Describes the task on the current span: Strands ``execute_tool``, or the
+    ``agent_graph.node`` span when the GUI agent runs as a node.
 
-    The tool call already has a span, so the task enriches it instead of
-    opening a redundant one; actions and screenshots get child spans.
+    That span already exists, so the task enriches it instead of opening a
+    redundant one; actions and screenshots get child spans.
 
     Two loops use it: UI-TARS, which parses free text and counts iterations
     itself, and ``TooledGuiAgent``, whose actions are Strands tools and which
