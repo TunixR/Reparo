@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -99,8 +100,9 @@ You can't report `success` true without a continuation accepted by `set_continua
 def _get_valid_agent(
     websocket: WebSocket, session: database.SessionDep
 ) -> Agent | None:
-    agent_id = websocket.headers.get("X-AGENT-ID")
-    if not agent_id:
+    try:
+        agent_id = uuid.UUID(websocket.headers.get("X-AGENT-ID", ""))
+    except ValueError:
         return None
 
     agent = session.exec(
