@@ -2,8 +2,9 @@
 
 A disabled graph is a draft and accepts any structure. Enabling a graph, and every
 write to an enabled one, must leave it valid: its node agents enabled and the
-structural rules passing. A rejected write raises `AgentGraphError` with the
-violations; the caller rolls back on it and commits otherwise.
+structural rules passing. Writes to an agent that graphs use must not break them
+either. A rejected write raises `AgentGraphError` with the violations; the caller
+rolls back on it and commits otherwise.
 """
 
 from __future__ import annotations
@@ -43,7 +44,8 @@ from database.agent_graphs.models import (
     AgentGraphUpdate,
 )
 from database.agent_graphs.runner import RECOVERY_INPUTS_SOURCE
-from database.agents.models import Agent, AgentType
+from database.agents.models import Agent, AgentType, AgentUpdate
+from database.provider.models import Router
 from templates.recovery_payload import RecoveryInputs
 
 MAX_NODE_EXECUTIONS = 100
@@ -52,14 +54,22 @@ MAX_NODE_EXECUTIONS = 100
 
 @dataclass(slots=True)
 class AgentGraphError(Exception):
-    """A rejected agent graph write: why, and each broken rule with its fix."""
+    """A rejected write to an agent graph, or to an agent that graphs use: why, each
+    broken rule with its fix, and the graphs involved."""
 
     status_code: int
     message: str
     violations: Sequence[str] = field(default_factory=tuple)
+    graphs: Sequence[AgentGraph] = field(default_factory=tuple)
 
     def detail(self) -> dict[str, object]:
-        return {"message": self.message, "violations": list(self.violations)}
+        return {
+            "message": self.message,
+            "violations": list(self.violations),
+            "graphs": [
+                {"id": str(graph.id), "name": graph.name} for graph in self.graphs
+            ],
+        }
 
 
 def create_graph(session: Session, payload: AgentGraphCreate) -> AgentGraph:
@@ -177,6 +187,115 @@ def remove_edge(session: Session, graph: AgentGraph, edge: AgentGraphEdge) -> No
         graph.edges.remove(edge)
         session.delete(edge)
         _validate_write(session, graph)
+
+
+def update_agent(
+    session: Session, agent: Agent, payload: AgentUpdate, router: Router
+) -> Agent:
+    """Apply ``payload`` to ``agent`` unless that breaks a graph using the agent.
+
+    Disabling is rejected while an enabled graph uses the agent; enabling is always
+    allowed. A change to the agent's arguments, response model or type is rejected
+    if it breaks a structural rule of an enabled graph using the agent. Raises
+    `ValueError` for an update the agent itself rejects.
+    """
+    was_enabled = agent.enabled
+    contract = _contract(agent)
+    with session.no_autoflush:
+        graphs = _graphs_using(session, agent, enabled_only=True)
+        before = {graph.id: _structure_violations(session, graph) for graph in graphs}
+        agent.apply_update(payload, router)
+        if was_enabled and not agent.enabled and graphs:
+            raise _in_use(
+                f"The agent '{agent.name}' runs in enabled agent graphs; disable "
+                "them first, or replace the agent in their nodes.",
+                graphs,
+                kind="enabled agent graph",
+            )
+        if _contract(agent) != contract:
+            _ensure_nothing_breaks(session, agent, graphs, before)
+    return agent
+
+
+def delete_agent(session: Session, agent: Agent) -> None:
+    """Delete ``agent`` unless a graph, enabled or a draft, has a node that runs it."""
+    graphs = _graphs_using(session, agent, enabled_only=False)
+    if graphs:
+        raise _in_use(
+            f"The agent '{agent.name}' runs in agent graphs; remove its nodes from "
+            "them, or delete those graphs, first.",
+            graphs,
+            kind="agent graph",
+        )
+    session.delete(agent)
+
+
+def _contract(agent: Agent) -> tuple[object, ...]:
+    """What graphs rely on in ``agent``: its arguments, response model and type."""
+    arguments = sorted((argument.name, argument.type) for argument in agent.arguments)
+    return agent.type, agent.response_model, tuple(arguments)
+
+
+def _ensure_nothing_breaks(
+    session: Session,
+    agent: Agent,
+    graphs: Sequence[AgentGraph],
+    before: dict[uuid.UUID, list[str]],
+) -> None:
+    """Reject the change to ``agent`` if it adds a violation to one of ``graphs``.
+
+    Violations a graph already had don't block it.
+    """
+    broken: list[AgentGraph] = []
+    found: list[str] = []
+    for graph in graphs:
+        added = [
+            violation
+            for violation in _structure_violations(session, graph)
+            if violation not in before[graph.id]
+        ]
+        if added:
+            broken.append(graph)
+            found += [f"{graph.name}: {violation}" for violation in added]
+    if broken:
+        raise AgentGraphError(
+            status.HTTP_409_CONFLICT,
+            f"The change to the agent '{agent.name}' would break enabled agent "
+            "graphs; fix the violations, or disable those graphs first.",
+            found,
+            broken,
+        )
+
+
+def _in_use(
+    message: str, graphs: Sequence[AgentGraph], *, kind: str
+) -> AgentGraphError:
+    return AgentGraphError(
+        status.HTTP_409_CONFLICT,
+        message,
+        [f"The {kind} '{graph.name}' runs the agent." for graph in graphs],
+        graphs,
+    )
+
+
+def _graphs_using(
+    session: Session, agent: Agent, *, enabled_only: bool
+) -> list[AgentGraph]:
+    """The graphs with a node that runs ``agent``, by name."""
+    query = (
+        select(AgentGraph)
+        .where(
+            col(AgentGraph.id).in_(
+                select(AgentGraphNode.agent_graph_id).where(
+                    AgentGraphNode.agent_id == agent.id
+                )
+            )
+        )
+        .order_by(col(AgentGraph.name))
+    )
+    if enabled_only:
+        query = query.where(col(AgentGraph.enabled).is_(True))
+    return list(session.exec(query).all())
 
 
 def violations(session: Session, graph: AgentGraph) -> list[str]:

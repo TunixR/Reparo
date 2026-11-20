@@ -1109,6 +1109,47 @@ def test_a_graph_that_is_not_the_default_may_be_unfit_for_recoveries(
     assert "flags" not in listed[0]
 
 
+def test_a_graph_with_a_disabled_agent_is_flagged_not_runnable(
+    client: TestClient,
+    user_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    graph_agents: dict[str, Agent],
+    disabled_agent: Agent,
+):
+    graph = build_agent_graph(
+        [("a", graph_agents["Alpha"]), ("b", disabled_agent)], [("a", "b")]
+    )
+
+    flags = client.get(f"/agent_graphs/{graph.id}/flags", headers=user_headers)
+    got = client.get(f"/agent_graphs/{graph.id}", headers=user_headers)
+
+    assert flags.status_code == status.HTTP_200_OK, flags.text
+    assert flags.json() == ["NOT_RUNNABLE", "NOT_RECOVERY_FIT"]
+    assert got.json()["flags"] == ["NOT_RUNNABLE", "NOT_RECOVERY_FIT"]
+
+
+def test_the_flags_of_a_graph_that_can_run_recoveries_are_empty(
+    client: TestClient,
+    user_headers: Headers,
+    build_agent_graph: BuildAgentGraph,
+    recovery_nodes: list[NodeSpec],
+):
+    graph = build_agent_graph(recovery_nodes, CHAIN, enabled=True)
+
+    response = client.get(f"/agent_graphs/{graph.id}/flags", headers=user_headers)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json() == []
+
+
+def test_the_flags_of_a_missing_graph_are_not_found(
+    client: TestClient, user_headers: Headers
+):
+    response = client.get(f"/agent_graphs/{uuid.uuid4()}/flags", headers=user_headers)
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
 def test_a_write_to_an_enabled_graph_must_keep_its_bindings_valid(
     client: TestClient,
     admin_headers: Headers,
