@@ -71,9 +71,9 @@ sequenceDiagram
    the gateway agent alone. The graph awaits one node at a time, from its entry node, inside the
    recovery, so an abort cancels it. After each node it follows the first outgoing edge, by
    priority, whose condition holds over the node's structured output, until none does or a graph
-   limit is hit. Before each node it re-reads whether the node's agent is still enabled; a node
-   whose agent was disabled during the run is cancelled, and the recovery ends with an internal
-   error. Conditions are declarative predicates (`database/agent_graphs/conditions.py`),
+   limit is hit. Before each node it re-reads from the database whether every agent of the graph is
+   still enabled; once one is disabled during the run, the next node is cancelled and the recovery
+   ends with an internal error. The same check flags a graph as not runnable. Conditions are declarative predicates (`database/agent_graphs/conditions.py`),
    never evaluated as code; an edge without one always holds, and one that can't be evaluated
    doesn't. Each node's arguments bind from its
    input map, else by name from the recovery context and then from the earlier nodes' structured

@@ -5,10 +5,10 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Any
+from typing import Any, NoReturn
 
 from pydantic import BaseModel
-from sqlalchemy import Index, UniqueConstraint, text
+from sqlalchemy import Index, UniqueConstraint, func, text
 from sqlalchemy.orm import object_session, validates
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 class AgentGraphFlag(str, enum.Enum):
     """Something an agent graph can't be used for."""
 
+    NOT_RUNNABLE = "NOT_RUNNABLE"
     NOT_RECOVERY_FIT = "NOT_RECOVERY_FIT"
 
 
@@ -113,7 +114,32 @@ class AgentGraph(SQLModel, table=True):
     @property
     def flags(self) -> list[AgentGraphFlag]:
         """What the graph can't be used for."""
-        return [AgentGraphFlag.NOT_RECOVERY_FIT] if self.recovery_gaps() else []
+        flags: list[AgentGraphFlag] = []
+        if not self.can_run:
+            flags.append(AgentGraphFlag.NOT_RUNNABLE)
+        if self.recovery_gaps():
+            flags.append(AgentGraphFlag.NOT_RECOVERY_FIT)
+        return flags
+
+    @property
+    def can_run(self) -> bool:
+        """Whether every node's agent is enabled, as the database has it now.
+
+        The agents loaded with the graph keep the flag they had when it was loaded,
+        so a running graph wouldn't see an agent disabled since.
+        """
+        session = object_session(self)
+        if session is None:
+            return all(node.agent.enabled for node in self.nodes)
+        disabled = session.scalar(
+            select(func.count())
+            .select_from(Agent)
+            .where(
+                col(Agent.id).in_({node.agent_id for node in self.nodes}),
+                col(Agent.enabled).is_(False),
+            )
+        )
+        return not disabled
 
     def recovery_gaps(self) -> list[str]:
         """Why recoveries can't run the graph; empty when they can."""
@@ -160,10 +186,11 @@ class AgentGraph(SQLModel, table=True):
 
         Nodes are awaited in the caller's task, so cancelling the caller cancels the
         running node. Anything a node raises propagates unchanged, including the
-        `TimeoutError` of a node that runs past ``node_timeout_s``. A node whose agent
-        was disabled since the run started raises `NodeCancelledError` before it
-        runs. ``state`` holds an `AgentGraphContext` under `AGENT_GRAPH_CONTEXT_KEY`
-        and is shared, never copied, by every node.
+        `TimeoutError` of a node that runs past ``node_timeout_s``. Once an agent of
+        the graph is disabled during the run, the next node raises
+        `NodeCancelledError` instead of running. ``state`` holds an
+        `AgentGraphContext` under `AGENT_GRAPH_CONTEXT_KEY` and is shared, never
+        copied, by every node.
         """
         context: AgentGraphContext = state[AGENT_GRAPH_CONTEXT_KEY]
         context.nodes = {node.key: node for node in self.nodes}
@@ -185,7 +212,8 @@ class AgentGraph(SQLModel, table=True):
                 return GraphOutcome(
                     terminal_node, output, nodes_run, "execution_timeout"
                 )
-            self._ensure_agent_enabled(node)
+            if not self.can_run:
+                self._cancel(node)
             clean_state(state)
             async with asyncio.timeout(self.node_timeout_s):
                 run = await node.agent.run_node(state, node.input_map)
@@ -195,13 +223,8 @@ class AgentGraph(SQLModel, table=True):
             node = node.next_node(run.output)
         return GraphOutcome(terminal_node, output, nodes_run)
 
-    def _ensure_agent_enabled(self, node: "AgentGraphNode") -> None:
-        """Raise `NodeCancelledError` unless the database has ``node``'s agent enabled."""
-        session = object_session(self)
-        if session is None:
-            raise RuntimeError(f"The agent graph '{self.name}' isn't in a session.")
-        if session.scalar(select(Agent.enabled).where(Agent.id == node.agent_id)):
-            return
+    def _cancel(self, node: "AgentGraphNode") -> NoReturn:
+        """Log that ``node`` won't run, and raise `NodeCancelledError` to end the run."""
         log_event(
             logger,
             attrs.EVENT_AGENT_GRAPH_NODE_CANCELLED,
@@ -213,8 +236,8 @@ class AgentGraph(SQLModel, table=True):
             logging.WARNING,
         )
         raise NodeCancelledError(
-            f"Node '{node.key}' of the agent graph '{self.name}' was cancelled: its "
-            f"agent '{node.agent.name}' was disabled during the run."
+            f"Node '{node.key}' of the agent graph '{self.name}' was cancelled: an "
+            "agent of the graph was disabled during the run."
         )
 
 

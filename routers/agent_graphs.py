@@ -15,6 +15,7 @@ from database.agent_graphs.models import (
     AgentGraphEdgeCreate,
     AgentGraphEdgeRead,
     AgentGraphEdgeUpdate,
+    AgentGraphFlag,
     AgentGraphNode,
     AgentGraphNodeCreate,
     AgentGraphNodeRead,
@@ -165,6 +166,15 @@ def update_agent_graph(
 def delete_agent_graph(graph_id: UUID, session: SessionDep, _admin: AdminDep) -> None:
     graph = _graph(session, graph_id)
     _write(session, "delete agent graph", lambda: service.delete_graph(session, graph))
+
+
+@router.get(
+    "/{graph_id}/flags",
+    response_model=list[AgentGraphFlag],
+    summary="Get what an agent graph can't be used for",
+)
+def get_agent_graph_flags(graph_id: UUID, session: SessionDep) -> list[AgentGraphFlag]:
+    return _graph(session, graph_id).flags
 
 
 @router.post(

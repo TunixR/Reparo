@@ -21,7 +21,7 @@ type FailureReason = Literal["max_node_executions", "execution_timeout"]
 
 
 class NodeCancelledError(RuntimeError):
-    """A node's agent was disabled after the run started, so the node didn't run."""
+    """An agent of the graph was disabled during the run, so the next node didn't run."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -410,7 +410,9 @@ def test_an_exception_in_a_later_node_is_an_internal_error(
     assert models[CONTINUATION].calls == 0
 
 
-def test_a_node_whose_agent_was_disabled_mid_run_is_cancelled_as_an_internal_error(
+@pytest.mark.parametrize("disabled", [INFERER, CONTINUATION])
+def test_the_next_node_is_cancelled_once_a_graph_agent_is_disabled_mid_run(
+    disabled: str,
     client: TestClient,
     robot_key_raw: str,
     payload: dict[str, Any],
@@ -425,18 +427,18 @@ def test_a_node_whose_agent_was_disabled_mid_run_is_cancelled_as_an_internal_err
     models = script(gateway=_triage(), inferer=_inference(), continuation=_continued())
     original = Agent.run_node
 
-    async def _disable_the_inferer_after_the_gateway(
+    async def _disable_an_agent_after_the_gateway(
         self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
     ) -> NodeRun:
         run = await original(self, invocation_state, input_map)
         if self.name == GATEWAY:
-            inferer = agents[INFERER]
-            inferer.enabled = False
-            session.add(inferer)
+            agent = agents[disabled]
+            agent.enabled = False
+            session.add(agent)
             session.commit()
         return run
 
-    monkeypatch.setattr(Agent, "run_node", _disable_the_inferer_after_the_gateway)
+    monkeypatch.setattr(Agent, "run_node", _disable_an_agent_after_the_gateway)
 
     message = _recover(client, robot_key_raw, payload)
 
