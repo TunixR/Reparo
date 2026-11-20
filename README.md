@@ -1,7 +1,7 @@
 # Reparo backend
 
 Reparo recovers failed RPA runs. When a software robot hits an exception, it opens a
-WebSocket to this FastAPI backend and sends what it knows: the task, the UI log up to the failure,
+WebSocket to this FastAPI backend and sends what it knows: the Process name, the UI log up to the failure,
 the failed activity and the process variables. LLM agents built on
 [Strands](https://strandsagents.com) analyse the failure and, when they can, take over the robot's
 desktop through screenshots and UI actions to bring the process back to a state the robot can

@@ -97,7 +97,7 @@ def test_check_model_event_rejects_what_is_not_a_bpmn_task(model_event_id: str):
         check_model_event(SPENDING_APPROVAL_MODEL, model_event_id)
 
     message = str(exc_info.value)
-    assert f"{model_event_id!r} is not a task of the model" in message
+    assert f"{model_event_id!r} is not an Event of the model" in message
     assert "click_approve (Click Approve)" in message
     assert "back_to_list (Return to the list)" in message
 

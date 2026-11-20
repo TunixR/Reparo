@@ -39,7 +39,7 @@ sequenceDiagram
 
     R->>WS: connect with X-ROBOT-KEY
     WS->>WS: check robot key
-    R->>WS: recovery payload (task, UI log, failed activity, variables, model, capabilities)
+    R->>WS: recovery payload (Process name, UI log, failed activity, variables, model, capabilities)
     WS->>DB: save robot exception + recovery context
     WS->>G: run the entry node of the default recovery graph
     G-->>WS: decision: a UI exception or not
@@ -69,7 +69,7 @@ sequenceDiagram
    header. Unknown or disabled keys are rejected before the socket is accepted. The server sends
    periodic pings while the recovery runs.
 2. **Submit.** The robot sends one recovery payload. It is validated against the payload model
-   (`templates/recovery_payload.py`) and normalised into a recovery context: the task, platform, the
+   (`templates/recovery_payload.py`) and normalised into a recovery context: the Process name, platform, the
    ordered UI log, the failed activity, the variables, the process model and the robot's
    capabilities (see [Robot protocol](#robot-protocol)).
 3. **Persist.** The raw payload is saved as a robot exception together with its recovery context
@@ -91,11 +91,11 @@ sequenceDiagram
    its traces to the right recovery.
 5. **Recover a UI exception.** In the seeded "UI Recovery" graph the gateway only classifies the
    failure. Anything but a UI exception goes to `route_to_human` and ends the graph at the gateway,
-   which reports no `success`. A UI exception goes on to the Recovery Inferer, which writes the task
+   which reports no `success`. A UI exception goes on to the Recovery Inferer, which writes the recovery task
    the GUI agent runs; then to the GUI agent, which acts on the desktop and reports what happened;
    then to the Continuation Inferer, which states whether the process was repaired and, if so,
-   names the task of the process model the robot should run next. It can only do so through the
-   `set_continuation` tool (`agent_tools/utils.py`), which checks the task against the model and the
+   names the Event of the process model the robot should run next. It can only do so through the
+   `set_continuation` tool (`agent_tools/utils.py`), which checks the Event against the model and the
    loop passes against the loops enclosing it (`agent_tools/process_model.py`). A wrong guess comes
    back to the agent as a correction, so it is fixed inside the agent loop instead of failing the
    recovery. Inside a node, agents can still call sub-agents as tools.
@@ -124,12 +124,12 @@ wait for, and closes the socket. The exact fields are in the models named below 
 they mean different things:
 
 - `model` is the **process model**, in BPMN 2.0 XML or another textual format (such as the
-  Playwright bridge's compact outline). Its task ids are **model event ids**: stable across runs and
+  Playwright bridge's compact outline). Its Event ids are **model event ids**: stable across runs and
   loop passes.
 - Each UI log entry and the failed activity have an `event_id`, which only identifies that
-  **occurrence** in this run (a task done three times in a loop has three), and an optional
-  `model_event_id` naming the task it performed. When `model_event_id` is missing, agents fall back
-  to matching `event_name` against task names.
+  **occurrence** in this run (an Event performed three times in a loop has three), and an optional
+  `model_event_id` naming the Event it performed. When `model_event_id` is missing, agents fall back
+  to matching `event_name` against Event names.
 - `activity_id` groups events semantically and is never a continuation target.
 
 `capabilities` says how the robot can be observed and driven: the modalities it supports (`vision`,
@@ -138,7 +138,7 @@ sends none supports `vision` only. It is stored with the recovery context. For n
 `vision` only, and refuse to act for a robot that leaves it out.
 
 `recovery_task`, optional, is the process author's description of what recovering the failed
-activity should achieve. For now only the eval WebSocket uses it (as the task its GUI agent runs);
+activity should achieve. For now only the eval WebSocket uses it (as the recovery task its GUI agent runs);
 the recovery endpoint accepts it and ignores it, so the agents behave as if it were absent.
 
 **During the recovery** the server sends `ping`, `screenshot` (the robot answers with one binary JPEG
@@ -157,8 +157,8 @@ frame) and `action` (the robot answers with a JSON result: `success`, `action_ty
 
 `done.content` tells the robot whether the recovery worked and where to resume: `success`;
 `process_finished` when the agents completed the rest of the process themselves;
-`continue_from_model_event_id`, the task to run next (naming the failed task means "retry it", an
-earlier one means "go back"); `loop_iteration`, one 0-based pass per loop enclosing that task,
+`continue_from_model_event_id`, the Event to run next (naming the failed Event means "retry it", an
+earlier one means "go back"); `loop_iteration`, one 0-based pass per loop enclosing that Event,
 outermost first; and `variables`, the payload's variables as the recovery left them. Without
 success there is no continuation. An `abort` cancels the agents and stores the robot's reason on
 the exception, which counts as a failed recovery; an abort sent before the payload just closes the
