@@ -1,0 +1,4 @@
+[submodule ".agents/skills"]
+	path = .agents/skills
+	url = ../ReparoHome.git
+	branch = skills

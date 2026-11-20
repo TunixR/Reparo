@@ -18,6 +18,9 @@ Domain overview (details in `ARCHITECTURE.md`):
 - Python: project requires `>=3.12` (`pyproject.toml`); CI uses Python `3.12` (`.github/workflows/unit-tests.yml`).
 - Note: `.python-version` currently pins `3.13`; when reproducing CI issues, prefer Python `3.12`.
 - Tooling: `uv` is the expected runner for installs, lint, type-check, and tests.
+- Skills: `.agents/skills` is a submodule of ReparoHome's generated `skills` branch, and `.claude/skills`
+  links to it. Edit skills only in ReparoHome; they reach this repo when a bump PR is merged. Fill it with
+  `git submodule update --init`; without access to ReparoHome it stays empty and nothing depends on it.
 
 2) Install / sync (matches CI)
 ```

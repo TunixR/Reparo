@@ -13,6 +13,16 @@ step so a run can be inspected or exported afterwards.
 You need Docker with Compose v2, [uv](https://docs.astral.sh/uv/) and an OpenAI-compatible LLM
 endpoint (OpenRouter, OpenAI, vLLM...). The full development stack uses about 2 GB of RAM.
 
+Clone with `--recurse-submodules`:
+
+```bash
+git clone --recurse-submodules https://github.com/TunixR/Reparo
+```
+
+It fills `.agents/skills`, the agent skills shared from the private ReparoHome repo
+(`git submodule update --init` does it later). Without access to it the folder stays empty, and
+nothing else depends on it.
+
 1. Start Postgres, SeaweedFS (S3) and SigNoz (observability). Details: [`docker/README.md`](docker/README.md).
 
    ```bash
@@ -131,6 +141,7 @@ routers. Change those through `/provider`.
 | `docker/` | Compose stacks for development and production |
 | `tests/` | `unit/` (SQLite, runs in CI) and `integration/` (needs the Docker stack) |
 | `modules/` | Reserved for recovery modules; currently empty |
+| `.agents/skills`, `.claude/skills` | Agent skills: a submodule of ReparoHome's `skills` branch, and a link to it for Claude Code. Edit skills in ReparoHome only |
 
 ## Documentation
 
