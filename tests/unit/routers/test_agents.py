@@ -1,7 +1,6 @@
 import uuid
 from collections.abc import Callable
 
-import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from httpx import Headers
@@ -338,9 +337,7 @@ def test_agents_patch_sets_and_clears_reasoning_effort(
     assert cleared_response.json()["reasoning_effort"] is None
 
 
-@pytest.mark.parametrize("removed", ["GatewayAgent", "ErrorAgent"])
-def test_agents_reject_the_removed_agent_types(
-    removed: str,
+def test_agents_reject_an_unknown_agent_type(
     mock_agent: Agent,
     mock_router: Router,
     admin_headers: Headers,
@@ -348,10 +345,10 @@ def test_agents_reject_the_removed_agent_types(
 ):
     payload = make_agent_payload(mock_router.id).model_dump(mode="json")
     created = client.post(
-        "/agents/", json=payload | {"type": removed}, headers=admin_headers
+        "/agents/", json=payload | {"type": "NotAType"}, headers=admin_headers
     )
     updated = client.patch(
-        f"/agents/{mock_agent.id}", json={"type": removed}, headers=admin_headers
+        f"/agents/{mock_agent.id}", json={"type": "NotAType"}, headers=admin_headers
     )
 
     assert created.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, created.text
