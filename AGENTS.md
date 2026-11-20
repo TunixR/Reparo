@@ -9,7 +9,7 @@ opening an issue/PR.
 Domain overview (details in `ARCHITECTURE.md`):
 - A FastAPI backend (`main.py`) that recovers failed RPA robot runs with LLM agents built on Strands.
 - A robot opens `WS /recovery/robot_exception/ws` with its `X-ROBOT-KEY`, sends one recovery payload, and the exception plus its recovery context are saved (`routers/recovery.py`).
-- The default recovery agent graph runs (`database/agent_graphs/`); its seeded entry node, the `GatewayAgent`, delegates to sub-agents exposed as tools: an error agent, then GUI agents that drive the robot's desktop through screenshot/action messages on the same socket.
+- The default recovery agent graph runs (`database/agent_graphs/`); its seeded entry node, the gateway agent, delegates to sub-agents exposed as tools: an error agent, then GUI agents that drive the robot's desktop through screenshot/action messages on the same socket.
 - Agents, their prompts, tools, sub-agents, call limits and LLM provider routers are database rows (`database/agents/`, `database/provider/`), seeded from `database/populators/*.json` by `populate.py`.
 - Every agent, tool and GUI step is traced per recovery in Postgres, with screenshots in S3 (`database/logging/`, `agent_tools/hooks.py`); OpenTelemetry goes to SigNoz (`OBSERVABILITY.md`).
 - Robots authenticate with robot keys; users with JWT sessions and administrator/developer roles (`security/`, `middlewares/auth.py`).

@@ -15,7 +15,7 @@ This is the single place that tracks what is implemented versus planned. How the
 
 The RPA Fallback Automation Recovery System is an intelligent, agent-based platform designed to automatically detect, diagnose, and resolve runtime failures in Robotic Process Automation (RPA) and other automation solutions. The system serves as a critical safety net that intercepts automation failures, analyzes their root causes, and either resolves them autonomously or provides detailed remediation guidance to human operators.
 
-The platform leverages advanced AI agents organized in specialized agent types (see `database/agents/models.py:AgentType`) rather than static code modules. Agent definitions, prompts, tools, and sub-agent composition are configured in the database and are populated from JSON configuration (see `database/populators/agents.py` + `database/populators/agents.json`). When a robot/orchestrator encounters a failure, it submits the exception to the recovery system which persists the exception and invokes a configured GatewayAgent to decide what to do next.
+The platform leverages advanced AI agents organized in specialized agent types (see `database/agents/models.py:AgentType`) rather than static code modules. Agent definitions, prompts, tools, and sub-agent composition are configured in the database and are populated from JSON configuration (see `database/populators/agents.py` + `database/populators/agents.json`). When a robot/orchestrator encounters a failure, it submits the exception to the recovery system which persists the exception and invokes a configured gateway agent to decide what to do next.
 
 Key capabilities include agent-driven execution with tool calling, trace logging (agent/tool/GUI), robot-key based authentication for robot submissions, and provider-router configuration for LLM backends. A full cockpit UI is not present in this repository; however, backend APIs exist for authentication, trace/exception retrieval, and artifact export.
 
@@ -27,7 +27,7 @@ The platform addresses critical business continuity needs by minimizing automati
 
 ### 1.1 Core System Architecture
 
-#### 1.1.1 Gateway (Ingress + GatewayAgent)
+#### 1.1.1 Gateway (Ingress + gateway agent)
 - [x] **REQ-F-001**: The system SHALL implement a central gateway that receives error notifications from external RPA orchestrators and automation systems (Partial: WebSocket robot ingestion exists via `WS /recovery/robot_exception/ws` in `routers/recovery.py`.)
 - [x] **REQ-F-002**: The gateway SHALL parse and standardize incoming error data into a common format regardless of source system (Payloads are validated against `templates/recovery_payload.py:RecoveryPayload` and normalized into `database/logging/models.py:RecoveryContext`; the raw JSON is also kept in `RobotException.exception_details`.)
 - [x] **REQ-F-003**: The gateway SHALL maintain a registry of available recovery modules and their capabilities
@@ -167,7 +167,7 @@ The platform addresses critical business continuity needs by minimizing automati
 #### 1.6.2 Robot Exception Ingestion and Persistence
 - [x] **REQ-F-103**: The system SHALL accept robot exception submissions via WebSocket authenticated by RobotKey header `X-ROBOT-KEY` (Implemented: `WS /recovery/robot_exception/ws` in `routers/recovery.py`.)
 - [x] **REQ-F-104**: The system SHALL persist each received exception payload for later inspection (Implemented: `database/logging/models.py:RobotException`.)
-- [x] **REQ-F-105**: The system SHALL invoke a configured GatewayAgent for each persisted exception, passing `robot_exception_id` in invocation state (Implemented: `routers/recovery.py` runs the default recovery agent graph, `database/agent_graphs/models.py`, whose seeded entry node is the gateway.)
+- [x] **REQ-F-105**: The system SHALL invoke a configured gateway agent for each persisted exception, passing `robot_exception_id` in invocation state (Implemented: `routers/recovery.py` runs the default recovery agent graph, `database/agent_graphs/models.py`, whose seeded entry node is the gateway.)
 
 #### 1.6.3 Agent/Tool/Provider Configuration APIs
 - [x] **REQ-F-106**: The system SHALL provide CRUD APIs for Agents with admin enforcement (Implemented: `routers/agents.py`.)

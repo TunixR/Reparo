@@ -13,7 +13,7 @@ tries to recover them with LLM agents. Its main parts:
 | Part | Role | Where |
 | --- | --- | --- |
 | Recovery ingress | WebSocket a robot opens when it fails; one recovery per connection | `routers/recovery.py` |
-| Agents | Database-configured Strands agents (gateway, error, GUI and generic agents) that run as graph nodes, standalone or as tools of other agents | `database/agents/` |
+| Agents | Database-configured Strands agents (generic and GUI agents) that run as graph nodes, standalone or as tools of other agents | `database/agents/` |
 | Agent graphs | Database-defined graphs of agent nodes, and the runner that executes a recovery one node at a time, starting at the gateway; seeded with the "UI Recovery" graph | `database/agent_graphs/`, `database/populators/agent_graphs.json` |
 | Tools | Python functions agents can call, registered in the database | `database/tools/`, `agent_tools/`, `gateway/` |
 | Provider routers | Which LLM backend and model each agent uses | `database/provider/`, `routers/provider.py` |
@@ -171,8 +171,9 @@ prompt, typed input arguments, response model, input type (text or image + text)
 tools and sub-agents. Invoking an agent builds a Strands agent from that row on the fly, validates the
 inputs, runs it, and asks for a structured response using the configured Pydantic model.
 
-- **Types.** `AgentType` distinguishes the gateway (the entry node of a recovery graph), error
-  agents, GUI agents and generic agents.
+- **Types.** `AgentType` distinguishes generic agents from GUI agents, the only type that runs
+  differently. An agent's role in a recovery (gateway, inferer…) comes from its place in the graph,
+  not from its type.
 - **Composition.** Sub-agents are exposed to their parent as tools, so delegation is just a tool
   call. Each tool or sub-agent link can carry a call limit, enforced by a hook
   (`agent_tools/hooks.py`). Disabled agents are left out.

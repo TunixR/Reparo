@@ -206,8 +206,6 @@ def _resolve_reasoning_effort(value: str | None) -> Agent.ReasoningEffort | None
 def _resolve_agent_type(value: str) -> AgentType:
     mapping = {
         "Agent": AgentType.Agent,
-        "GatewayAgent": AgentType.GatewayAgent,
-        "ErrorAgent": AgentType.ErrorAgent,
         "GuiAgent": AgentType.GuiAgent,
     }
     if value not in mapping:
@@ -229,7 +227,7 @@ def _load_json_config() -> dict[str, Any]:
           "prompt_file": "agent_name.md",  // in default_prompts/
           "response_model": "package.module.ClassName" | null,
           "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
-          "agent_type": "Agent" | "GatewayAgent" | "ErrorAgent" | "GuiAgent",
+          "agent_type": "Agent" | "GuiAgent",
           "input_type": "TEXT" | "IMAGETEXT",
           "enabled": true,
           "reasoning_effort": "medium",  // optional, unset keeps the provider default

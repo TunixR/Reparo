@@ -305,12 +305,6 @@ def disabled_agent(
 
 
 @pytest.fixture
-def graphless_gateway(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
-    """A gateway agent in no graph, unlike ``gateway_agent``."""
-    return make_agent(router=mock_router, name="Gateway", type=AgentType.GatewayAgent)
-
-
-@pytest.fixture
 def tasked_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
     """An agent taking a ``task``; it outputs a `GraphReport`."""
     return make_agent(

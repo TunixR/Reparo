@@ -466,36 +466,27 @@ def test_max_node_executions_has_a_configured_maximum(
     _rejected(enable_via_api(client, admin_headers, graph.id), str(MAX_NODE_EXECUTIONS))
 
 
-def test_a_gateway_is_only_an_entry_node(
+def test_an_entry_agent_may_also_run_past_the_entry_and_enter_other_graphs(
     client: TestClient,
     admin_headers: Headers,
     build_agent_graph: BuildAgentGraph,
     graph_agents: dict[str, Agent],
-    graphless_gateway: Agent,
+    gateway_like: Agent,
 ):
-    graph = build_agent_graph(
-        [("a", graph_agents["Alpha"]), ("gateway", graphless_gateway)],
-        [("a", "gateway")],
+    _ = build_agent_graph([("start", gateway_like)], name="First", enabled=True)
+    second = build_agent_graph(
+        [
+            ("start", gateway_like),
+            ("a", graph_agents["Alpha"]),
+            ("again", gateway_like),
+        ],
+        [("start", "a"), ("a", "again")],
+        name="Second",
     )
 
-    _rejected(
-        enable_via_api(client, admin_headers, graph.id), "'Gateway'", "entry node"
-    )
+    response = enable_via_api(client, admin_headers, second.id)
 
-
-def test_a_gateway_enters_at_most_one_enabled_graph(
-    client: TestClient,
-    admin_headers: Headers,
-    build_agent_graph: BuildAgentGraph,
-    graphless_gateway: Agent,
-):
-    first = build_agent_graph(
-        [("gateway", graphless_gateway)], name="First", enabled=True
-    )
-    second = build_agent_graph([("gateway", graphless_gateway)], name="Second")
-
-    _rejected(enable_via_api(client, admin_headers, second.id), "'Gateway'", "'First'")
-    assert first.id != second.id
+    assert response.status_code == status.HTTP_200_OK, response.text
 
 
 def test_one_agent_may_back_several_nodes_with_different_keys(

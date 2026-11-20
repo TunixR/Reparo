@@ -85,9 +85,9 @@ def agents(session: Session, mock_router: Router) -> dict[str, Agent]:
             arguments=_arguments(*arguments),
         )
 
-    gateway = _agent(GATEWAY, AgentType.GatewayAgent, f"{__name__}.Triage", "task_name")
+    gateway = _agent(GATEWAY, AgentType.Agent, f"{__name__}.Triage", "task_name")
     inferer = _agent(
-        INFERER, AgentType.ErrorAgent, f"{__name__}.Inference", "task_name", "symptom"
+        INFERER, AgentType.Agent, f"{__name__}.Inference", "task_name", "symptom"
     )
     helper = _agent(HELPER, AgentType.Agent, f"{__name__}.Hint", "symptom")
     continuation = _agent(

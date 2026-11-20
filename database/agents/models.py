@@ -141,9 +141,7 @@ class Argument(SQLModel, table=True):
 
 class AgentType(str, enum.Enum):
     Agent = "Agent"
-    GatewayAgent = "GatewayAgent"
     GuiAgent = "GuiAgent"
-    ErrorAgent = "ErrorAgent"
 
 
 class Agent(SQLModel, table=True):
@@ -717,24 +715,6 @@ class AgentUpdate(SQLModel):
         default=None, description="Foreign key to the router used by the agent."
     )
     type: AgentType | None = Field(default=None, description="The type of the agent.")
-
-
-# class GatewayAgent(Agent):
-#     id: uuid.UUID = Field(
-#         ...,
-#         description="Unique identifier for the gateway agent.",
-#         foreign_key="agent.id",
-#     )
-
-#     __mapper_args__ = {
-#         "polymorphic_identity": "GatewayAgent",
-#     }
-
-
-class ErrorAgent(SQLModel):
-    __mapper_args__ = {
-        "polymorphic_identity": "GatewayAgent",
-    }
 
 
 class SubAgent(SQLModel, table=True):
