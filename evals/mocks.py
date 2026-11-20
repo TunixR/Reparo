@@ -18,28 +18,17 @@ class GatewayMocks:
     """Mock tools for Gateway Orchestrator (Contribution 1: Error Filtering).
 
     Provides:
-    - ui_exception_handler: mock that captures when gateway routes to UI module
     - route_to_human: mock that captures when gateway escalates to human
+
+    Whether the gateway classified a UI exception comes from its report.
     """
 
     def __init__(self) -> None:
-        self.ui_handler_calls: list[dict[str, Any]] = []
         self.human_calls: list[dict[str, Any]] = []
         self._build_tools()
 
     def _build_tools(self) -> None:
         capture = self
-
-        @tool(
-            name="ui_exception_handler",
-            description="Handle UI-related errors with screenshot analysis and recovery.",
-            context=True,
-        )
-        async def mock_ui_handler(tool_context: ToolContext, **kwargs: Any) -> str:
-            capture.ui_handler_calls.append(dict(kwargs))
-            return (
-                '{"success": true, "result": "Test environment: UI handler invoked."}'
-            )
 
         @tool(
             name="route_to_human",
@@ -52,18 +41,12 @@ class GatewayMocks:
             capture.human_calls.append({"error_data": error_data})
             return {"routed": True, "message": "Error escalated to human operator."}
 
-        self._ui_handler = mock_ui_handler
         self._route_human = mock_route_human
 
     def build_tools(self) -> list[Any]:
-        return [self._ui_handler, self._route_human]
-
-    @property
-    def is_ui_error_routed(self) -> bool:
-        return len(self.ui_handler_calls) > 0
+        return [self._route_human]
 
     def clear(self) -> None:
-        self.ui_handler_calls.clear()
         self.human_calls.clear()
 
 

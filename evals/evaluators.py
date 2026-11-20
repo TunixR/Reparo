@@ -26,8 +26,8 @@ def _parse_output(output: Any) -> dict[str, Any] | None:
 class RoutingEvaluator(Evaluator[str, str]):
     """Deterministic evaluator for Contribution 1: Error Filtering.
 
-    The task function returns {"is_ui_error": bool} based on which mock
-    tool the Gateway Orchestrator called. Compares against GT directly.
+    The task function returns {"is_ui_error": bool}, the Gateway Orchestrator's
+    ``ui_exception`` decision. Compares against GT directly.
 
     Metrics (at experiment level): precision, recall, F1 on is_ui_error.
     """
