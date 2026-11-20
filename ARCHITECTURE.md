@@ -13,7 +13,8 @@ tries to recover them with LLM agents. Its main parts:
 | Part | Role | Where |
 | --- | --- | --- |
 | Recovery ingress | WebSocket a robot opens when it fails; one recovery per connection | `routers/recovery.py` |
-| Agents | Database-configured Strands agents: a gateway agent and the sub-agents it delegates to | `database/agents/` |
+| Agents | Database-configured Strands agents (gateway, error, GUI and generic agents) that run as graph nodes, standalone or as tools of other agents | `database/agents/` |
+| Agent graphs | Database-defined graphs of agent nodes, and the runner that executes a recovery one node at a time, starting at the gateway; seeded with the "UI Recovery" graph | `database/agent_graphs/`, `database/populators/agent_graphs.json` |
 | Tools | Python functions agents can call, registered in the database | `database/tools/`, `agent_tools/`, `gateway/` |
 | Provider routers | Which LLM backend and model each agent uses | `database/provider/`, `routers/provider.py` |
 | Trace logging | Per-recovery record of agent, tool and GUI steps, with screenshots in S3 | `database/logging/`, `agent_tools/hooks.py`, `s3/` |
@@ -29,27 +30,36 @@ supporting services run from `docker/` (see [`docker/README.md`](docker/README.m
 ```mermaid
 sequenceDiagram
     participant R as Robot
-    participant WS as Backend (recovery router)
+    participant WS as Backend (recovery router, graph runner)
     participant DB as Postgres / S3
-    participant G as Gateway agent
-    participant S as Sub-agents (error, GUI)
+    participant G as Gateway
+    participant I as Recovery Inferer
+    participant GUI as GUI agent
+    participant C as Continuation Inferer
 
     R->>WS: connect with X-ROBOT-KEY
     WS->>WS: check robot key
     R->>WS: recovery payload (task, UI log, failed activity, variables, model, capabilities)
     WS->>DB: save robot exception + recovery context
-    WS->>G: invoke with the recovery context
-    G->>S: delegate (agents exposed as tools)
-    loop while a GUI agent works
-        S->>R: screenshot request
-        R-->>S: screenshot
-        S->>R: UI action
-        R-->>S: action result
+    WS->>G: run the entry node of the default recovery graph
+    G-->>WS: decision: a UI exception or not
+    alt a UI exception
+        WS->>I: recovery context
+        I-->>WS: recovery task
+        WS->>GUI: recovery task + recovery context
+        loop while the GUI agent works
+            GUI->>R: screenshot request
+            R-->>GUI: screenshot
+            GUI->>R: UI action
+            R-->>GUI: action result
+        end
+        GUI-->>WS: run report
+        WS->>C: recovery task + run report
+        C->>C: set_continuation
+        C-->>WS: report (success)
     end
-    S-->>G: structured report
-    G-->>WS: structured response (success)
     WS->>R: done (success, continuation, variables + recovery id)
-    Note over S,DB: every agent, tool and GUI step is traced to the exception
+    Note over G,DB: every agent, tool and GUI step is traced to the exception
     Note over R,WS: at any point the robot may send abort instead, ending the recovery as failed
     R->>WS: later: POST /recovery/report_result/{id} (final outcome)
     WS->>DB: store outcome
@@ -64,24 +74,40 @@ sequenceDiagram
    capabilities (see [Robot protocol](#robot-protocol)).
 3. **Persist.** The raw payload is saved as a robot exception together with its recovery context
    (`database/logging/models.py`). The exception id is the recovery id used everywhere afterwards.
-4. **Run the gateway.** The backend loads the agent of type `GatewayAgent` and invokes it with the
-   recovery context. The WebSocket and the exception id travel in the Strands invocation state, so
-   every nested agent and tool can reach the robot and attach its traces to the right recovery.
-5. **Delegate.** Agents call sub-agents as tools. In the seeded configuration the gateway hands UI
-   errors to an error agent, which in turn uses a GUI agent to act on the desktop and then states
-   whether the process was repaired and, if so, names the task of the process model the robot should
-   run next. It can only do so through the `set_continuation` tool (`agent_tools/utils.py`), which checks the task against the model and the
+4. **Run the agent graph.** Every recovery runs the enabled default recovery agent graph
+   (`database/agent_graphs/models.py`). It is looked up before the exception is persisted, and
+   loaded with every node's agent right before the run; the populator seeds "UI Recovery" as the
+   default (see [Seeding](#3-agents)). The graph awaits one node at a time, from its entry node, inside the
+   recovery, so an abort cancels it. After each node it follows the first outgoing edge, by
+   priority, whose condition holds over the node's structured output, until none does or a graph
+   limit is hit. Before each node it re-reads from the database whether every agent of the graph is
+   still enabled; once one is disabled during the run, the next node is cancelled and the recovery
+   ends with an internal error. The same check flags a graph as not runnable. Conditions are declarative predicates (`database/agent_graphs/conditions.py`),
+   never evaluated as code; an edge without one always holds, and one that can't be evaluated
+   doesn't. Each node's arguments bind from its
+   input map, else by name from the recovery context and then from the earlier nodes' structured
+   outputs. The WebSocket, the exception id and those outputs travel in the shared Strands
+   invocation state, so every node and every nested agent and tool can reach the robot and attach
+   its traces to the right recovery.
+5. **Recover a UI exception.** In the seeded "UI Recovery" graph the gateway only classifies the
+   failure. Anything but a UI exception goes to `route_to_human` and ends the graph at the gateway,
+   which reports no `success`. A UI exception goes on to the Recovery Inferer, which writes the task
+   the GUI agent runs; then to the GUI agent, which acts on the desktop and reports what happened;
+   then to the Continuation Inferer, which states whether the process was repaired and, if so,
+   names the task of the process model the robot should run next. It can only do so through the
+   `set_continuation` tool (`agent_tools/utils.py`), which checks the task against the model and the
    loop passes against the loops enclosing it (`agent_tools/process_model.py`). A wrong guess comes
    back to the agent as a correction, so it is fixed inside the agent loop instead of failing the
-   recovery.
+   recovery. Inside a node, agents can still call sub-agents as tools.
 6. **Drive the desktop.** A GUI agent asks the robot for screenshots and sends it UI actions
    (click, type, scroll...) over the same WebSocket; the robot executes them and replies. This is the
    robot-side contract implemented by the test client in `scripts/recovery_ws_client/`.
-7. **Finish.** The robot gets a `done` message with the recovery id. Only `success` comes from the
-   gateway's answer; the continuation is the one `set_continuation` stored, and the variables are the
+7. **Finish.** The robot gets a `done` message with the recovery id. Only `success` comes from an
+   agent: it is the last executed node's `success` field, false when missing or when the graph hit a
+   limit; the continuation is the one `set_continuation` stored, and the variables are the
    payload's, as changed by the GUI agents. A reported success without a stored continuation, or
    after `set_continuation` declared the recovery failed, is sent as a failure. The success sent is stored on the exception. `done` is sent only for a recovery that
-   was persisted and run; every other ending (an invalid payload, a server without a gateway agent,
+   was persisted and run; every other ending (an invalid payload, a server without a default recovery graph,
    an unexpected failure) is an `error` message with a machine-readable code, and the socket is
    closed. The robot can also end the recovery itself with `abort`.
 8. **Report.** Once the robot (or its orchestrator) knows whether the process really continued, it
@@ -125,7 +151,7 @@ frame) and `action` (the robot answers with a JSON result: `success`, `action_ty
 | --- | --- | --- | --- |
 | The recovery ran | server | `done`: the recovery `id` and `ResponseToRPA` (`templates/gateway.py`) | 1000 |
 | The payload is not JSON or not valid | server | `error`, `INVALID_RECOVERY_PAYLOAD` | 1003 |
-| No gateway agent is configured | server | `error`, `NO_GATEWAY_AGENT` | 1011 |
+| No enabled default recovery agent graph | server | `error`, `NO_AGENT_GRAPH` | 1011 |
 | Anything unexpected | server | `error`, `INTERNAL_ERROR` | 1011 |
 | The robot gives up | robot | `abort`, with its own `error_code` and `error_description` | 1000, no `done` |
 
@@ -145,9 +171,8 @@ prompt, typed input arguments, response model, input type (text or image + text)
 tools and sub-agents. Invoking an agent builds a Strands agent from that row on the fly, validates the
 inputs, runs it, and asks for a structured response using the configured Pydantic model.
 
-- **Types.** `AgentType` distinguishes the gateway (the entry point for every recovery), error
-  agents, GUI agents and generic agents. Recovery uses the first `GatewayAgent` it finds, so keep
-  exactly one.
+- **Types.** `AgentType` distinguishes the gateway (the entry node of a recovery graph), error
+  agents, GUI agents and generic agents.
 - **Composition.** Sub-agents are exposed to their parent as tools, so delegation is just a tool
   call. Each tool or sub-agent link can carry a call limit, enforced by a hook
   (`agent_tools/hooks.py`). Disabled agents are left out.
@@ -160,11 +185,29 @@ inputs, runs it, and asks for a structured response using the configured Pydanti
 - **Prompts and responses.** An agent's prompt is part of its row; response and payload models live
   in `templates/`. A prompt names only the tools the agent is given and leaves the response layout
   to the response model. Prompts used only by the evals live in `evals/`.
-- **Seeding.** `populate.py` creates the tables and the S3 bucket, then loads the default agents, sub-agent links, tools, provider routers and
-  the admin user from `database/populators/` (`agents.json`, `routers.json`, and the default agent
-  prompts in `default_prompts/`). Seeding only creates what is missing, so a changed default prompt
-  reaches fresh databases only. After that, agents and routers can be changed at runtime through
-  the API without a deploy.
+- **Seeding.** `populate.py` creates the tables and the S3 bucket, then loads the default agents, sub-agent links, tools, provider routers,
+  the admin user and the agent graph from `database/populators/` (`agents.json`, `routers.json`,
+  the default agent prompts in `default_prompts/`, and `agent_graphs.json`). Seeding only creates
+  what is missing, so a changed default prompt reaches fresh databases only. After that, agents,
+  graphs and routers can be changed at runtime through the API without a deploy.
+- **The seeded graph.** "UI Recovery" chains the gateway, the Recovery Inferer, the Tooled GuiAgent
+  and the Continuation Inferer, past the gateway only on a UI exception. On a fresh database it is
+  enabled as the default recovery graph once it passes the same validation as the API. The legacy
+  UI Exception Handler, which did all of this as one agent calling the GUI agent as a tool, is
+  seeded disabled for reference.
+- **Migrating an older database.** A database seeded before the graph keeps its gateway's old
+  prompt and response model, since seeding never overwrites an agent. There the graph is created
+  disabled, recoveries keep running the gateway alone, and the populator prints the administrator
+  API calls that switch over: disable the gateway-only graph, give the gateway its classification
+  prompt and response model, disable the UI Exception Handler, and enable "UI Recovery" as the
+  default recovery graph. It prints them on every run until they are made.
+- **Editing agent graphs.** Administrators edit graphs, their nodes and their edges through the
+  API. A disabled graph is a draft and accepts any structure; enabling a graph, and every write to
+  an enabled one, must leave it runnable. Making a graph the default recovery graph takes over from
+  the previous default. Agents are guarded too: an agent can't be disabled while an enabled graph
+  uses it, deleted while any graph does, or have its arguments, response model or type changed in
+  a way that breaks an enabled graph. The rules live in one module,
+  `database/agent_graphs/service.py`, which the agent endpoints call as well.
 
 ## 4. Tools
 
@@ -189,12 +232,21 @@ its token usage; other providers report the cost as unknown (-1).
 Recoveries are recorded in the database, separately from OpenTelemetry, so they can be reviewed and
 exported per recovery:
 
-- **Agent traces** with their messages, cost and parent/child links between agents; **tool traces**
-  with inputs, outputs and status; **GUI traces** with the action taken and the screenshot it was
-  based on. Hooks in `agent_tools/hooks.py` write them as agents run.
+- **Agent graph traces**, one per agent graph run, recording how it ended, and a flat, ordered
+  **node trace** per node execution that links to the node's agent trace. A node trace copies the
+  condition of the edge it was entered by, so it stays readable after the graph is edited or
+  deleted. The recovery opens and closes the agent graph trace; the runner opens and closes each
+  node trace (`database/logging/agent_graph_tracing.py`), and the node's agent links its agent trace
+  to it as soon as it starts.
+- **Agent traces** with their messages, cost and tool traces. Each node's agent trace is a root:
+  sequence lives in the node traces, while agents called as tools inside a node still nest under
+  their caller as sub-agent traces. **Tool traces** have inputs, outputs and status; **GUI traces**
+  the action taken and the screenshot it was based on. Hooks in `agent_tools/hooks.py` write them as
+  agents run.
 - Screenshots are stored in S3 (`s3/`), and deleted with their trace (`database/logging/orm_events.py`).
-- `routers/logging.py` serves traces, the recovery context, a markdown report of a run, and a ZIP
-  with the UI log as CSV plus its screenshots.
+- `routers/logging.py` serves traces, the recovery context, markdown reports of an agent trace and of
+  a whole agent graph run (each node in order, followed by its agent trace), and a ZIP with the UI
+  log as CSV plus its screenshots.
 
 ## 7. Authentication
 

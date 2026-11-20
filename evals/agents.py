@@ -22,6 +22,7 @@ from strands_evals import Case
 from tenacity import retry, stop_after_attempt
 
 import settings
+from templates.gateway import GatewayDecision
 
 
 def build_model(
@@ -110,8 +111,10 @@ def _extract_final_task(agent: StrandsAgent) -> str:
 def gateway_task(case: Case[str, str], mocks: Any) -> dict[str, Any]:
     """Invoke the Gateway Orchestrator for error filtering evaluation.
 
+    As in production, the gateway runs freely, then reports a `GatewayDecision`.
+
     Returns a dict with:
-    - is_ui_error: bool (for evaluator)
+    - is_ui_error: the decision's ``ui_exception`` (for evaluator)
     - model_messages: full conversation trace (for debuggability)
     - tool_calls: which mock tools were called and with what args
     - raw_instruction: what was sent to the model
@@ -137,14 +140,19 @@ def gateway_task(case: Case[str, str], mocks: Any) -> dict[str, Any]:
     )
 
     _ = agent(instruction)
+    decision = agent(
+        "Given our conversation so far, please provide a report using structured "
+        "output with the given tool.",
+        structured_output_model=GatewayDecision,
+    ).structured_output
+    if not isinstance(decision, GatewayDecision):
+        raise TypeError("The gateway did not report a GatewayDecision.")
 
     return {
-        "is_ui_error": mocks.is_ui_error_routed,
+        "is_ui_error": decision.ui_exception,
+        "rationale": decision.rationale,
         "model_messages": _extract_agent_messages(agent),
-        "tool_calls": {
-            "ui_handler": mocks.ui_handler_calls,
-            "route_to_human": mocks.human_calls,
-        },
+        "tool_calls": {"route_to_human": mocks.human_calls},
         "raw_instruction": instruction,
     }
 

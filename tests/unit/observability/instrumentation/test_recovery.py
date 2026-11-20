@@ -80,19 +80,19 @@ def test_completed_turn_sets_outcome(
     assert "recovery.persist" in spans
 
 
-def test_no_gateway_agent_marks_the_turn_as_error(
+def test_no_agent_graph_marks_the_turn_as_error(
     tracer: Tracer, exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.ERROR)
 
     with recovery_turn(tracer, ROBOT_KEY_ID) as turn:
-        turn.no_gateway_agent()
+        turn.no_agent_graph()
 
     span = _turn_span(exporter)
     assert span.status.status_code.name == "ERROR"
-    assert (span.attributes or {})["recovery.outcome"] == "no_gateway_agent"
+    assert (span.attributes or {})["recovery.outcome"] == "no_agent_graph"
     assert [vars(r)["otel.event.name"] for r in caplog.records] == [
-        "recovery.no_gateway_agent"
+        "recovery.no_agent_graph"
     ]
 
 

@@ -1,9 +1,11 @@
+import enum
 import json
 from base64 import b64encode
 from datetime import datetime, timezone
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, Optional, override
 from uuid import UUID, uuid4
 
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import (
     Field,
@@ -15,6 +17,9 @@ from database.keys.models import RobotKey
 from database.tools.models import Tool
 from s3 import S3Client
 from templates.recovery_payload import RecoveryCapabilities, RecoveryPayload
+
+if TYPE_CHECKING:
+    from database.agent_graphs.models import AgentGraph
 
 
 class AgentTrace(SQLModel, table=True):
@@ -231,6 +236,9 @@ class RobotException(SQLModel, table=True):
     )
 
     agent_traces: list[AgentTrace] = Relationship(back_populates="robot_exception")
+    agent_graph_traces: list["AgentGraphTrace"] = Relationship(
+        back_populates="robot_exception", cascade_delete=True
+    )
     recovery_context: "RecoveryContext" = Relationship(back_populates="robot_exception")
 
     infered_success: bool = Field(
@@ -502,3 +510,168 @@ class ToolTrace(SQLModel, table=True):
         description="Timestamp of when the trace was closed.",
         nullable=True,
     )
+
+
+class AgentGraphTraceStatus(str, enum.Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class AgentGraphNodeTraceStatus(str, enum.Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class AgentGraphTrace(SQLModel, table=True):
+    """One agent graph run of a recovery; its node traces are its steps, in order."""
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    agent_graph_id: UUID | None = Field(
+        default=None, foreign_key="agentgraph.id", ondelete="SET NULL"
+    )
+    # A quoted ``X | None`` can't be resolved by SQLModel.
+    agent_graph: Optional["AgentGraph"] = Relationship()  # noqa: UP045
+    robot_exception_id: UUID = Field(
+        foreign_key="robotexception.id", ondelete="CASCADE", index=True
+    )
+    robot_exception: RobotException = Relationship(back_populates="agent_graph_traces")
+    status: AgentGraphTraceStatus = Field(default=AgentGraphTraceStatus.RUNNING)
+    failure_reason: str | None = Field(
+        default=None,
+        description="Why the run failed: the limit it hit, or the error it raised.",
+    )
+    terminal_node_key: str | None = Field(
+        default=None, description="The key of the last node that completed."
+    )
+    answer: dict[str, Any] | None = Field(
+        default=None, sa_type=JSONB, description="The answer sent to the robot."
+    )
+    node_traces: list["AgentGraphNodeTrace"] = Relationship(
+        back_populates="agent_graph_trace",
+        cascade_delete=True,
+        sa_relationship_kwargs={
+            "lazy": "selectin",
+            "order_by": "AgentGraphNodeTrace.execution_index",
+        },
+    )
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = Field(default=None)
+
+    async def get_markdown_log(self) -> str:
+        """The run's header, then each node execution followed by its agent trace."""
+        graph = self.agent_graph
+        log = f"# Agent Graph Trace: {self.id}\n\n"
+        log += (
+            f"**Agent Graph:** {graph.name} ({graph.id})\n\n"
+            if graph is not None
+            else "**Agent Graph:** deleted\n\n"
+        )
+        log += f"**Robot Exception:** {self.robot_exception_id}\n\n"
+        log += f"**Status:** {self.status.value}\n\n"
+        if self.failure_reason is not None:
+            log += f"**Failure Reason:** {self.failure_reason}\n\n"
+        if self.terminal_node_key is not None:
+            log += f"**Terminal Node:** {self.terminal_node_key}\n\n"
+        log += f"**Created At:** {self.created_at}\n\n"
+        log += f"**Finished At:** {self.finished_at}\n\n"
+        log += (
+            f"**Answer:**\n```json\n{json.dumps(self.answer, indent=2)}\n```\n"
+            if self.answer is not None
+            else "**Answer:** none\n"
+        )
+        for node_trace in self.node_traces:
+            log += "\n" + await node_trace.get_markdown_log()
+        return log
+
+
+class AgentGraphNodeTrace(SQLModel, table=True):
+    """One node execution of an agent graph run, with how the run got there."""
+
+    __table_args__ = (UniqueConstraint("agent_graph_trace_id", "execution_index"),)
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    agent_graph_trace_id: UUID = Field(
+        foreign_key="agentgraphtrace.id", ondelete="CASCADE", index=True
+    )
+    agent_graph_trace: AgentGraphTrace = Relationship(back_populates="node_traces")
+    execution_index: int = Field(description="The node's place in the run, from 0.")
+    node_key: str
+    agent_trace_id: UUID | None = Field(
+        default=None, foreign_key="agenttrace.id", ondelete="SET NULL"
+    )
+    agent_trace: AgentTrace | None = Relationship()
+    entry_edge_id: UUID | None = Field(
+        default=None,
+        foreign_key="agentgraphedge.id",
+        ondelete="SET NULL",
+        description="The edge the run entered the node by; null for the entry node.",
+    )
+    entry_condition: dict[str, Any] | None = Field(
+        default=None,
+        sa_type=JSONB,
+        description="The entry edge's condition when the node ran; null if unconditional.",
+    )
+    status: AgentGraphNodeTraceStatus = Field(default=AgentGraphNodeTraceStatus.RUNNING)
+    error: str | None = Field(default=None)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = Field(default=None)
+
+    async def get_markdown_log(self) -> str:
+        """How the run entered the node and how it ended, then its agent trace."""
+        agent_trace = self.agent_trace
+        log = f"## Node {self.execution_index}: {self.node_key}\n\n"
+        log += (
+            f"**Agent:** {agent_trace.agent.name} ({agent_trace.agent_id})\n\n"
+            if agent_trace is not None
+            else "**Agent:** unknown\n\n"
+        )
+        if self.execution_index == 0:
+            log += "**Entered By:** the entry node\n\n**Condition:** none\n\n"
+        else:
+            log += (
+                f"**Entered By:** edge {self.entry_edge_id}\n\n"
+                if self.entry_edge_id is not None
+                else "**Entered By:** a deleted edge\n\n"
+            )
+            log += (
+                f"**Condition:** `{json.dumps(self.entry_condition)}`\n\n"
+                if self.entry_condition is not None
+                else "**Condition:** unconditional\n\n"
+            )
+        log += f"**Status:** {self.status.value}\n\n"
+        if self.error is not None:
+            log += f"**Error:** {self.error}\n\n"
+        if agent_trace is None:
+            return log + "_No agent trace recorded._\n"
+        return log + await agent_trace.get_makdown_log()
+
+
+class AgentGraphNodeTraceRead(SQLModel):
+    id: UUID
+    execution_index: int
+    node_key: str
+    agent_trace_id: UUID | None
+    entry_edge_id: UUID | None
+    entry_condition: dict[str, Any] | None
+    status: AgentGraphNodeTraceStatus
+    error: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+
+class AgentGraphTraceRead(SQLModel):
+    """An agent graph run with its node traces in execution order."""
+
+    id: UUID
+    agent_graph_id: UUID | None
+    robot_exception_id: UUID
+    status: AgentGraphTraceStatus
+    failure_reason: str | None
+    terminal_node_key: str | None
+    answer: dict[str, Any] | None
+    node_traces: list[AgentGraphNodeTraceRead]
+    created_at: datetime
+    finished_at: datetime | None

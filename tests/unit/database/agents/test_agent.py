@@ -206,22 +206,6 @@ def test_as_tool_reflects_agent_metadata():
 
 
 # ---------------------------------------------------------------------------
-# __call__ behavior (lightweight)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(reason="Full __call__ invokes external model; skip in unit tests.")
-def test_agent_call_execution():
-    """
-    Placeholder test for future integration where model invocation can be mocked.
-    """
-    agent = _make_agent(_make_router())
-    # Would require mocking StrandsAgent to avoid network
-    _ = agent  # For linter silence
-    assert True
-
-
-# ---------------------------------------------------------------------------
 # Router capability alignment
 # ---------------------------------------------------------------------------
 

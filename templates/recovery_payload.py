@@ -165,10 +165,26 @@ class RecoveryPayload(TemplateModel):
         return value
 
 
+class RecoveryInputs(TemplateModel):
+    """What every node of an agent graph can bind from: the recovery payload's
+    inputs, as the recovery passes them to the run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_name: str
+    platform: str
+    os: str
+    variables: dict[str, Any]
+    ui_log: list[RecoveryUiLogEntry]
+    errored_act: RecoveryErroredAct | None
+    model: str
+
+
 __all__ = [
     "Modality",
     "RecoveryCapabilities",
     "RecoveryErroredAct",
+    "RecoveryInputs",
     "RecoveryPayload",
     "RecoveryUiLogEntry",
 ]

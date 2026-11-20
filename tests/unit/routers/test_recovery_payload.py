@@ -8,10 +8,12 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
+from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
 from database.agents.models import Agent
 from database.logging.models import RecoveryContext, RobotException
 from robot.capabilities import CAPABILITIES_STATE_KEY
-from templates.recovery_payload import RecoveryPayload
+from templates.gateway import ResponseToRPA
+from templates.recovery_payload import RecoveryInputs, RecoveryPayload
 
 
 @pytest.fixture
@@ -45,23 +47,19 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         raising=True,
     )
 
-    async def _fake_call(_self, invocation_state=None, **kwargs):  # pyright: ignore[reportMissingParameterType]
+    async def _fake_run_node(_self, invocation_state, _input_map):  # pyright: ignore[reportMissingParameterType]
         captured_invocation["invocation_state"] = invocation_state
-        captured_invocation["kwargs"] = kwargs
-        assert invocation_state is not None
+        captured_invocation["inputs"] = invocation_state[
+            AGENT_GRAPH_CONTEXT_KEY
+        ].recovery_inputs
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
             continue_from_model_event_id="click_submit",
             loop_iteration=[],
         )
-        return {
-            "success": True,
-            "process_finished": False,
-            "continue_from_model_event_id": "click_submit",
-            "loop_iteration": [],
-        }
+        return NodeRun(output=ResponseToRPA(success=True))
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+    monkeypatch.setattr(Agent, "run_node", _fake_run_node, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     with client.websocket_connect(
@@ -128,20 +126,22 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     state_variables = captured_invocation["invocation_state"]["variables"]
     assert state_variables == valid_recovery_payload["variables"]
     assert state_variables is not recovery_context.variables
+    inputs = captured_invocation["inputs"]
+    assert RecoveryInputs.model_validate(inputs).model_dump() == inputs
     assert (
-        captured_invocation["kwargs"]["task_name"]
+        captured_invocation["inputs"]["task_name"]
         == valid_recovery_payload["task_name"]
     )
     assert (
-        captured_invocation["kwargs"]["platform"] == valid_recovery_payload["platform"]
+        captured_invocation["inputs"]["platform"] == valid_recovery_payload["platform"]
     )
-    assert captured_invocation["kwargs"]["os"] == valid_recovery_payload["os"]
+    assert captured_invocation["inputs"]["os"] == valid_recovery_payload["os"]
     assert (
-        captured_invocation["kwargs"]["variables"]
+        captured_invocation["inputs"]["variables"]
         == valid_recovery_payload["variables"]
     )
     # Check that ui_log uses v2 field names with normalized ids
-    ui_log = captured_invocation["kwargs"]["ui_log"]
+    ui_log = captured_invocation["inputs"]["ui_log"]
     assert len(ui_log) == 1
     assert ui_log[0]["activity_id"] is None  # fixture has activity_id as None
     assert ui_log[0]["event_name"] == "Type invoice id"
@@ -153,7 +153,7 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     assert isinstance(ui_log[0]["event_id"], str)
 
     # Check that errored_act uses v2 field names with normalized ids
-    errored_act = captured_invocation["kwargs"]["errored_act"]
+    errored_act = captured_invocation["inputs"]["errored_act"]
     assert errored_act["activity_id"] is None  # fixture has activity_id as None
     assert errored_act["event_name"] is None  # fixture has event_name as None
     assert errored_act["case_id"] == valid_recovery_payload["errored_act"]["case_id"]
@@ -164,8 +164,8 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
     assert isinstance(errored_act["case_id"], str)
     assert isinstance(errored_act["event_id"], str)
 
-    assert captured_invocation["kwargs"]["model"] == valid_recovery_payload["model"]
-    assert set(captured_invocation["kwargs"].keys()) == {
+    assert captured_invocation["inputs"]["model"] == valid_recovery_payload["model"]
+    assert set(captured_invocation["inputs"].keys()) == {
         "task_name",
         "platform",
         "os",
@@ -191,11 +191,11 @@ def test_recovery_ws_ingest_stores_declared_capabilities(
     }
     captured: dict[str, Any] = {}
 
-    async def _fake_call(_self, invocation_state=None, **_kwargs):  # pyright: ignore[reportMissingParameterType]
-        captured["capabilities"] = invocation_state[CAPABILITIES_STATE_KEY]  # pyright: ignore[reportOptionalSubscript]
-        return {"success": False}
+    async def _fake_run_node(_self, invocation_state, _input_map):  # pyright: ignore[reportMissingParameterType]
+        captured["capabilities"] = invocation_state[CAPABILITIES_STATE_KEY]
+        return NodeRun(output=ResponseToRPA(success=False))
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+    monkeypatch.setattr(Agent, "run_node", _fake_run_node, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     with client.websocket_connect(
@@ -223,11 +223,12 @@ def test_recovery_ws_accepts_recovery_task_and_does_not_pass_it_to_the_agent(
 ):
     calls: list[dict[str, Any]] = []
 
-    async def _fake_call(_self, invocation_state=None, **kwargs):  # pyright: ignore[reportMissingParameterType]
-        calls.append({"invocation_state": invocation_state, "kwargs": kwargs})
-        return {"success": False}
+    async def _fake_run_node(_self, invocation_state, _input_map):  # pyright: ignore[reportMissingParameterType]
+        inputs = invocation_state[AGENT_GRAPH_CONTEXT_KEY].recovery_inputs
+        calls.append({"invocation_state": invocation_state, "inputs": inputs})
+        return NodeRun(output=ResponseToRPA(success=False))
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call, raising=True)
+    monkeypatch.setattr(Agent, "run_node", _fake_run_node, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     messages: list[dict[str, Any]] = []
@@ -244,9 +245,9 @@ def test_recovery_ws_accepts_recovery_task_and_does_not_pass_it_to_the_agent(
     assert [message["type"] for message in messages] == ["done", "done"]
     without_task, with_task = calls
     # Ignored for now: the gateway gets exactly what it gets without the field.
-    assert with_task["kwargs"] == without_task["kwargs"]
-    assert "recovery_task" not in with_task["kwargs"]
-    assert "Approve the request" not in repr(with_task["kwargs"])
+    assert with_task["inputs"] == without_task["inputs"]
+    assert "recovery_task" not in with_task["inputs"]
+    assert "Approve the request" not in repr(with_task["inputs"])
     assert "Approve the request" not in repr(with_task["invocation_state"])
 
 
@@ -289,7 +290,7 @@ def test_recovery_ws_ingest_rejects_non_json_payload(
     assert closed["code"] == 1003
 
 
-def test_missing_gateway_agent_is_an_error_not_done(
+def test_missing_agent_graph_is_an_error_not_done(
     session: Session,
     client: TestClient,
     valid_robot_key_raw: str,
@@ -305,8 +306,8 @@ def test_missing_gateway_agent_is_an_error_not_done(
 
     assert message == {
         "type": "error",
-        "code": "NO_GATEWAY_AGENT",
-        "content": "No GatewayAgent found in the database.",
+        "code": "NO_AGENT_GRAPH",
+        "content": "No enabled default recovery agent graph in the database.",
     }
     assert closed["code"] == 1011
     # No recovery was instantiated, so nothing was persisted.

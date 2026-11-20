@@ -1,0 +1,40 @@
+{
+  "agent_graphs": [
+    {
+      "name": "UI Recovery",
+      "description": "The gateway classifies the failure. A UI exception goes on to the Recovery Inferer, which writes the recovery task, the Tooled GuiAgent, which carries it out on the robot's desktop, and the Continuation Inferer, which tells the robot where to continue. Any other failure ends at the gateway, without success.",
+      "enabled": true,
+      "is_default_recovery": true,
+      "max_node_executions": 4,
+      "execution_timeout_s": null,
+      "node_timeout_s": null,
+      "replaces": ["UI Exception Handler"],
+      "nodes": [
+        {"key": "gateway", "agent": "Gateway Orchestrator", "is_entry": true},
+        {"key": "recovery_inferer", "agent": "Recovery Inferer"},
+        {
+          "key": "tooled_guiagent",
+          "agent": "Tooled GuiAgent",
+          "input_map": {"task": "recovery_inferer.recovery_task"}
+        },
+        {
+          "key": "continuation_inferer",
+          "agent": "Continuation Inferer",
+          "input_map": {
+            "gui_summary": "tooled_guiagent.summary",
+            "goal_reached": "tooled_guiagent.goal_reached"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "source": "gateway",
+          "target": "recovery_inferer",
+          "condition": {"field": "ui_exception", "op": "eq", "value": true}
+        },
+        {"source": "recovery_inferer", "target": "tooled_guiagent"},
+        {"source": "tooled_guiagent", "target": "continuation_inferer"}
+      ]
+    }
+  ]
+}

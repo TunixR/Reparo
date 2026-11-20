@@ -13,7 +13,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from opentelemetry import trace
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlmodel import select
 
 import database.general as database
@@ -22,8 +22,14 @@ from agent_tools.utils import (
     declared_not_recovered,
     stored_continuation,
 )
-from database.agents.models import Agent, AgentType
+from database.agent_graphs.models import AgentGraph
+from database.agent_graphs.runner import (
+    AGENT_GRAPH_CONTEXT_KEY,
+    AgentGraphContext,
+    GraphOutcome,
+)
 from database.keys.models import RobotKey
+from database.logging.agent_graph_tracing import AgentGraphRunTrace
 from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
 from observability.instrumentation import recovery as telemetry
@@ -49,7 +55,7 @@ ROBOT_KEY_HEADER = "X-ROBOT-KEY"
 
 
 INVALID_RECOVERY_PAYLOAD = "INVALID_RECOVERY_PAYLOAD"
-NO_GATEWAY_AGENT = "NO_GATEWAY_AGENT"
+NO_AGENT_GRAPH = "NO_AGENT_GRAPH"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
 # Websocket close code (RFC 6455): unsupported data.
@@ -86,12 +92,6 @@ def find_enabled_robot_key(
         return None
 
     return robot_key
-
-
-def _get_gateway_agent(session: database.SessionDep):
-    return session.exec(
-        select(database.Agent).where(database.Agent.type == AgentType.GatewayAgent)
-    ).first()
 
 
 def _decode_payload_or_raise(raw: str) -> Any:
@@ -158,22 +158,30 @@ def _record_abort(
 
 
 def _build_answer(
-    response: dict[str, Any], invocation_state: dict[str, Any]
+    last_output: BaseModel | None,
+    invocation_state: dict[str, Any],
+    *,
+    graph_failed: bool = False,
 ) -> tuple[ResponseToRPA, str | None]:
-    """Build ``done.content``: ``success`` from the gateway, the rest from the state.
+    """Build ``done.content``: ``success`` from the last output, the rest from the state.
 
-    A success needs both the gateway's report and a continuation from
-    `set_continuation`; a failure carries no continuation.
+    ``success`` is the last output's ``success`` field, false when it is missing. A
+    success also needs a continuation from `set_continuation`; a failure carries no
+    continuation.
 
     Returns:
-        The answer, and why a reported success had to be sent as a failure:
-        ``missing_continuation`` if `set_continuation` was never called, or
-        ``not_recovered`` if it was called with ``recovered`` false.
+        The answer, and why it had to be sent as a failure: ``agent_graph_failed``
+        if the graph hit a limit, ``missing_continuation`` if a reported success
+        came without `set_continuation`, or ``not_recovered`` if it was called with
+        ``recovered`` false.
     """
     continuation = stored_continuation(invocation_state)
     failure_reason = None
-    success = response.get("success") is True
-    if success and continuation is None:
+    success = getattr(last_output, "success", False) is True
+    if graph_failed:
+        success = False
+        failure_reason = attrs.EVENT_RECOVERY_AGENT_GRAPH_FAILED
+    elif success and continuation is None:
         success = False
         failure_reason = (
             attrs.EVENT_RECOVERY_NOT_RECOVERED
@@ -188,23 +196,8 @@ def _build_answer(
     return answer, failure_reason
 
 
-async def _invoke_gateway_agent(
-    agent: Agent,
-    robot: RobotConnection,
-    exception: RobotException,
-    recovery_context: RecoveryContext,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Run the gateway agent; returns its report and the final invocation state."""
-    invocation_state: dict[str, Any] = {
-        # The GUI tools talk to the robot through the connection, never the raw socket.
-        "websocket": robot,
-        "robot_exception_id": exception.id,
-        # Read by set_continuation to validate the continuation the error agent names.
-        PROCESS_MODEL_STATE_KEY: recovery_context.model,
-        "variables": copy.deepcopy(recovery_context.variables),
-        CAPABILITIES_STATE_KEY: recovery_context.capabilities,
-    }
-
+def _recovery_inputs(recovery_context: RecoveryContext) -> dict[str, Any]:
+    """The recovery inputs, from the recovery payload."""
     ui_log = [
         {
             "case_id": entry.case_id,
@@ -242,17 +235,41 @@ async def _invoke_gateway_agent(
             "error_description": act.error_description,
         }
 
-    response = await agent(
-        invocation_state=invocation_state,
-        task_name=recovery_context.task_name,
-        platform=recovery_context.platform,
-        os=recovery_context.os,
-        variables=recovery_context.variables,
-        ui_log=ui_log,
-        errored_act=errored_act,
-        model=recovery_context.model,
-    )
-    return response, invocation_state
+    return {
+        "task_name": recovery_context.task_name,
+        "platform": recovery_context.platform,
+        "os": recovery_context.os,
+        "variables": recovery_context.variables,
+        "ui_log": ui_log,
+        "errored_act": errored_act,
+        "model": recovery_context.model,
+    }
+
+
+async def _run_agent_graph(
+    session: database.SessionDep,
+    graph_id: UUID,
+    robot: RobotConnection,
+    exception: RobotException,
+    recovery_context: RecoveryContext,
+    run_trace: AgentGraphRunTrace,
+) -> tuple[GraphOutcome, dict[str, Any]]:
+    """Run the agent graph; returns its outcome and the final invocation state."""
+    invocation_state: dict[str, Any] = {
+        "websocket": robot,
+        "robot_exception_id": exception.id,
+        PROCESS_MODEL_STATE_KEY: recovery_context.model,
+        "variables": copy.deepcopy(recovery_context.variables),
+        CAPABILITIES_STATE_KEY: recovery_context.capabilities,
+        AGENT_GRAPH_CONTEXT_KEY: AgentGraphContext(
+            recovery_inputs=_recovery_inputs(recovery_context), trace=run_trace
+        ),
+    }
+    graph = session.get(AgentGraph, graph_id)
+    if graph is None:
+        raise LookupError(f"The agent graph {graph_id} is gone.")
+    outcome = await graph.run(invocation_state)
+    return outcome, invocation_state
 
 
 @router.websocket("/robot_exception/ws")
@@ -278,7 +295,7 @@ async def _run_recovery_turn(
     robot_key: RobotKey,
     turn: telemetry.RecoveryTurnTelemetry,
 ) -> None:
-    """One recovery: payload, record, gateway run, answer.
+    """One recovery: payload, record, agent graph run, answer.
 
     ``done`` means a recovery was instantiated and answered; every other ending
     is an ``error`` with a code, except a robot that aborted or went away.
@@ -291,19 +308,19 @@ async def _run_recovery_turn(
         data = _decode_payload_or_raise(raw)
         turn.payload_received(raw, data)
 
-        # Validate before looking up the gateway, so a malformed payload is
+        # Validate before looking up the agent graph, so a malformed payload is
         # reported as such even on a misconfigured server.
         recovery_context = _build_recovery_context_or_raise(data)
         turn.context_built(recovery_context)
 
-        agent = _get_gateway_agent(session)
-        if not agent:
+        graph_id = AgentGraph.default_recovery_id(session)
+        if graph_id is None:
             raise RecoveryWsDomainError(
-                code=NO_GATEWAY_AGENT,
-                content="No GatewayAgent found in the database.",
+                code=NO_AGENT_GRAPH,
+                content="No enabled default recovery agent graph in the database.",
                 close_code=CLOSE_SERVER_ERROR,
             )
-        turn.agent_selected(agent.id)
+        turn.agent_graph_selected(graph_id)
 
         with turn.persisting():
             exception = _persist_exception_with_context(
@@ -311,12 +328,29 @@ async def _run_recovery_turn(
             )
         turn.persisted(exception.id)
 
-        # Strands traces the agent run as a child span of this turn. The run is
-        # cancelled as soon as the robot aborts or goes away.
-        response, invocation_state = await robot.run(
-            _invoke_gateway_agent(agent, robot, exception, recovery_context)
-        )
-        answer, failure_reason = _build_answer(response, invocation_state)
+        # The agent graph run is a child span of this turn. It is cancelled as
+        # soon as the robot aborts or goes away.
+        run_trace = AgentGraphRunTrace.open(graph_id, exception.id)
+        try:
+            outcome, invocation_state = await robot.run(
+                _run_agent_graph(
+                    session,
+                    graph_id,
+                    robot,
+                    exception,
+                    recovery_context,
+                    run_trace,
+                )
+            )
+            answer, failure_reason = _build_answer(
+                outcome.output,
+                invocation_state,
+                graph_failed=outcome.failure_reason is not None,
+            )
+            run_trace.close(outcome, answer)
+        except BaseException as exc:
+            run_trace.fail(exc)
+            raise
         turn.answered(answer, failure_reason)
         success = answer.success
 
@@ -338,8 +372,8 @@ async def _run_recovery_turn(
     except WebSocketDisconnect:
         turn.client_disconnected()
     except RecoveryWsDomainError as exc:
-        if exc.code == NO_GATEWAY_AGENT:
-            turn.no_gateway_agent()
+        if exc.code == NO_AGENT_GRAPH:
+            turn.no_agent_graph()
         else:
             turn.invalid_payload(exc)
         await _send_error_and_close(robot, exc.code, exc.content, exc.close_code)

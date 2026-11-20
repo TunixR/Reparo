@@ -1,4 +1,4 @@
-"""Telemetry for a GUI agent task: one Strands tool call driving the robot.
+"""Telemetry for a GUI agent task: a Strands tool call or a graph node driving the robot.
 
 The agent loop reports milestones (screenshot taken, action sent, retry...)
 and this module turns them into spans, span attributes and log events.
@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
+from pydantic import BaseModel, Field
 
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
@@ -25,11 +26,20 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
+class GuiAction(BaseModel):
+    """One action a GUI agent sent to the robot."""
+
+    action_type: str = Field(description="Robot action type, e.g. left_single.")
+    success: bool = Field(description="Whether the robot reported the action done.")
+
+
 class GuiActionTelemetry:
-    def __init__(self, span: Span) -> None:
+    def __init__(self, span: Span, action: GuiAction) -> None:
         self._span = span
+        self._action = action
 
     def result(self, success: bool) -> None:
+        self._action.success = success
         self._span.set_attribute(attrs.GUI_ACTION_SUCCESS, success)
 
     def failed(self, error: BaseException) -> None:
@@ -52,10 +62,11 @@ class GuiScreenshotTelemetry:
 
 
 class GuiTaskTelemetry:
-    """Describes the task on the current span (Strands ``execute_tool``).
+    """Describes the task on the current span: Strands ``execute_tool``, or the
+    ``agent_graph.node`` span when the GUI agent runs as a node.
 
-    The tool call already has a span, so the task enriches it instead of
-    opening a redundant one; actions and screenshots get child spans.
+    That span already exists, so the task enriches it instead of opening a
+    redundant one; actions and screenshots get child spans.
 
     Two loops use it: UI-TARS, which parses free text and counts iterations
     itself, and ``TooledGuiAgent``, whose actions are Strands tools and which
@@ -67,6 +78,7 @@ class GuiTaskTelemetry:
     ) -> None:
         self._span = trace.get_current_span()
         self.actions = 0
+        self.action_log: list[GuiAction] = []
         self.outcome: str | None = None
         self._span.set_attributes(
             {
@@ -87,6 +99,8 @@ class GuiTaskTelemetry:
     def action(self, iteration: int, action_type: str) -> Iterator[GuiActionTelemetry]:
         """Child span around sending one action and waiting for its result."""
         self.actions += 1
+        action = GuiAction(action_type=action_type, success=False)
+        self.action_log.append(action)
         with tracer.start_as_current_span(
             attrs.SPAN_GUI_ACTION,
             attributes={
@@ -97,7 +111,7 @@ class GuiTaskTelemetry:
             record_exception=False,
             set_status_on_exception=False,
         ) as span:
-            yield GuiActionTelemetry(span)
+            yield GuiActionTelemetry(span, action)
 
     def retry(self, iteration: int, exc: BaseException) -> None:
         """The model's step could not be parsed or executed and is retried."""

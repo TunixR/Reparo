@@ -18,8 +18,10 @@ from urllib.parse import urlparse
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine
 from sqlmodel import Session
 
+import database.engine
 import settings
 from database.engine import get_session
 from observability import Observability, configure_observability
@@ -30,6 +32,7 @@ from tests.integration.observability.signoz import SignozClickHouse
 
 # Unit fixtures reused for the recovery flow (in-memory SQLite, seed rows).
 from tests.unit.fixtures.agent_fixtures import gateway_agent, make_agent  # noqa: F401
+from tests.unit.fixtures.agent_graph_fixtures import make_agent_graph  # noqa: F401
 from tests.unit.fixtures.logging_fixtures import make_robot_key  # noqa: F401
 from tests.unit.fixtures.payload_fixtures import valid_recovery_payload  # noqa: F401
 from tests.unit.fixtures.router_fixtures import make_router, mock_router  # noqa: F401
@@ -110,7 +113,9 @@ def signoz() -> SignozClickHouse:
 
 
 @pytest.fixture(scope="session")
-def telemetry(signoz: SignozClickHouse, session: Session) -> Iterator[Telemetry]:
+def telemetry(
+    signoz: SignozClickHouse, engine: Engine, session: Session
+) -> Iterator[Telemetry]:
     app = FastAPI()
     _routes(app)
 
@@ -118,6 +123,9 @@ def telemetry(signoz: SignozClickHouse, session: Session) -> Iterator[Telemetry]
         yield session
 
     app.dependency_overrides[get_session] = _session
+    # Writes in sessions of their own, such as the agent graph trace, use it too.
+    original_engine = database.engine.general_engine
+    database.engine.general_engine = engine
     # Global providers, so Strands' tracer exports into the same pipeline.
     handle = configure_observability(
         app,
@@ -131,6 +139,7 @@ def telemetry(signoz: SignozClickHouse, session: Session) -> Iterator[Telemetry]
     try:
         yield Telemetry(client=TestClient(app), handle=handle, signoz=signoz)
     finally:
+        database.engine.general_engine = original_engine
         handle.shutdown()
         signoz.wait_until_settled()
         signoz.delete_service_data()

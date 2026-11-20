@@ -1,6 +1,7 @@
 import enum
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any, override
@@ -22,14 +23,22 @@ from agent_tools.hooks import (
     ToolLoggingHook,
 )
 from agent_tools.image import screenshot_bytes
+from database.agent_graphs.runner import (
+    AGENT_GRAPH_CONTEXT_KEY,
+    AgentGraphContext,
+    NodeRun,
+)
 from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
-from database.agents.tooled_gui_agent import TooledGuiAgent
+from database.agents.tooled_gui_agent import GuiRunReport, TooledGuiAgent
 from database.provider.models import Router
 from database.tools.models import Tool
 from observability import attributes as attrs
 from observability.events import log_event
 
 logger = logging.getLogger(__name__)
+
+# Module level: inside `Agent` the name `type` is the agent type field.
+type ResponseModel = type[BaseModel]
 
 
 class Argument(SQLModel, table=True):
@@ -210,6 +219,10 @@ class Agent(SQLModel, table=True):
             "lazy": "joined",
             "foreign_keys": "SubAgent.parent_agent_id",
         },
+    )
+
+    graph_nodes: list["AgentGraphNode"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
+        back_populates="agent"
     )
 
     traces: list["AgentTrace"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
@@ -452,8 +465,13 @@ class Agent(SQLModel, table=True):
         self.router = router
         self.router_id = router.id
 
-    def get_pydantic_response_model(self) -> BaseModel | None:
-        """Dynamically import and return the agent's structured response pydantic model."""
+    def output_model(self) -> ResponseModel | None:
+        """Return the model of this agent's structured output.
+
+        A GUI agent reports a `GuiRunReport`; any other agent its `response_model`.
+        """
+        if self.type == AgentType.GuiAgent:
+            return GuiRunReport
         if not self.response_model:
             return None
 
@@ -463,29 +481,66 @@ class Agent(SQLModel, table=True):
         except Exception as e:
             raise ImportError(f"Could not import module '{module_path}': {e}") from e
         try:
-            model_class: type[Any] = getattr(module, class_name)
+            model_class: object = getattr(module, class_name)
         except Exception as e:
             raise ImportError(
                 f"Could not find class '{class_name}' in module '{module_path}': {e}"
             ) from e
-        if not issubclass(model_class, BaseModel):
+        if not isinstance(model_class, type) or not issubclass(model_class, BaseModel):
             raise ValueError(
                 f"The class '{self.response_model}' is not a valid Pydantic model."
             )
-        return model_class  # pyright: ignore[reportReturnType] It returns type[BaseModel] but cannot be expressed in type hints without __future__ annotations, which mess up SQLModel
+        return model_class
 
     async def __call__(
-        self, invocation_state: dict[str, Any] | None = None, *args: Any, **kwargs: Any
+        self, invocation_state: dict[str, Any] | None = None, **kwargs: Any
     ) -> dict[str, Any]:
-        """
-        Dinamically computes tools, subagents, output model and input validation. Calls the agent and returns the final structered response.
+        """Run the agent on explicit inputs and return its structured response as a dict.
+
+        This is how an agent runs standalone and as a tool of another agent.
         """
         if invocation_state is None:
             invocation_state = {}
-        self.validate_input(*args, **kwargs)
-        invocation_state["inputs"] = {
-            arg.name: kwargs.get(arg.name) for arg in self.arguments
+        return (await self._execute(invocation_state, kwargs)).model_dump()
+
+    async def run_node(
+        self, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+    ) -> NodeRun:
+        """Run the agent as a node of an agent graph and return its structured output.
+
+        Each argument comes from the graph context at its ``input_map`` path, else by
+        its name. Like ``__call__``, it records the inputs in ``invocation_state``. A
+        GUI agent drives the robot's desktop and reports a `GuiRunReport`.
+        """
+        context: AgentGraphContext = invocation_state[AGENT_GRAPH_CONTEXT_KEY]
+        inputs = {
+            a.name: context.get(input_map.get(a.name, a.name)) for a in self.arguments
         }
+        if self.type == AgentType.GuiAgent:
+            self._bind_inputs(invocation_state, inputs)
+            report = await TooledGuiAgent(self).run(invocation_state, inputs)
+            return NodeRun(output=report)
+        return NodeRun(output=await self._execute(invocation_state, inputs))
+
+    def _bind_inputs(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> None:
+        """Validate ``inputs`` and record them in ``invocation_state`` for the agent trace."""
+        self.validate_input(**inputs)
+        invocation_state["inputs"] = {
+            arg.name: inputs.get(arg.name) for arg in self.arguments
+        }
+
+    async def _execute(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> BaseModel:
+        """Run the agent on validated inputs and return its structured output.
+
+        Tools, sub-agents, hooks and the output model are computed per call. The agent
+        runs twice on one conversation: a free run on the inputs, then a
+        structured-output call. Usage and cost of both are logged, even on failure.
+        """
+        self._bind_inputs(invocation_state, inputs)
 
         tools: list[DecoratedFunctionTool] = [  # pyright: ignore[reportMissingTypeArgument]
             t.get_tool_function() for t in self.get_tools()
@@ -544,7 +599,7 @@ class Agent(SQLModel, table=True):
 
         try:
             instruction = "\n".join(
-                [f"{arg.name}: {kwargs.get(arg.name)}" for arg in self.arguments]
+                [f"{arg.name}: {inputs.get(arg.name)}" for arg in self.arguments]
             )
 
             _ = await strands_agent.invoke_async(
@@ -552,17 +607,17 @@ class Agent(SQLModel, table=True):
                 invocation_state=invocation_state,
             )
 
-            response: BaseModel | None = (
+            response = (
                 await strands_agent.invoke_async(
                     "Given our conversation so far, please provide a report using structured output with the given tool.",
-                    structured_output_model=self.get_pydantic_response_model(),  # pyright: ignore[reportArgumentType] It returns type[BaseModel] but cannot be expressed in type hints without __future__ annotations, which mess up SQLModel
+                    structured_output_model=self.output_model(),
                     invocation_state=invocation_state,
                 )
             ).structured_output
 
             if response is None:
                 raise ValueError("Agent did not return a structured response.")
-            return response.model_dump()
+            return response
         finally:
             # Every AgentResult.metrics is this same object; accumulated_usage sums
             # both invocations above, including tokens spent before a failure.
@@ -596,7 +651,7 @@ class Agent(SQLModel, table=True):
         router = data.get("router")
         super().__init__(**data)
         # Validate that the response model can be imported successfully
-        _ = self.get_pydantic_response_model()
+        _ = self.output_model()
         if router is not None:
             self.validate_capabilities_support_input_type(
                 router.capabilities,

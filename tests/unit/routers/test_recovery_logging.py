@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 
 import pytest
@@ -9,12 +9,15 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 import routers.recovery as recovery_module
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
+from database.agent_graphs.models import AgentGraph, AgentGraphNode
+from database.agent_graphs.runner import NodeRun
 from database.agents.models import Agent
 from observability.attributes import OTEL_EVENT_NAME, RECOVERY_PAYLOAD_INVALID_FIELDS
+from templates.gateway import ResponseToRPA
 
 PASSWORD = "hunter2-sk-abcdef123456"
 
@@ -65,7 +68,7 @@ def _assert_no_secret(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_recovery_turn_is_traced_without_lifecycle_logs(
-    session: Session,  # pyright: ignore[reportUnusedParameter]
+    session: Session,
     client: TestClient,
     valid_recovery_payload: dict[str, Any],
     gateway_agent: Agent,
@@ -75,20 +78,17 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _fake_call(
-        _self: Agent,
-        invocation_state: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        assert invocation_state is not None
+    async def _fake_run_node(
+        _self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> NodeRun:
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
             continue_from_model_event_id="click_submit",
             loop_iteration=[],
         )
-        return {"success": True}
+        return NodeRun(output=ResponseToRPA(success=True))
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call)
+    monkeypatch.setattr(Agent, "run_node", _fake_run_node)
     caplog.set_level(logging.INFO)
 
     headers = {"X-ROBOT-KEY": robot_key_raw}
@@ -112,7 +112,12 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
     assert turn.attributes["recovery.id"] == recovery_id
     assert turn.attributes["recovery.success"] is True
     assert turn.attributes["recovery.outcome"] == "success"
-    assert turn.attributes["agent.id"] == str(gateway_agent.id)
+    graph = session.exec(
+        select(AgentGraph)
+        .join(AgentGraphNode)
+        .where(AgentGraphNode.agent_id == gateway_agent.id)
+    ).one()
+    assert turn.attributes["agent_graph.id"] == str(graph.id)
     assert turn.attributes["robot_key.id"]
     assert turn.attributes["recovery.payload.ui_log_count"] == 1
     assert turn.attributes["recovery.payload.size"] > 0  # pyright: ignore[reportOperatorIssue]
@@ -165,14 +170,12 @@ def test_turn_failure_logs_and_records_redacted_exception(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _failing_call(
-        _self: Agent,
-        invocation_state: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
+    async def _failing_run_node(
+        _self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> NodeRun:
         raise RuntimeError(f"model call failed password={PASSWORD}")
 
-    monkeypatch.setattr(Agent, "__call__", _failing_call)
+    monkeypatch.setattr(Agent, "run_node", _failing_run_node)
     caplog.set_level(logging.INFO)
 
     headers = {"X-ROBOT-KEY": robot_key_raw}

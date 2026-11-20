@@ -8,18 +8,22 @@ invocation state run as they do in production.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlmodel import Session, select
 
+import observability.instrumentation.agent_graph as agent_graph_telemetry
 import routers.recovery as recovery_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
+from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
+from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
 from database.agents.models import (
     Agent,
     AgentTool,
@@ -30,6 +34,8 @@ from database.agents.models import (
 from database.logging.models import RobotException
 from database.provider.models import Router
 from database.tools.models import Tool
+from templates.gateway import ResponseToRPA
+from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 from tests.unit.agent_tools._shared.process_models import (
     COMPACT_MODEL,
     SPENDING_APPROVAL_MODEL,
@@ -96,9 +102,9 @@ def span_exporter(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemorySpanExpor
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    monkeypatch.setattr(
-        recovery_module, "tracer", provider.get_tracer("tests.recovery")
-    )
+    tracer = provider.get_tracer("tests.recovery")
+    monkeypatch.setattr(recovery_module, "tracer", tracer)
+    monkeypatch.setattr(agent_graph_telemetry, "tracer", tracer)
     try:
         yield exporter
     finally:
@@ -106,8 +112,13 @@ def span_exporter(monkeypatch: pytest.MonkeyPatch) -> Iterator[InMemorySpanExpor
 
 
 @pytest.fixture
-def agents(session: Session, mock_router: Router) -> tuple[Agent, Agent]:
-    """A gateway whose only sub-agent is an error agent with `set_continuation`."""
+def agents(
+    session: Session, mock_router: Router, make_agent_graph: MakeAgentGraph
+) -> tuple[Agent, Agent]:
+    """A gateway whose only sub-agent is an error agent with `set_continuation`.
+
+    The gateway is the one node of the default recovery graph.
+    """
     tool = Tool(
         id=uuid.uuid4(),
         name="set_continuation",
@@ -167,6 +178,7 @@ def agents(session: Session, mock_router: Router) -> tuple[Agent, Agent]:
     session.commit()
     session.refresh(gateway)
     session.refresh(error_agent)
+    _ = make_agent_graph(Node("gateway", gateway))
     return gateway, error_agent
 
 
@@ -273,6 +285,89 @@ def test_invalid_continuation_is_corrected_inside_the_agent_loop(
     assert turn.attributes["recovery.continue_from_model_event_id"] == "click_approve"
     assert turn.attributes["recovery.loop_iteration"] == (2,)
     assert "recovery.failure_reason" not in turn.attributes
+
+
+def test_recovery_runs_through_the_agent_graph_runner(
+    client: TestClient,
+    robot_key_raw: str,
+    spending_payload: dict[str, Any],
+    script: Callable[..., dict[str, ScriptedModel]],
+    span_exporter: InMemorySpanExporter,
+):
+    _ = script(
+        gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(True)],
+        error_turns=[_continuation("click_approve", [2]), "Recovered.", _report(True)],
+    )
+
+    message = _recover(client, robot_key_raw, spending_payload)
+
+    assert message["content"]["success"] is True
+    turn = _turn(span_exporter)
+    run = next(
+        s for s in span_exporter.get_finished_spans() if s.name == "agent_graph.run"
+    )
+    assert run.parent is not None
+    assert turn.context is not None
+    assert run.parent.span_id == turn.context.span_id
+
+
+def test_an_exception_inside_the_gateway_node_is_an_internal_error(
+    client: TestClient,
+    robot_key_raw: str,
+    spending_payload: dict[str, Any],
+    script: Callable[..., dict[str, ScriptedModel]],
+):
+    _ = script(gateway_turns=[RuntimeError("model down")], error_turns=["Unused."])
+
+    message = _recover(client, robot_key_raw, spending_payload)
+
+    assert message == {
+        "type": "error",
+        "code": "INTERNAL_ERROR",
+        "content": "Internal server error",
+    }
+
+
+def test_a_failed_agent_graph_is_done_without_success(
+    session: Session,
+    client: TestClient,
+    robot_key_raw: str,
+    spending_payload: dict[str, Any],
+    script: Callable[..., dict[str, ScriptedModel]],
+    span_exporter: InMemorySpanExporter,
+    agents: tuple[Agent, Agent],
+    make_agent_graph: MakeAgentGraph,
+):
+    models = script(
+        gateway_turns=[_call_error_agent(), "Routed.", _gateway_report(True)],
+        error_turns=[_continuation("click_approve", [2]), "Recovered.", _report(True)],
+    )
+    gateway, _ = agents
+    _ = make_agent_graph(
+        Node("gateway", gateway),
+        Node("gateway_again", gateway),
+        max_node_executions=1,
+    )
+
+    message = _recover(client, robot_key_raw, spending_payload)
+
+    assert message["type"] == "done"
+    assert message["content"] == {
+        "success": False,
+        "process_finished": False,
+        "continue_from_model_event_id": None,
+        "loop_iteration": [],
+        "variables": spending_payload["variables"],
+    }
+    assert models["Gateway Orchestrator"].calls == 3
+    exception = session.get(RobotException, uuid.UUID(message["id"]))
+    assert exception is not None
+    session.refresh(exception)
+    assert exception.infered_success is False
+    turn = _turn(span_exporter)
+    assert turn.attributes is not None
+    assert turn.attributes["recovery.failure_reason"] == "agent_graph_failed"
+    assert turn.attributes["recovery.outcome"] == "completed_unsuccessful"
 
 
 def test_success_without_continuation_is_sent_back_to_set_it(
@@ -452,6 +547,36 @@ def test_unchecked_loop_depth_is_sent_as_given(
     assert message["content"]["loop_iteration"] == [1, 2]
 
 
+class _NoSuccessReport(BaseModel):
+    note: str
+
+
+def test_a_last_output_without_success_is_not_a_success(
+    client: TestClient,
+    robot_key_raw: str,
+    valid_recovery_payload: dict[str, Any],
+    gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def _fake_run_node(
+        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
+    ) -> NodeRun:
+        invocation_state[CONTINUATION_STATE_KEY] = Continuation(
+            process_finished=False,
+            continue_from_model_event_id="click_submit",
+            loop_iteration=[],
+        )
+        return NodeRun(output=_NoSuccessReport(note="Looks recovered."))
+
+    monkeypatch.setattr(Agent, "run_node", _fake_run_node)
+
+    message = _recover(client, robot_key_raw, valid_recovery_payload)
+
+    assert message["type"] == "done"
+    assert message["content"]["success"] is False
+    assert message["content"]["continue_from_model_event_id"] is None
+
+
 def test_variables_come_from_code_not_from_the_llm(
     session: Session,
     client: TestClient,
@@ -460,15 +585,17 @@ def test_variables_come_from_code_not_from_the_llm(
     gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
     monkeypatch: pytest.MonkeyPatch,
 ):
-    async def _fake_call(
-        _self: Agent, invocation_state: dict[str, Any] | None = None, **kwargs: Any
-    ) -> dict[str, Any]:
-        assert invocation_state is not None
+    async def _fake_run_node(
+        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
+    ) -> NodeRun:
+        inputs = invocation_state[AGENT_GRAPH_CONTEXT_KEY].recovery_inputs
         invocation_state["variables"]["retry"] = 2
-        kwargs["variables"]["invoice_id"] = "HALLUCINATED"
-        return {"success": False, "variables": {"invented": True}}
+        inputs["variables"]["invoice_id"] = "HALLUCINATED"
+        return NodeRun(
+            output=ResponseToRPA(success=False, variables={"invented": True})
+        )
 
-    monkeypatch.setattr(Agent, "__call__", _fake_call)
+    monkeypatch.setattr(Agent, "run_node", _fake_run_node)
 
     message = _recover(client, robot_key_raw, valid_recovery_payload)
 
