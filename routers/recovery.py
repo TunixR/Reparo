@@ -11,6 +11,7 @@ from fastapi import (
     Response,
     WebSocket,
     WebSocketDisconnect,
+    status,
 )
 from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
@@ -395,7 +396,8 @@ async def report_recovery_result(
         recovery_uuid = UUID(recovery_id)
     except ValueError as exc:
         raise HTTPException(
-            status_code=400, detail="Invalid recovery ID format. Must be a UUID."
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid recovery ID format. Must be a UUID.",
         ) from exc
 
     key_raw = request.headers.get(ROBOT_KEY_HEADER)

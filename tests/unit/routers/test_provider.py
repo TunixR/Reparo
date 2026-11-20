@@ -278,7 +278,7 @@ def test_router_patch_rejects_removing_capability_required_by_agent(
         headers=headers,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_409_CONFLICT
     assert "VISION" in response.json()["detail"]
 
 
@@ -302,7 +302,7 @@ def test_router_replace_rejects_removing_capability_required_by_agent(
         headers=headers,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_409_CONFLICT
     assert "VISION" in response.json()["detail"]
 
 

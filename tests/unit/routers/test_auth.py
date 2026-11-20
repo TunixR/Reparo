@@ -192,7 +192,7 @@ def test_create_user_duplicate_username(
         headers=headers,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_409_CONFLICT
     assert "already exists" in response.json()["detail"].lower()
 
 
@@ -334,7 +334,7 @@ def test_update_user_to_duplicate_username(
         headers=headers,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_409_CONFLICT
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +531,7 @@ def test_change_own_password_missing_current(
         headers=headers,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 # ---------------------------------------------------------------------------
