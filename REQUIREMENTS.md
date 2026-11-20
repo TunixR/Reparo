@@ -31,10 +31,10 @@ The platform addresses critical business continuity needs by minimizing automati
 - [x] **REQ-F-001**: The system SHALL implement a central gateway that receives error notifications from external RPA orchestrators and automation systems (Partial: WebSocket robot ingestion exists via `WS /recovery/robot_exception/ws` in `routers/recovery.py`.)
 - [x] **REQ-F-002**: The gateway SHALL parse and standardize incoming error data into a common format regardless of source system (Payloads are validated against `templates/recovery_payload.py:RecoveryPayload` and normalized into `database/logging/models.py:RecoveryContext`; the raw JSON is also kept in `RobotException.exception_details`.)
 - [x] **REQ-F-003**: The gateway SHALL maintain a registry of available recovery modules and their capabilities
-- [x] **REQ-F-004**: The gateway SHALL implement intelligent routing logic to select the most appropriate module(s) for each error type
+- [x] **REQ-F-004**: The gateway SHALL implement intelligent routing logic to select the most appropriate module(s) for each error type (Implemented: the gateway, the entry node of the default recovery agent graph, reports a `GatewayDecision` (`templates/gateway.py`); a declarative condition on `ui_exception` routes UI exceptions to the UI recovery path, and every other failure ends at the gateway, seeded from `database/populators/agent_graphs.json`.)
 - [x] **REQ-F-005**: The gateway SHALL support multiple concurrent error handling sessions
 - [x] **REQ-F-006**: The gateway SHALL log all incoming errors and routing decisions for audit purposes
-- [ ] **REQ-F-007**: The gateway SHALL implement fallback mechanisms when primary module selection fails (Not implemented as explicit gateway fallback policy.)
+- [ ] **REQ-F-007**: The gateway SHALL implement fallback mechanisms when primary module selection fails (Not implemented as explicit gateway fallback policy. A failure the gateway doesn't route to the UI recovery path ends with `success` false; a database seeded before the agent graph runs the gateway alone until it is migrated.)
 
 #### 1.1.2 Recovery Agents
 - [x] **REQ-F-008**: Each recovery module SHALL declare its input requirements, output capabilities, available tools, and supported error types (Inputs via `Argument`; tools via `AgentTool`/`SubAgent`; error-type via agent description)
@@ -175,7 +175,7 @@ The platform addresses critical business continuity needs by minimizing automati
 - [x] **REQ-F-108**: The system SHALL provide CRUD APIs for provider routers (LLM backends) with secret-safe public responses (Implemented: `routers/provider.py`; `database/provider/models.py:Router.model_dump` removes `api_key`.)
 
 #### 1.6.4 Observability and Artifact Export
-- [x] **REQ-F-109**: The system SHALL record agent execution traces, tool traces, and GUI traces linked to robot exceptions (Implemented: `database/logging/models.py` + hooks in `agent_tools/hooks.py`.)
+- [x] **REQ-F-109**: The system SHALL record agent execution traces, tool traces, and GUI traces linked to robot exceptions (Implemented: `database/logging/models.py` + hooks in `agent_tools/hooks.py`. In an agent graph, each node's agent is traced like any agent.)
 - [x] **REQ-F-110**: The system SHALL expose authenticated APIs to retrieve traces and robot exceptions (Implemented: `routers/logging.py`.)
 - [x] **REQ-F-111**: The system SHALL provide export of an agent trace as a markdown report (Implemented: `GET /logging/markdown/` in `routers/logging.py`.)
 - [x] **REQ-F-112**: The system SHALL provide export of a UI event log as CSV alongside screenshots (Implemented: `GET /logging/ui_log/` returns ZIP in `routers/logging.py`; screenshots stored in S3 via `s3/utils.py` and `database/logging/models.py:GUITrace`.)
@@ -202,6 +202,9 @@ The platform addresses critical business continuity needs by minimizing automati
 
 #### 1.6.10 User Authentication
 - [x] **REQ-F-123**: The system SHALL authenticate users with JWTs backed by revocable server-side sessions and administrator/developer roles (Implemented: `routers/auth.py`, `middlewares/auth.py`, `database/auth/models.py`; admin seeded from `ADMIN_USERNAME`/`ADMIN_PASSWORD` by `database/populators/users.py`.)
+
+#### 1.6.11 Agent Graphs
+- [x] **REQ-F-124**: The system SHALL run each recovery as a database-defined agent graph, with conditional, priority-ordered edges between agent nodes, managed through an administrator API (Implemented: `database/agent_graphs/`, `routers/agent_graphs.py`; the seeded "UI Recovery" graph, gateway → Recovery Inferer → Tooled GuiAgent → Continuation Inferer, is seeded from `database/populators/agent_graphs.json`, and older databases are migrated by `database/populators/agent_graphs.py`.)
 
 
 

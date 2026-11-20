@@ -37,6 +37,23 @@ class ResponseToRPA(TemplateModel):
     )
 
 
+class GatewayDecision(TemplateModel):
+    """The gateway's classification of a failure, which routes the recovery."""
+
+    ui_exception: bool = Field(
+        ...,
+        description=(
+            "Whether the failure is a UI interaction or UI state failure that acting "
+            "on the robot's desktop can recover."
+        ),
+    )
+    rationale: str = Field(
+        ...,
+        description="The evidence from the robot's report behind the classification.",
+    )
+
+
 __all__ = [
+    "GatewayDecision",
     "ResponseToRPA",
 ]

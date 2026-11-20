@@ -205,6 +205,7 @@ def _resolve_reasoning_effort(value: str | None) -> Agent.ReasoningEffort | None
 
 def _resolve_agent_type(value: str) -> AgentType:
     mapping = {
+        "Agent": AgentType.Agent,
         "GatewayAgent": AgentType.GatewayAgent,
         "ErrorAgent": AgentType.ErrorAgent,
         "GuiAgent": AgentType.GuiAgent,
@@ -228,7 +229,7 @@ def _load_json_config() -> dict[str, Any]:
           "prompt_file": "agent_name.md",  // in default_prompts/
           "response_model": "package.module.ClassName" | null,
           "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
-          "agent_type": "GatewayAgent" | "ErrorAgent" | "GuiAgent",
+          "agent_type": "Agent" | "GatewayAgent" | "ErrorAgent" | "GuiAgent",
           "input_type": "TEXT" | "IMAGETEXT",
           "enabled": true,
           "reasoning_effort": "medium",  // optional, unset keeps the provider default
@@ -254,6 +255,12 @@ def _load_json_config() -> dict[str, Any]:
 
 
 DEFAULT_PROMPTS_DIR = Path(__file__).parent / "default_prompts"
+
+
+def agent_seed(name: str) -> dict[str, Any] | None:
+    """The configuration ``agents.json`` seeds the agent called ``name`` with."""
+    agents: list[dict[str, Any]] = _load_json_config().get("agents", [])
+    return next((agent for agent in agents if agent["name"] == name), None)
 
 
 def _read_prompt(agent_name: str, prompt_file: str | None) -> str:
