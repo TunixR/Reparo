@@ -167,9 +167,18 @@ socket.
 ## 3. Agents
 
 **Agents are data, not code.** An agent is a database row (`database/agents/models.py`) holding its
-prompt, typed input arguments, response model, input type (text or image + text), provider router,
-tools and sub-agents. Invoking an agent builds a Strands agent from that row on the fly, validates the
-inputs, runs it, and asks for a structured response using the configured Pydantic model.
+prompt, its arguments and output model, input type (text or image + text), provider router, tools
+and sub-agents. Invoking an agent builds a Strands agent from that row on the fly, validates the
+inputs, runs it, and asks for a structured response in its output model.
+
+- **Arguments and output models.** Both are data too (`database/agents/specs.py`): a list of field
+  definitions, each a name, a small type expression (such as `str | None`, `list[int]` or
+  `Literal['a', 'b']`) and a description, with an optional default. Type expressions are parsed
+  against a whitelist and never evaluated. The output model's name and description are what the
+  LLM sees as the structured-output tool. Pydantic classes are built from the definitions: the
+  arguments validate inputs strictly, and the output model is what the agent reports. The rules
+  live in that one module, so the API and the row check a definition the same way. GUI agents
+  always report `GuiRunReport`.
 
 - **Types.** `AgentType` distinguishes generic agents from GUI agents, the only type that runs
   differently. An agent's role in a recovery (gateway, inferer…) comes from its place in the graph,
@@ -183,9 +192,9 @@ inputs, runs it, and asks for a structured response using the configured Pydanti
   (`database/agents/uitars.py`), which parses actions from the model's text output, is kept for a
   future rework; its text-based prompt is seeded with a disabled agent. A hook caps how many
   screenshots stay in the conversation.
-- **Prompts and responses.** An agent's prompt is part of its row; response and payload models live
-  in `templates/`. A prompt names only the tools the agent is given and leaves the response layout
-  to the response model. Prompts used only by the evals live in `evals/`.
+- **Prompts.** An agent's prompt is part of its row; the robot's payload and result models live in
+  `templates/`. A prompt names only the tools the agent is given and leaves the response layout to
+  the output model. Prompts used only by the evals live in `evals/`.
 - **Seeding.** `populate.py` creates the tables and the S3 bucket, then loads the default agents, sub-agent links, tools, provider routers,
   the admin user and the agent graph from `database/populators/` (`agents.json`, `routers.json`,
   the default agent prompts in `default_prompts/`, and `agent_graphs.json`). Seeding only creates
@@ -197,16 +206,16 @@ inputs, runs it, and asks for a structured response using the configured Pydanti
   UI Exception Handler, which did all of this as one agent calling the GUI agent as a tool, is
   seeded disabled for reference.
 - **Migrating an older database.** A database seeded before the graph keeps its gateway's old
-  prompt and response model, since seeding never overwrites an agent. There the graph is created
+  prompt and output model, since seeding never overwrites an agent. There the graph is created
   disabled, recoveries keep running the gateway alone, and the populator prints the administrator
   API calls that switch over: disable the gateway-only graph, give the gateway its classification
-  prompt and response model, disable the UI Exception Handler, and enable "UI Recovery" as the
+  prompt and output model, disable the UI Exception Handler, and enable "UI Recovery" as the
   default recovery graph. It prints them on every run until they are made.
 - **Editing agent graphs.** Administrators edit graphs, their nodes and their edges through the
   API. A disabled graph is a draft and accepts any structure; enabling a graph, and every write to
   an enabled one, must leave it runnable. Making a graph the default recovery graph takes over from
   the previous default. Agents are guarded too: an agent can't be disabled while an enabled graph
-  uses it, deleted while any graph does, or have its arguments, response model or type changed in
+  uses it, deleted while any graph does, or have its arguments, output model or type changed in
   a way that breaks an enabled graph. The rules live in one module,
   `database/agent_graphs/service.py`, which the agent endpoints call as well.
 

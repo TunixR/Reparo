@@ -194,6 +194,7 @@ Doc map:
 | How do the pieces fit together? | `ARCHITECTURE.md` |
 | What is implemented vs. planned? | `REQUIREMENTS.md` (the only place that tracks this) |
 | How do I work in the repo? | `AGENTS.md` (this file) |
+| What shortcuts are we knowingly living with? | `TECH_DEBT.md` |
 | Traces, logs, SigNoz | `OBSERVABILITY.md` |
 | Docker services and production | `docker/README.md` |
 | Endpoints, payloads, fields | the code and `/scalar` (OpenAPI) |
@@ -207,5 +208,7 @@ Update docs, in the same PR, only if the change:
 - [ ] adds, removes or renames an env var → `.env.example` (and the table in `OBSERVABILITY.md` for observability settings);
 - [ ] changes setup, test or lint commands → `AGENTS.md`, README quickstart;
 - [ ] changes Docker services, ports or deployment → `docker/README.md`.
+
+When you knowingly leave technical debt behind, add an entry to `TECH_DEBT.md` (and delete the entry when you pay it off).
 
 Don't update docs for: bug fixes, refactors inside a module, new fields or endpoints that follow existing patterns, new agents/tools/seed data, prompt tweaks. The code and `/scalar` are the source of truth for those.

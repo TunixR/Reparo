@@ -1,6 +1,8 @@
 import uuid
 from collections.abc import Callable
+from typing import Any
 
+import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from httpx import Headers
@@ -353,3 +355,112 @@ def test_agents_reject_an_unknown_agent_type(
 
     assert created.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, created.text
     assert updated.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY, updated.text
+
+
+##############################
+# -- Arguments and output models as data
+##############################
+
+EVERY_TYPE = {
+    "text": "str",
+    "count": "int",
+    "ratio": "float",
+    "flag": "bool",
+    "nothing": "None",
+    "anything": "Any",
+    "items": "list[int]",
+    "loose_list": "list",
+    "scores": "dict[str, float]",
+    "loose_dict": "dict",
+    "maybe": "str | None",
+    "kind": "Literal['ui', 'data', 1, -2.5, True, None]",
+}
+
+
+def _fields(types: dict[str, str]) -> list[dict[str, str]]:
+    return [
+        {"name": name, "type": type_, "description": f"The {name}."}
+        for name, type_ in types.items()
+    ]
+
+
+def test_agents_create_takes_every_field_type_and_returns_the_definitions(
+    mock_router: Router, admin_headers: Headers, client: TestClient
+):
+    output_model = {
+        "name": "Everything",
+        "description": "Every type there is.",
+        "fields": _fields(EVERY_TYPE),
+    }
+    arguments = [*_fields(EVERY_TYPE), _fields({"tries": "int"})[0] | {"default": 3}]
+    payload = make_agent_payload(mock_router.id).model_dump(mode="json")
+
+    created = client.post(
+        "/agents/",
+        json=payload | {"arguments": arguments, "output_model": output_model},
+        headers=admin_headers,
+    )
+
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    got = client.get(f"/agents/{created.json()['id']}", headers=admin_headers).json()
+    assert got["arguments"] == arguments
+    assert got["output_model"] == output_model
+
+
+@pytest.mark.parametrize(
+    ("change", "named"),
+    [
+        ({"arguments": _fields({"when": "datetime"})}, "'when'"),
+        ({"arguments": _fields({"pick": "Optional[str]"})}, "'pick'"),
+        ({"arguments": _fields({"pair": "tuple[int, int]"})}, "'pair'"),
+        ({"arguments": _fields({"_secret": "str"})}, "'_secret'"),
+        ({"arguments": _fields({"run": "__import__('os')"})}, "'run'"),
+        (
+            {"arguments": [_fields({"k": "str"})[0] | {"json_type": "string"}]},
+            "json_type",
+        ),
+        ({"arguments": _fields({"a": "str"}) * 2}, "'a' is defined more than once"),
+        (
+            {"arguments": [_fields({"n": "int"})[0] | {"default": "three"}]},
+            "'n': default",
+        ),
+        (
+            {"output_model": {"name": "Bad Name", "fields": []}},
+            "'Bad Name'",
+        ),
+        (
+            {"output_model": {"name": "Report", "fields": _fields({"x": "Report"})}},
+            "'x'",
+        ),
+    ],
+    ids=[
+        "unknown-type",
+        "optional",
+        "tuple",
+        "private-name",
+        "eval",
+        "unknown-key",
+        "duplicate",
+        "bad-default",
+        "model-name",
+        "nested-model",
+    ],
+)
+def test_agents_reject_a_bad_definition_naming_the_field(
+    mock_agent: Agent,
+    mock_router: Router,
+    admin_headers: Headers,
+    client: TestClient,
+    change: dict[str, Any],
+    named: str,
+):
+    payload = make_agent_payload(mock_router.id).model_dump(mode="json")
+
+    created = client.post("/agents/", json=payload | change, headers=admin_headers)
+    updated = client.patch(
+        f"/agents/{mock_agent.id}", json=change, headers=admin_headers
+    )
+
+    for response in (created, updated):
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert named in response.text, response.text

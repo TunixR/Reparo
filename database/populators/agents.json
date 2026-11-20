@@ -4,7 +4,6 @@
       "name": "Gateway Orchestrator",
       "description": "Entry node of the recovery graph: classifies a robot's failure as a UI exception or escalates it to a human.",
       "prompt_file": "gateway.md",
-      "response_model": "templates.gateway.GatewayDecision",
       "router": "text",
       "agent_type": "Agent",
       "input_type": "TEXT",
@@ -13,57 +12,69 @@
       "arguments": [
         {
           "name": "task_name",
-          "description": "Name of the task being recovered.",
           "type": "str",
-          "json_type": "string"
+          "description": "Name of the task being recovered."
         },
         {
           "name": "platform",
-          "description": "Execution platform where the task runs.",
           "type": "str",
-          "json_type": "string"
+          "description": "Execution platform where the task runs."
         },
         {
           "name": "os",
-          "description": "Operating system where recovery is happening.",
           "type": "str",
-          "json_type": "string"
+          "description": "Operating system where recovery is happening."
         },
         {
           "name": "variables",
-          "description": "Dictionary of runtime variables at error time.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Dictionary of runtime variables at error time."
         },
         {
           "name": "ui_log",
-          "description": "Ordered UI execution history leading up to the failure.",
           "type": "list",
-          "json_type": "array"
+          "description": "Ordered UI execution history leading up to the failure."
         },
         {
           "name": "errored_act",
-          "description": "Structured information about the action that failed.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Structured information about the action that failed."
         },
         {
           "name": "model",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
-          "json_type": "string"
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
         }
       ],
+      "output_model": {
+        "name": "GatewayDecision",
+        "description": "The gateway's classification of a failure, which routes the recovery.",
+        "fields": [
+          {
+            "name": "ui_exception",
+            "type": "bool",
+            "description": "Whether the failure is a UI interaction or UI state failure that acting on the robot's desktop can recover."
+          },
+          {
+            "name": "rationale",
+            "type": "str",
+            "description": "The evidence from the robot's report behind the classification."
+          }
+        ]
+      },
       "tools": {
-        "names": ["route_to_human"],
-        "limits": [null]
+        "names": [
+          "route_to_human"
+        ],
+        "limits": [
+          null
+        ]
       }
     },
     {
       "name": "Recovery Inferer",
       "description": "Infers what a UI recovery must achieve from the robot's report: the kind of failure, where it happened in the process model and the task for the GUI agent.",
       "prompt_file": "recovery_inferer.md",
-      "response_model": "templates.error_handler.RecoveryInference",
       "router": "text",
       "agent_type": "Agent",
       "input_type": "TEXT",
@@ -72,47 +83,71 @@
       "arguments": [
         {
           "name": "task_name",
-          "description": "Name of the task being recovered.",
           "type": "str",
-          "json_type": "string"
+          "description": "Name of the task being recovered."
         },
         {
           "name": "platform",
-          "description": "Execution platform where the task runs.",
           "type": "str",
-          "json_type": "string"
+          "description": "Execution platform where the task runs."
         },
         {
           "name": "os",
-          "description": "Operating system where recovery is happening.",
           "type": "str",
-          "json_type": "string"
+          "description": "Operating system where recovery is happening."
         },
         {
           "name": "variables",
-          "description": "Runtime variables relevant to the task.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Runtime variables relevant to the task."
         },
         {
           "name": "ui_log",
-          "description": "Ordered UI execution history leading up to the failure.",
           "type": "list",
-          "json_type": "array"
+          "description": "Ordered UI execution history leading up to the failure."
         },
         {
           "name": "errored_act",
-          "description": "Structured information about the action that failed.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Structured information about the action that failed."
         },
         {
           "name": "model",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
-          "json_type": "string"
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
         }
       ],
+      "output_model": {
+        "name": "RecoveryInference",
+        "description": "What a UI recovery must achieve, inferred from the robot's report.",
+        "fields": [
+          {
+            "name": "failure_kind",
+            "type": "Literal['navigation', 'data_entry', 'extraction', 'other']",
+            "description": "The kind of interaction that failed."
+          },
+          {
+            "name": "failed_model_event_id",
+            "type": "str | None",
+            "description": "The task id of `model` the failed activity performed; null when it can't be told."
+          },
+          {
+            "name": "loop_passes",
+            "type": "list[int]",
+            "description": "0-based pass of each loop enclosing the failed activity, outermost first; [] when it is in no loop."
+          },
+          {
+            "name": "recovery_task",
+            "type": "str",
+            "description": "The instruction for the GUI agent: the state the application must reach."
+          },
+          {
+            "name": "rationale",
+            "type": "str",
+            "description": "Why this task gets the process back on track."
+          }
+        ]
+      },
       "tools": {
         "names": [],
         "limits": []
@@ -122,7 +157,6 @@
       "name": "UI Exception Handler",
       "description": "Legacy single-agent UI recovery, replaced by the UI Recovery agent graph and kept disabled for reference. It infers a recovery task, has a GUI agent carry it out and sets the continuation.",
       "prompt_file": "ui_exception_handler.md",
-      "response_model": "templates.error_handler.UiExceptionReport",
       "router": "text",
       "agent_type": "Agent",
       "input_type": "TEXT",
@@ -131,58 +165,87 @@
       "arguments": [
         {
           "name": "task_name",
-          "description": "Name of the task being recovered.",
           "type": "str",
-          "json_type": "string"
+          "description": "Name of the task being recovered."
         },
         {
           "name": "platform",
-          "description": "Execution platform where the task runs.",
           "type": "str",
-          "json_type": "string"
+          "description": "Execution platform where the task runs."
         },
         {
           "name": "os",
-          "description": "Operating system where recovery is happening.",
           "type": "str",
-          "json_type": "string"
+          "description": "Operating system where recovery is happening."
         },
         {
           "name": "variables",
-          "description": "Runtime variables relevant to the task.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Runtime variables relevant to the task."
         },
         {
           "name": "ui_log",
-          "description": "Ordered UI execution history leading up to the failure.",
           "type": "list",
-          "json_type": "array"
+          "description": "Ordered UI execution history leading up to the failure."
         },
         {
           "name": "errored_act",
-          "description": "Structured information about the action that failed.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Structured information about the action that failed."
         },
         {
           "name": "model",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
-          "json_type": "string"
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
         }
       ],
+      "output_model": {
+        "name": "UiExceptionReport",
+        "description": null,
+        "fields": [
+          {
+            "name": "result",
+            "type": "str",
+            "description": "Summary of the recovery execution result."
+          },
+          {
+            "name": "success",
+            "type": "bool",
+            "description": "Indicates if the recovery was successful."
+          },
+          {
+            "name": "process_finished",
+            "type": "bool",
+            "description": "Whether the recovery completed the rest of the process, as set with `set_continuation`."
+          },
+          {
+            "name": "continue_from_model_event_id",
+            "type": "str | None",
+            "description": "The model event id (a task id of `model`) the robot runs next, as set with `set_continuation`; null when the process is finished or the recovery failed."
+          },
+          {
+            "name": "loop_iteration",
+            "type": "list[int]",
+            "description": "0-based passes of the loops enclosing that task, outermost first, as set with `set_continuation`; [] when there is none."
+          }
+        ]
+      },
       "tools": {
-        "names": ["set_continuation"],
-        "limits": [null],
-        "required": [true]
+        "names": [
+          "set_continuation"
+        ],
+        "limits": [
+          null
+        ],
+        "required": [
+          true
+        ]
       }
     },
     {
       "name": "UI Standalone UITARS",
       "description": "Recovers the UI by acting on the robot's desktop through action tools, each returning a fresh screenshot.",
       "prompt_file": "gui_agent_tooled.md",
-      "response_model": null,
       "router": "uitars",
       "agent_type": "GuiAgent",
       "input_type": "IMAGETEXT",
@@ -190,35 +253,31 @@
       "arguments": [
         {
           "name": "task",
-          "description": "Task describing what needs to be done to get the process back on track.",
           "type": "str",
-          "json_type": "string"
+          "description": "Task describing what needs to be done to get the process back on track."
         },
         {
           "name": "variables",
-          "description": "Execution variables.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Execution variables."
         },
         {
           "name": "ui_log",
-          "description": "Ordered UI execution history leading up to the failure.",
           "type": "list",
-          "json_type": "array"
+          "description": "Ordered UI execution history leading up to the failure."
         },
         {
           "name": "errored_act",
-          "description": "Structured information about the action that failed.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Structured information about the action that failed."
         },
         {
           "name": "model",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
-          "json_type": "string"
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
         }
       ],
+      "output_model": null,
       "tools": {
         "names": [],
         "limits": []
@@ -228,7 +287,6 @@
       "name": "Tooled GuiAgent",
       "description": "Tool based GUI agent that uses tools for actions (database/agents/tooled_guiagent.py)",
       "prompt_file": "gui_agent_tooled.md",
-      "response_model": null,
       "router": "grounding",
       "agent_type": "GuiAgent",
       "input_type": "IMAGETEXT",
@@ -236,35 +294,31 @@
       "arguments": [
         {
           "name": "task",
-          "description": "Task describing what needs to be done to get the process back on track.",
           "type": "str",
-          "json_type": "string"
+          "description": "Task describing what needs to be done to get the process back on track."
         },
         {
           "name": "variables",
-          "description": "Execution variables.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Execution variables."
         },
         {
           "name": "ui_log",
-          "description": "Ordered UI execution history leading up to the failure.",
           "type": "list",
-          "json_type": "array"
+          "description": "Ordered UI execution history leading up to the failure."
         },
         {
           "name": "errored_act",
-          "description": "Structured information about the action that failed.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Structured information about the action that failed."
         },
         {
           "name": "model",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
-          "json_type": "string"
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
         }
       ],
+      "output_model": null,
       "tools": {
         "names": [],
         "limits": []
@@ -274,7 +328,6 @@
       "name": "Continuation Inferer",
       "description": "Judges a GUI recovery against its task and tells the robot where to continue with set_continuation.",
       "prompt_file": "continuation_inferer.md",
-      "response_model": "templates.error_handler.ContinuationReport",
       "router": "text",
       "agent_type": "Agent",
       "input_type": "TEXT",
@@ -283,39 +336,56 @@
       "arguments": [
         {
           "name": "recovery_task",
-          "description": "The task the GUI agent was given.",
           "type": "str",
-          "json_type": "string"
+          "description": "The task the GUI agent was given."
         },
         {
           "name": "gui_summary",
-          "description": "The GUI agent's summary of what it did and the screen it ended on.",
           "type": "str",
-          "json_type": "string"
+          "description": "The GUI agent's summary of what it did and the screen it ended on."
         },
         {
           "name": "goal_reached",
-          "description": "Whether the GUI agent reported reaching the goal within its action cap.",
           "type": "bool",
-          "json_type": "boolean"
+          "description": "Whether the GUI agent reported reaching the goal within its action cap."
         },
         {
           "name": "errored_act",
-          "description": "Structured information about the action that failed.",
           "type": "dict",
-          "json_type": "object"
+          "description": "Structured information about the action that failed."
         },
         {
           "name": "model",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
           "type": "str",
-          "json_type": "string"
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
         }
       ],
+      "output_model": {
+        "name": "ContinuationReport",
+        "description": "Whether a UI recovery succeeded, once `set_continuation` named the outcome.",
+        "fields": [
+          {
+            "name": "success",
+            "type": "bool",
+            "description": "Whether the recovery succeeded; agrees with the `recovered` passed to `set_continuation`."
+          },
+          {
+            "name": "summary",
+            "type": "str",
+            "description": "What the recovery did and where the robot continues."
+          }
+        ]
+      },
       "tools": {
-        "names": ["set_continuation"],
-        "limits": [null],
-        "required": [true]
+        "names": [
+          "set_continuation"
+        ],
+        "limits": [
+          null
+        ],
+        "required": [
+          true
+        ]
       }
     }
   ],

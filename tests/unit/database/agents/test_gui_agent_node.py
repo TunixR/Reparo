@@ -9,7 +9,7 @@ from sqlmodel import Session
 
 import database.agents.tooled_gui_agent as tooled_module
 from database.agent_graphs.runner import NodeRun
-from database.agents.models import Agent, AgentType, Argument
+from database.agents.models import Agent, AgentType
 from database.agents.tooled_gui_agent import GuiAction, GuiRunReport
 from database.provider.models import Router
 from tests.unit.fixtures.agent_fixtures import node_state
@@ -23,11 +23,11 @@ type GuiNode = Callable[..., Agent]
 """Factory: model turns in, a persisted GUI agent row whose model plays them out."""
 
 GUI_ARGUMENTS = {
-    "task": ("str", "string"),
-    "variables": ("dict", "object"),
-    "ui_log": ("list", "array"),
-    "errored_act": ("dict", "object"),
-    "model": ("str", "string"),
+    "task": "str",
+    "variables": "dict",
+    "ui_log": "list",
+    "errored_act": "dict",
+    "model": "str",
 }
 
 
@@ -44,8 +44,8 @@ def gui_node(
         type=AgentType.GuiAgent,
         prompt="{instruction}",
         arguments=[
-            Argument(name=name, description=name, type=py, json_type=js)
-            for name, (py, js) in GUI_ARGUMENTS.items()
+            {"name": name, "type": type_, "description": name}
+            for name, type_ in GUI_ARGUMENTS.items()
         ],
     )
 
@@ -88,7 +88,7 @@ async def test_report_lists_the_actions_and_the_finished_summary(
 async def test_output_model_of_a_gui_agent_is_the_run_report(
     gui_node: GuiNode,
 ) -> None:
-    assert gui_node("unused").output_model() is GuiRunReport
+    assert gui_node("unused").output_class() is GuiRunReport
 
 
 async def test_action_cap_ends_the_run_without_reaching_the_goal(

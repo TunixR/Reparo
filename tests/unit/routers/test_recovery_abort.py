@@ -282,7 +282,6 @@ def test_eval_abort_mid_run_cancels_it_and_sends_no_result(
         name="GUI",
         description="GUI agent",
         prompt="prompt",
-        response_model=None,
         type=AgentType.GuiAgent,
     )
     seen = {"cancelled": False}

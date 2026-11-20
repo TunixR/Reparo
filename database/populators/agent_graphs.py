@@ -35,6 +35,7 @@ from database.agent_graphs.models import (
     AgentGraphUpdate,
 )
 from database.agents.models import Agent
+from database.agents.specs import OutputModelSpec
 from database.populators.agents import DEFAULT_PROMPTS_DIR, agent_seed
 
 LOG_PREFIX = "[populate_agent_graphs]"
@@ -126,9 +127,10 @@ def _populate_graph(session: Session, seed: AgentGraphSeed) -> list[ManualStep]:
     if not (seed.enabled and seed.is_default_recovery):
         return []
     if outdated:
+        current = entry.output_model.name if entry.output_model else "none"
         why = (
-            f"its entry agent '{entry.name}' still has the response model "
-            f"{entry.response_model}, so recoveries run that agent alone"
+            f"its entry agent '{entry.name}' has another output model ({current}) "
+            "than agents.json seeds, so recoveries run that agent alone"
         )
     elif AgentGraph.default_recovery_id(session) is None:
         why = (
@@ -152,9 +154,13 @@ def _populate_graph(session: Session, seed: AgentGraphSeed) -> list[ManualStep]:
 
 
 def _outdated(agent: Agent) -> bool:
-    """Whether ``agent`` has another response model than ``agents.json`` seeds."""
+    """Whether ``agent`` has another output model than ``agents.json`` seeds."""
     seed = agent_seed(agent.name)
-    return seed is not None and agent.response_model != seed.get("response_model")
+    if seed is None:
+        return False
+    seeded = seed.get("output_model")
+    expected = None if seeded is None else OutputModelSpec.model_validate(seeded)
+    return agent.output_model != expected
 
 
 def _create_graph(
@@ -318,12 +324,12 @@ def _manual_steps(
         prompt_path = DEFAULT_PROMPTS_DIR / entry_seed["prompt_file"]
         steps.append(
             ManualStep(
-                f"Give the agent '{entry.name}' its seeded prompt and response model",
+                f"Give the agent '{entry.name}' its seeded prompt and output model",
                 "PATCH",
                 f"/agents/{entry.id}",
                 {
                     "prompt": prompt_path.read_text(encoding="utf-8"),
-                    "response_model": entry_seed["response_model"],
+                    "output_model": entry_seed["output_model"],
                 },
                 {"prompt": f"<the text of {prompt_path.relative_to(_REPO_ROOT)}>"},
             )

@@ -22,7 +22,17 @@ from strands_evals import Case
 from tenacity import retry, stop_after_attempt
 
 import settings
-from templates.gateway import GatewayDecision
+from database.agents.specs import OutputModelSpec, build_output_model
+from database.populators.agents import agent_seed
+from templates.common import TemplateModel
+
+
+def gateway_output_model() -> type[TemplateModel]:
+    """The class the seeded Gateway Orchestrator reports, built from ``agents.json``."""
+    seed = agent_seed("Gateway Orchestrator")
+    if seed is None or seed.get("output_model") is None:
+        raise LookupError("agents.json seeds no Gateway Orchestrator output model.")
+    return build_output_model(OutputModelSpec.model_validate(seed["output_model"]))
 
 
 def build_model(
@@ -111,7 +121,7 @@ def _extract_final_task(agent: StrandsAgent) -> str:
 def gateway_task(case: Case[str, str], mocks: Any) -> dict[str, Any]:
     """Invoke the Gateway Orchestrator for error filtering evaluation.
 
-    As in production, the gateway runs freely, then reports a `GatewayDecision`.
+    As in production, the gateway runs freely, then reports its seeded output model.
 
     Returns a dict with:
     - is_ui_error: the decision's ``ui_exception`` (for evaluator)
@@ -140,17 +150,19 @@ def gateway_task(case: Case[str, str], mocks: Any) -> dict[str, Any]:
     )
 
     _ = agent(instruction)
+    decision_model = gateway_output_model()
     decision = agent(
         "Given our conversation so far, please provide a report using structured "
         "output with the given tool.",
-        structured_output_model=GatewayDecision,
+        structured_output_model=decision_model,
     ).structured_output
-    if not isinstance(decision, GatewayDecision):
-        raise TypeError("The gateway did not report a GatewayDecision.")
+    if not isinstance(decision, decision_model):
+        raise TypeError(f"The gateway did not report a {decision_model.__name__}.")
+    reported = decision.model_dump()
 
     return {
-        "is_ui_error": decision.ui_exception,
-        "rationale": decision.rationale,
+        "is_ui_error": reported["ui_exception"],
+        "rationale": reported["rationale"],
         "model_messages": _extract_agent_messages(agent),
         "tool_calls": {"route_to_human": mocks.human_calls},
         "raw_instruction": instruction,

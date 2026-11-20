@@ -7,12 +7,12 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
 from sqlmodel import Session
 
 import database.agents.models as agent_models
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
-from database.agents.models import Agent, AgentType, Argument
+from database.agents.models import Agent, AgentType
+from database.agents.specs import FieldSpec, OutputModelSpec, build_output_model
 from database.provider.models import Router
 from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 from tests.unit.shared.scripted_model import ScriptedModel, Turn
@@ -59,21 +59,21 @@ def mock_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
 
 
 _RECOVERY_ARGUMENTS = (
-    ("task_name", "str", "string"),
-    ("platform", "str", "string"),
-    ("os", "str", "string"),
-    ("variables", "dict", "object"),
-    ("ui_log", "list", "array"),
-    ("errored_act", "dict", "object"),
-    ("model", "str", "string"),
+    ("task_name", "str"),
+    ("platform", "str"),
+    ("os", "str"),
+    ("variables", "dict"),
+    ("ui_log", "list"),
+    ("errored_act", "dict"),
+    ("model", "str"),
 )
 
 
-def recovery_arguments() -> list[Argument]:
+def recovery_arguments() -> list[dict[str, Any]]:
     """The seeded gateway's arguments: the seven recovery inputs."""
     return [
-        Argument(name=name, description=name, type=type_, json_type=json_type)
-        for name, type_, json_type in _RECOVERY_ARGUMENTS
+        {"name": name, "type": type_, "description": name}
+        for name, type_ in _RECOVERY_ARGUMENTS
     ]
 
 
@@ -89,7 +89,6 @@ def gateway_agent(
         name="Gateway Orchestrator",
         description="Routes recovery",
         prompt="prompt",
-        response_model=None,
         type=AgentType.Agent,
         arguments=recovery_arguments(),
     )
@@ -101,10 +100,13 @@ type ScriptedAgent = Callable[..., tuple[Agent, ScriptedModel]]
 """Factory returned by ``scripted_agent``: turns in, the agent and its model out."""
 
 
-class ScriptedReport(BaseModel):
-    """Response model of ``scripted_agent``; a ``ToolCall("ScriptedReport", ...)`` fills it."""
-
-    done: bool
+SCRIPTED_REPORT = OutputModelSpec(
+    name="ScriptedReport",
+    description='Output of ``scripted_agent``; a ``ToolCall("ScriptedReport", ...)`` fills it.',
+    fields=[FieldSpec(name="done", type="bool", description="Whether it is done.")],
+)
+ScriptedReport = build_output_model(SCRIPTED_REPORT)
+"""The class ``scripted_agent`` reports, built from `SCRIPTED_REPORT`."""
 
 
 @pytest.fixture
@@ -126,11 +128,11 @@ def scripted_agent(
     # The logging hooks write audit rows outside the test session.
     monkeypatch.setattr(Agent, "get_logging_hooks", lambda _self, _state: [])
     # Strands rejects a blank prompt, and the instruction lists the arguments.
-    task = Argument(name="task", description="Task", type="str", json_type="string")
+    task = FieldSpec(name="task", type="str", description="Task")
     agent = make_agent(
         router=mock_router,
         arguments=[task],
-        response_model=f"{__name__}.ScriptedReport",
+        output_model=SCRIPTED_REPORT,
     )
 
     def _scripted(

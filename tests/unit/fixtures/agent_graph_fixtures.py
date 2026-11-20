@@ -12,42 +12,58 @@ from fastapi import status
 from fastapi.testclient import TestClient
 from httpx import Headers
 from httpx2 import Response
-from pydantic import BaseModel
 from sqlalchemy import Engine
 from sqlmodel import Session, col, select
 
 import database.populators.agents as agents_populator
 from agent_tools.utils import SET_CONTINUATION_FN_MODULE
 from database.agent_graphs.models import AgentGraph, AgentGraphEdge, AgentGraphNode
-from database.agents.models import Agent, AgentTool, AgentType, Argument
+from database.agents.models import Agent, AgentTool, AgentType
+from database.agents.specs import OutputModelSpec, build_output_model
 from database.populators.agents import populate_agents
 from database.populators.tools import populate_tools
 from database.provider.models import Router
 from database.tools.models import Tool
+from templates.common import TemplateModel
 
 
-class Finding(BaseModel):
-    reason: str
-    tags: list[str]
+def field_spec(name: str, type_: str = "str") -> dict[str, Any]:
+    """A field definition, as an agent's ``arguments`` or ``output_model`` hold it."""
+    return {"name": name, "type": type_, "description": f"The {name}."}
 
 
-class GraphReport(BaseModel):
-    """Output model of ``graph_agents``."""
-
-    done: bool
-    success: bool
-    attempts: int
-    note: str | None
-    finding: Finding
-    extra: dict[str, int]
-
-
-GRAPH_REPORT = f"{__name__}.GraphReport"
-
-
-def argument(name: str) -> Argument:
+def argument(name: str) -> dict[str, Any]:
     """A string argument called ``name``."""
-    return Argument(name=name, description=name, type="str", json_type="string")
+    return field_spec(name)
+
+
+def output_model(name: str, **types: str) -> dict[str, Any]:
+    """An output model definition called ``name`` with a field per keyword, in order."""
+    return {
+        "name": name,
+        "description": f"The {name} output.",
+        "fields": [field_spec(field, type_) for field, type_ in types.items()],
+    }
+
+
+def output_class(definition: Mapping[str, Any]) -> type[TemplateModel]:
+    """The class an agent with the output model ``definition`` reports."""
+    return build_output_model(OutputModelSpec.model_validate(definition))
+
+
+GRAPH_REPORT: dict[str, Any] = {
+    "name": "GraphReport",
+    "description": "Output model of ``graph_agents``.",
+    "fields": [
+        field_spec("done", "bool"),
+        field_spec("success", "bool"),
+        field_spec("attempts", "int"),
+        field_spec("note", "str | None"),
+        field_spec("finding", "dict[str, str]"),
+        field_spec("tags", "list[str]"),
+        field_spec("extra", "dict[str, int]"),
+    ],
+}
 
 
 @dataclass(frozen=True)
@@ -277,7 +293,7 @@ def graph_agents(
 ) -> dict[str, Agent]:
     """Three enabled agents, by name, to back graph nodes; each outputs a `GraphReport`."""
     return {
-        name: make_agent(router=mock_router, name=name, response_model=GRAPH_REPORT)
+        name: make_agent(router=mock_router, name=name, output_model=GRAPH_REPORT)
         for name in ("Alpha", "Beta", "Gamma")
     }
 
@@ -311,7 +327,7 @@ def tasked_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent
         router=mock_router,
         name="Tasked",
         arguments=[argument("task")],
-        response_model=GRAPH_REPORT,
+        output_model=GRAPH_REPORT,
     )
 
 
@@ -320,9 +336,7 @@ def continuation_agent(
     session: Session, make_agent: Callable[..., Agent], mock_router: Router
 ) -> Agent:
     """An agent with the set_continuation tool; it outputs a `GraphReport`."""
-    agent = make_agent(
-        router=mock_router, name="Continuer", response_model=GRAPH_REPORT
-    )
+    agent = make_agent(router=mock_router, name="Continuer", output_model=GRAPH_REPORT)
     tool = Tool(
         name="set_continuation",
         description="Set where the robot continues.",
