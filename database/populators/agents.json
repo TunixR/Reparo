@@ -65,7 +65,7 @@
       "prompt_file": "recovery_inferer.md",
       "response_model": "templates.error_handler.RecoveryInference",
       "router": "text",
-      "agent_type": "ErrorAgent",
+      "agent_type": "Agent",
       "input_type": "TEXT",
       "enabled": true,
       "reasoning_effort": "medium",

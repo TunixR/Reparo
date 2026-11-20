@@ -147,7 +147,7 @@ def test_an_old_database_gets_a_disabled_graph_and_the_steps_to_migrate(
     assert steps[1].body["response_model"] == "templates.gateway.GatewayDecision"
     assert steps[1].body["prompt"].startswith("You are the Gateway Orchestrator")
     printed = capsys.readouterr().out
-    assert "recoveries run the gateway alone" in printed
+    assert "recoveries run that agent alone" in printed
     for number, step in enumerate(steps, start=1):
         assert f"  {number}. {step.action}:\n     PATCH {step.path} " in printed
     assert "<the text of database/populators/default_prompts/gateway.md>" in printed

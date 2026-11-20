@@ -14,7 +14,7 @@ tries to recover them with LLM agents. Its main parts:
 | --- | --- | --- |
 | Recovery ingress | WebSocket a robot opens when it fails; one recovery per connection | `routers/recovery.py` |
 | Agents | Database-configured Strands agents (gateway, error, GUI and generic agents) that run as graph nodes, standalone or as tools of other agents | `database/agents/` |
-| Agent graphs | Database-defined graphs of agent nodes, and the runner that executes a recovery one node at a time, starting at the gateway; seeded with the "UI Recovery" graph | `database/agent_graphs/`, `database/populators/agent_graphs.py` |
+| Agent graphs | Database-defined graphs of agent nodes, and the runner that executes a recovery one node at a time, starting at the gateway; seeded with the "UI Recovery" graph | `database/agent_graphs/`, `database/populators/agent_graphs.json` |
 | Tools | Python functions agents can call, registered in the database | `database/tools/`, `agent_tools/`, `gateway/` |
 | Provider routers | Which LLM backend and model each agent uses | `database/provider/`, `routers/provider.py` |
 | Trace logging | Per-recovery record of agent, tool and GUI steps, with screenshots in S3 | `database/logging/`, `agent_tools/hooks.py`, `s3/` |
@@ -187,7 +187,7 @@ inputs, runs it, and asks for a structured response using the configured Pydanti
   to the response model. Prompts used only by the evals live in `evals/`.
 - **Seeding.** `populate.py` creates the tables and the S3 bucket, then loads the default agents, sub-agent links, tools, provider routers,
   the admin user and the agent graph from `database/populators/` (`agents.json`, `routers.json`,
-  the default agent prompts in `default_prompts/`, and `agent_graphs.py`). Seeding only creates
+  the default agent prompts in `default_prompts/`, and `agent_graphs.json`). Seeding only creates
   what is missing, so a changed default prompt reaches fresh databases only. After that, agents,
   graphs and routers can be changed at runtime through the API without a deploy.
 - **The seeded graph.** "UI Recovery" chains the gateway, the Recovery Inferer, the Tooled GuiAgent

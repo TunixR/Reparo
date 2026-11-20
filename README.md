@@ -117,7 +117,7 @@ routers. Change those through `/provider`.
 | `settings.py`, `config.py` | Environment settings (see `.env.example`) and fixed limits |
 | `routers/` | HTTP and WebSocket endpoints: recovery, evals, agents, agent graphs, tools, provider, keys, auth, logging |
 | `database/` | SQLModel models and engine, grouped by concept (agents, agent graphs, tools, provider, keys, auth, logging) |
-| `database/populators/` | Seed data (`agents.json`, `routers.json`, default agent prompts in `default_prompts/`, the "UI Recovery" agent graph in `agent_graphs.py`) and the code that loads it; run by `populate.py` |
+| `database/populators/` | Seed data (`agents.json`, `routers.json`, default agent prompts in `default_prompts/`, agent graphs in `agent_graphs.json`) and the code that loads it; run by `populate.py` |
 | `gateway/` | Tools for the gateway agent (human hand-off is a placeholder) |
 | `agent_tools/` | Strands tools and hooks shared by agents: screenshots, tool limits, trace logging |
 | `robot/` | The recovery WebSocket from accept to close: keep-alive, frame routing, `abort` and disconnects |

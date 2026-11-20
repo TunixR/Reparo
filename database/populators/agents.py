@@ -257,6 +257,12 @@ def _load_json_config() -> dict[str, Any]:
 DEFAULT_PROMPTS_DIR = Path(__file__).parent / "default_prompts"
 
 
+def agent_seed(name: str) -> dict[str, Any] | None:
+    """The configuration ``agents.json`` seeds the agent called ``name`` with."""
+    agents: list[dict[str, Any]] = _load_json_config().get("agents", [])
+    return next((agent for agent in agents if agent["name"] == name), None)
+
+
 def _read_prompt(agent_name: str, prompt_file: str | None) -> str:
     """Read an agent's prompt from its file in ``default_prompts/``."""
     if not prompt_file:
