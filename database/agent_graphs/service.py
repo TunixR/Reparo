@@ -570,7 +570,7 @@ def _validate_write(
     if found:
         action = "can't be enabled" if enabling else "would no longer be valid"
         raise AgentGraphError(
-            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"The agent graph '{graph.name}' {action}; fix the violations, or "
             "disable the graph to edit it as a draft.",
             found,
@@ -724,8 +724,12 @@ def _has_cycle(graph: AgentGraph) -> bool:
     return any(visit(node, set()) for node in list(successors))
 
 
-def _rejected(message: str) -> AgentGraphError:
-    return AgentGraphError(status.HTTP_400_BAD_REQUEST, message, (message,))
+def _conflict(message: str) -> AgentGraphError:
+    return AgentGraphError(status.HTTP_409_CONFLICT, message, (message,))
+
+
+def _invalid(message: str) -> AgentGraphError:
+    return AgentGraphError(status.HTTP_422_UNPROCESSABLE_CONTENT, message, (message,))
 
 
 def _agent(session: Session, agent_id: uuid.UUID) -> Agent:
@@ -740,14 +744,14 @@ def _ensure_unique_name(session: Session, name: str, graph_id: uuid.UUID) -> Non
         select(AgentGraph.id).where(AgentGraph.name == name, AgentGraph.id != graph_id)
     ).first()
     if taken is not None:
-        raise _rejected(
+        raise _conflict(
             f"An agent graph named '{name}' already exists; choose another name."
         )
 
 
 def _ensure_unique_key(graph: AgentGraph, key: str, node_id: uuid.UUID | None) -> None:
     if any(n.key == key and n.id != node_id for n in graph.nodes):
-        raise _rejected(
+        raise _conflict(
             f"The graph already has a node '{key}'; node keys are unique in a graph."
         )
 
@@ -758,7 +762,7 @@ def _ensure_edge_fits(graph: AgentGraph, edge: AgentGraphEdge) -> None:
     nodes = {n.id for n in graph.nodes}
     for end in _ends(edge):
         if end not in nodes:
-            raise _rejected(
+            raise _invalid(
                 f"Node {end} isn't a node of the graph '{graph.name}'; edges stay "
                 "inside one graph."
             )
@@ -766,11 +770,11 @@ def _ensure_edge_fits(graph: AgentGraph, edge: AgentGraphEdge) -> None:
         if other.source_node_id != edge.source_node_id:
             continue
         if other.target_node_id == edge.target_node_id:
-            raise _rejected(
+            raise _conflict(
                 "An edge between these nodes already exists; change that edge instead."
             )
         if other.priority == edge.priority:
-            raise _rejected(
+            raise _conflict(
                 f"The source node already has an edge with priority {edge.priority}; "
                 "give each outgoing edge its own priority."
             )

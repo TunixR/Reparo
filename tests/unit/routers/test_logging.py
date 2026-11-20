@@ -3,6 +3,7 @@ from typing import Callable
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
 from database.agents.models import Agent
@@ -372,3 +373,24 @@ def test_logging_exception_ui_log_returns_404_for_missing_id(
         headers=headers,
     )
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_logging_delete_blocked_by_a_referencing_row_is_a_conflict(
+    session: Session,
+    mock_user: User,
+    mock_robot_exception: RobotException,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    headers = make_auth_headers(mock_user, session)
+
+    def _violate_foreign_key(_self: Session) -> None:
+        raise IntegrityError("DELETE", {}, Exception("foreign key violation"))
+
+    monkeypatch.setattr(Session, "commit", _violate_foreign_key)
+    response = client.delete(
+        f"/logging/robot_exceptions/{mock_robot_exception.id}", headers=headers
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "foreign key" not in response.text

@@ -7,7 +7,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlmodel import col, select
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, col, select
 
 from database.general import SessionDep
 from database.logging.models import (
@@ -93,6 +94,25 @@ def _get_recovery_context_or_404(
         )
 
     return recovery_context
+
+
+def _delete(session: Session, row: object, name: str) -> None:
+    """Delete ``row``, answering 409 if other rows still reference it."""
+    session.delete(row)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The {name} is still referenced by other records.",
+        ) from exc
+    except Exception as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete {name}.",
+        ) from exc
 
 
 @router.get(
@@ -248,16 +268,7 @@ def delete_agent_trace(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="AgentTrace not found"
         )
-    session.delete(trace)
-    try:
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to delete AgentTrace: {e}",
-        )
-    return
+    _delete(session, trace, "AgentTrace")
 
 
 @router.get(
@@ -347,16 +358,7 @@ def delete_gui_trace(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="GUITrace not found"
         )
-    session.delete(gtrace)
-    try:
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to delete GUITrace: {e}",
-        )
-    return
+    _delete(session, gtrace, "GUITrace")
 
 
 @router.get(
@@ -399,16 +401,7 @@ def delete_tool_trace(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="ToolTrace not found"
         )
-    session.delete(ttrace)
-    try:
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to delete ToolTrace: {e}",
-        )
-    return
+    _delete(session, ttrace, "ToolTrace")
 
 
 @router.get(
@@ -465,16 +458,7 @@ def delete_robot_exception(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="RobotException not found"
         )
-    session.delete(rex)
-    try:
-        session.commit()
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to delete RobotException: {e}",
-        )
-    return
+    _delete(session, rex, "RobotException")
 
 
 @router.get(

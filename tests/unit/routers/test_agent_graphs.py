@@ -117,6 +117,15 @@ def test_writes_are_rejected_for_non_administrators(
     )
 
 
+def test_graph_names_are_unique(client: TestClient, admin_headers: Headers):
+    first = create_graph_via_api(client, admin_headers, name="Taken")
+    assert first.status_code == status.HTTP_201_CREATED, first.text
+
+    second = create_graph_via_api(client, admin_headers, name="Taken")
+
+    _rejected(second, "'Taken' already exists", status_code=status.HTTP_409_CONFLICT)
+
+
 @pytest.mark.parametrize(
     "fields",
     [
@@ -143,9 +152,14 @@ def test_limits_accept_null(client: TestClient, admin_headers: Headers):
     assert response.status_code == status.HTTP_201_CREATED, response.text
 
 
-def _rejected(response: Response, *fragments: str) -> None:
-    """The write was rejected with 400, and one violation says all ``fragments``."""
-    assert response.status_code == status.HTTP_400_BAD_REQUEST, response.text
+def _rejected(
+    response: Response,
+    *fragments: str,
+    status_code: int = status.HTTP_422_UNPROCESSABLE_CONTENT,
+) -> None:
+    """The write was rejected with ``status_code``, and one violation says all
+    ``fragments``."""
+    assert response.status_code == status_code, response.text
     violations: list[str] = response.json()["detail"]["violations"]
     assert any(all(f in v for f in fragments) for v in violations), violations
 
@@ -363,8 +377,8 @@ def test_edges_are_unique_and_stay_inside_their_graph(
         client, admin_headers, graph.id, {**graph.nodes, **other.nodes}, "a", "x", 2
     )
 
-    _rejected(duplicate, "already exists")
-    _rejected(same_priority, "priority 0")
+    _rejected(duplicate, "already exists", status_code=status.HTTP_409_CONFLICT)
+    _rejected(same_priority, "priority 0", status_code=status.HTTP_409_CONFLICT)
     _rejected(foreign, "inside one graph")
 
 
@@ -515,7 +529,7 @@ def test_a_node_key_is_unique_in_its_graph(
         headers=admin_headers,
     )
 
-    _rejected(response, "already has a node 'a'")
+    _rejected(response, "already has a node 'a'", status_code=status.HTTP_409_CONFLICT)
 
 
 def test_a_node_needs_an_existing_agent(
@@ -700,7 +714,12 @@ def test_a_write_that_loses_a_race_on_a_unique_constraint_is_rejected(
         headers=admin_headers,
     )
 
-    _rejected(response, "concurrent change", "reload the graph and retry")
+    _rejected(
+        response,
+        "concurrent change",
+        "reload the graph and retry",
+        status_code=status.HTTP_409_CONFLICT,
+    )
     nodes = client.get(f"/agent_graphs/{graph.id}", headers=admin_headers).json()
     assert [n["key"] for n in nodes["nodes"]] == ["a"]
 
