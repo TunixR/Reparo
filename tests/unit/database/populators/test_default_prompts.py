@@ -66,7 +66,9 @@ def test_prompt_names_only_tools_the_agent_is_given(name: str) -> None:
     assert _named_tools(prompt) <= _given_tools(agent)
 
 
-@pytest.mark.parametrize("name", ["Gateway Orchestrator", "UI Exception Handler"])
+@pytest.mark.parametrize(
+    "name", ["Gateway Orchestrator", "UI Exception Handler", "Continuation Inferer"]
+)
 def test_prompt_names_every_tool_the_agent_is_given(name: str) -> None:
     agent = AGENTS[name]
     prompt = _read_prompt(name, agent["prompt_file"])

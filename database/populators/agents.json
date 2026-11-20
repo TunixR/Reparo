@@ -2,9 +2,9 @@
   "agents": [
     {
       "name": "Gateway Orchestrator",
-      "description": "Central orchestrator that standardizes and routes external RPA error notifications.",
+      "description": "Entry node of the recovery graph: classifies a robot's failure as a UI exception or escalates it to a human.",
       "prompt_file": "gateway.md",
-      "response_model": "templates.gateway.ResponseToRPA",
+      "response_model": "templates.gateway.GatewayDecision",
       "router": "text",
       "agent_type": "GatewayAgent",
       "input_type": "TEXT",
@@ -60,14 +60,73 @@
       }
     },
     {
+      "name": "Recovery Inferer",
+      "description": "Infers what a UI recovery must achieve from the robot's report: the kind of failure, where it happened in the process model and the task for the GUI agent.",
+      "prompt_file": "recovery_inferer.md",
+      "response_model": "templates.error_handler.RecoveryInference",
+      "router": "text",
+      "agent_type": "ErrorAgent",
+      "input_type": "TEXT",
+      "enabled": true,
+      "reasoning_effort": "medium",
+      "arguments": [
+        {
+          "name": "task_name",
+          "description": "Name of the task being recovered.",
+          "type": "str",
+          "json_type": "string"
+        },
+        {
+          "name": "platform",
+          "description": "Execution platform where the task runs.",
+          "type": "str",
+          "json_type": "string"
+        },
+        {
+          "name": "os",
+          "description": "Operating system where recovery is happening.",
+          "type": "str",
+          "json_type": "string"
+        },
+        {
+          "name": "variables",
+          "description": "Runtime variables relevant to the task.",
+          "type": "dict",
+          "json_type": "object"
+        },
+        {
+          "name": "ui_log",
+          "description": "Ordered UI execution history leading up to the failure.",
+          "type": "list",
+          "json_type": "array"
+        },
+        {
+          "name": "errored_act",
+          "description": "Structured information about the action that failed.",
+          "type": "dict",
+          "json_type": "object"
+        },
+        {
+          "name": "model",
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
+          "type": "str",
+          "json_type": "string"
+        }
+      ],
+      "tools": {
+        "names": [],
+        "limits": []
+      }
+    },
+    {
       "name": "UI Exception Handler",
-      "description": "Module responsible for managing UI-related errors. This module has access to the current UI state via screenshots and is provided with visual information about the moment where execution failed. It specializes in identifying and resolving issues related to user interface interactions, element detection, and visual validation failures.",
+      "description": "Legacy single-agent UI recovery, replaced by the UI Recovery agent graph and kept disabled for reference. It infers a recovery task, has a GUI agent carry it out and sets the continuation.",
       "prompt_file": "ui_exception_handler.md",
       "response_model": "templates.error_handler.UiExceptionReport",
       "router": "text",
       "agent_type": "ErrorAgent",
       "input_type": "TEXT",
-      "enabled": true,
+      "enabled": false,
       "reasoning_effort": "medium",
       "arguments": [
         {
@@ -210,14 +269,57 @@
         "names": [],
         "limits": []
       }
+    },
+    {
+      "name": "Continuation Inferer",
+      "description": "Judges a GUI recovery against its task and tells the robot where to continue with set_continuation.",
+      "prompt_file": "continuation_inferer.md",
+      "response_model": "templates.error_handler.ContinuationReport",
+      "router": "text",
+      "agent_type": "Agent",
+      "input_type": "TEXT",
+      "enabled": true,
+      "reasoning_effort": "medium",
+      "arguments": [
+        {
+          "name": "recovery_task",
+          "description": "The task the GUI agent was given.",
+          "type": "str",
+          "json_type": "string"
+        },
+        {
+          "name": "gui_summary",
+          "description": "The GUI agent's summary of what it did and the screen it ended on.",
+          "type": "str",
+          "json_type": "string"
+        },
+        {
+          "name": "goal_reached",
+          "description": "Whether the GUI agent reported reaching the goal within its action cap.",
+          "type": "bool",
+          "json_type": "boolean"
+        },
+        {
+          "name": "errored_act",
+          "description": "Structured information about the action that failed.",
+          "type": "dict",
+          "json_type": "object"
+        },
+        {
+          "name": "model",
+          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to.",
+          "type": "str",
+          "json_type": "string"
+        }
+      ],
+      "tools": {
+        "names": ["set_continuation"],
+        "limits": [null],
+        "required": [true]
+      }
     }
   ],
   "sub_agents": [
-    {
-      "parent": "Gateway Orchestrator",
-      "child": "UI Exception Handler",
-      "limit": 1
-    },
     {
       "parent": "UI Exception Handler",
       "child": "Tooled GuiAgent",

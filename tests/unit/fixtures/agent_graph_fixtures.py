@@ -13,11 +13,15 @@ from fastapi.testclient import TestClient
 from httpx import Headers
 from httpx2 import Response
 from pydantic import BaseModel
+from sqlalchemy import Engine
 from sqlmodel import Session, col, select
 
-from database.agent_graphs.models import AgentGraph, AgentGraphEdge, AgentGraphNode
+import database.populators.agents as agents_populator
 from agent_tools.utils import SET_CONTINUATION_FN_MODULE
+from database.agent_graphs.models import AgentGraph, AgentGraphEdge, AgentGraphNode
 from database.agents.models import Agent, AgentTool, AgentType, Argument
+from database.populators.agents import populate_agents
+from database.populators.tools import populate_tools
 from database.provider.models import Router
 from database.tools.models import Tool
 
@@ -338,3 +342,29 @@ def continuation_agent(
     session.commit()
     session.refresh(agent)
     return agent
+
+
+@pytest.fixture
+def seeded_agents(
+    engine: Engine,
+    session: Session,
+    make_router: Callable[..., Router],
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, Agent]:
+    """Seed the tools and agents of ``agents.json``, every role on one vision router.
+
+    Returns the seeded agents by name.
+    """
+    router = make_router(
+        capabilities=[Router.Capability.TEXT, Router.Capability.VISION],
+        vision_backbone=Router.VisionBackbone.QWEN3_5,
+    )
+    monkeypatch.setattr(
+        agents_populator,
+        "find_router",
+        lambda populator_session, _role: populator_session.get(Router, router.id),  # pyright: ignore[reportUnknownLambdaType]
+    )
+    populate_tools(engine)
+    populate_agents(engine)
+    session.expire_all()
+    return {agent.name: agent for agent in session.exec(select(Agent)).unique()}
