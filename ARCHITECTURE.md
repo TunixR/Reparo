@@ -133,13 +133,22 @@ they mean different things:
 - `activity_id` groups events semantically and is never a continuation target.
 
 `capabilities` says how the robot can be observed and driven: the modalities it supports (`vision`,
-`dom`, `a11y`), most preferred first, whether it can do OCR, and per-modality details. A robot that
-sends none supports `vision` only. It is stored with the recovery context. For now GUI agents use
-`vision` only, and refuse to act for a robot that leaves it out.
+`dom`, `a11y`), most preferred first, whether it supports Text targeting (`ocr`), and per-modality
+details. A robot that sends none supports `vision` only. It is stored with the recovery context. For
+now GUI agents use `vision` only, and refuse to act for a robot that leaves it out.
 
-`recovery_task`, optional, is the process author's description of what recovering the failed
-activity should achieve. For now only the eval WebSocket uses it (as the recovery task its GUI agent runs);
-the recovery endpoint accepts it and ignores it, so the agents behave as if it were absent.
+`ocr` (Text targeting) says the robot can find an element by the text it shows, so actions may be
+aimed by visible text instead of coordinates. It is an option of the vision modality: it is
+meaningful only when `vision` is declared, and is accepted and ignored otherwise. It never changes
+what a screenshot contains.
+
+`recovery_task` is the process author's own recovery task for the failed activity. Its promise
+depends on the connection:
+
+- On a **recovery** connection it is optional and experimental, and Reparo may ignore it. Today the
+  recovery endpoint accepts it and ignores it, so the agents behave as if it were absent.
+- On an **eval** connection it is required and run as given: it is the recovery task the GUI agent
+  runs. A payload without one is refused with `error`, `VALIDATION_ERROR`, and close code 1003.
 
 **During the recovery** the server sends `ping`, `screenshot` (the robot answers with one binary JPEG
 frame) and `action` (the robot answers with a JSON result: `success`, `action_type` and, on failure,
