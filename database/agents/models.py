@@ -5,10 +5,9 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, override
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from sqlalchemy import Column, Dialect, TypeDecorator
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import validates
 from sqlmodel import Enum, Field, Relationship, SQLModel
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
@@ -36,7 +35,6 @@ from database.agents.specs import (
     OutputModelSpec,
     build_input_model,
     build_output_model,
-    dump_fields,
 )
 from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
 from database.agents.tooled_gui_agent import GuiRunReport, TooledGuiAgent
@@ -54,42 +52,42 @@ _UNBOUND = object()
 """What the graph context gives for an argument it has no value for."""
 
 
-class FieldSpecsType(TypeDecorator[list[FieldSpec]]):
-    """A JSONB column that stores, and always loads, a valid list of `FieldSpec`."""
+OUTPUT_MODEL_SPEC: TypeAdapter[OutputModelSpec | None] = TypeAdapter(
+    OutputModelSpec | None
+)
+
+_SPEC_COLUMNS: dict[str, TypeAdapter[Any]] = {
+    "arguments": FIELD_SPECS,
+    "output_model": OUTPUT_MODEL_SPEC,
+}
+"""The `Agent` columns that hold definitions, and the adapter that validates each."""
+
+
+class SpecJSON(TypeDecorator[Any]):
+    """A JSONB column that stores, and always loads, a valid definition.
+
+    `Agent` validates a definition when it is assigned, so binding one only dumps it;
+    a raw value written past the model (a bulk update) is validated here instead.
+    """
 
     impl = JSONB
     cache_ok = True
 
-    def process_bind_param(
-        self, value: Sequence[FieldSpec | Mapping[str, Any]] | None, dialect: Dialect
-    ) -> list[dict[str, Any]] | None:
+    def __init__(self, adapter: TypeAdapter[Any]) -> None:
+        super().__init__()
+        self.adapter: TypeAdapter[Any] = adapter
+
+    @override
+    def process_bind_param(self, value: Any, dialect: Dialect) -> Any:
         if value is None:
             return None
-        return dump_fields(FIELD_SPECS.validate_python(_as_json(value)))
+        return self.adapter.dump_python(
+            self.adapter.validate_python(value), mode="json"
+        )
 
-    def process_result_value(
-        self, value: list[dict[str, Any]] | None, dialect: Dialect
-    ) -> list[FieldSpec] | None:
-        return None if value is None else FIELD_SPECS.validate_python(value)
-
-
-class OutputModelSpecType(TypeDecorator[OutputModelSpec]):
-    """A JSONB column that stores, and always loads, a valid `OutputModelSpec`."""
-
-    impl = JSONB
-    cache_ok = True
-
-    def process_bind_param(
-        self, value: OutputModelSpec | Mapping[str, Any] | None, dialect: Dialect
-    ) -> dict[str, Any] | None:
-        if value is None:
-            return None
-        return OutputModelSpec.model_validate(_as_json(value)).model_dump(mode="json")
-
-    def process_result_value(
-        self, value: dict[str, Any] | None, dialect: Dialect
-    ) -> OutputModelSpec | None:
-        return None if value is None else OutputModelSpec.model_validate(value)
+    @override
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
+        return None if value is None else self.adapter.validate_python(value)
 
 
 def _as_json(value: Any) -> Any:
@@ -130,7 +128,7 @@ class Agent(SQLModel, table=True):
     prompt: str = Field(..., description="The prompt used to initialize the agent.")
     output_model: OutputModelSpec | None = Field(
         default=None,
-        sa_type=OutputModelSpecType,
+        sa_type=SpecJSON(OUTPUT_MODEL_SPEC),
         description=(
             "The agent's structured output; null for none. A GUI agent always "
             "reports a GuiRunReport."
@@ -160,7 +158,7 @@ class Agent(SQLModel, table=True):
 
     arguments: list[FieldSpec] = Field(
         default_factory=list,
-        sa_column=Column(FieldSpecsType, nullable=False, server_default="[]"),
+        sa_column=Column(SpecJSON(FIELD_SPECS), nullable=False, server_default="[]"),
         description="The agent's inputs, in the order its instruction lists them.",
     )
 
@@ -312,35 +310,15 @@ class Agent(SQLModel, table=True):
 
     @override
     def __setattr__(self, name: str, value: Any) -> None:
-        # SQLModel runs the @validates hooks below, then stores the assigned value
-        # over the validated one; validate first so these columns always hold specs.
-        if name == "arguments":
-            value = self.validate_arguments(name, value)
-        elif name == "output_model":
-            value = self.validate_output_model(name, value)
+        # Validate here, not with @validates: SQLModel stores the assigned value over
+        # what a validator returns, and these columns must always hold definitions.
+        # Construction assigns through here too.
+        if adapter := _SPEC_COLUMNS.get(name):
+            try:
+                value = adapter.validate_python(_as_json(value))
+            except ValidationError as exc:
+                raise ValueError(f"Invalid {name}: {exc}") from exc
         super().__setattr__(name, value)
-
-    @validates("arguments")
-    def validate_arguments(
-        self, key: str, arguments: Sequence[FieldSpec | Mapping[str, Any]]
-    ) -> list[FieldSpec]:
-        """Reject malformed arguments where they are assigned, not at flush."""
-        try:
-            return FIELD_SPECS.validate_python(_as_json(arguments))
-        except ValidationError as exc:
-            raise ValueError(f"Invalid {key}: {exc}") from exc
-
-    @validates("output_model")
-    def validate_output_model(
-        self, key: str, output_model: OutputModelSpec | Mapping[str, Any] | None
-    ) -> OutputModelSpec | None:
-        """Reject a malformed output model where it is assigned, not at flush."""
-        if output_model is None:
-            return None
-        try:
-            return OutputModelSpec.model_validate(_as_json(output_model))
-        except ValidationError as exc:
-            raise ValueError(f"Invalid {key}: {exc}") from exc
 
     def input_class(self) -> ModelClass:
         """Return the model that validates this agent's inputs (see `validate_input`)."""
@@ -359,12 +337,7 @@ class Agent(SQLModel, table=True):
         an int is a float. None is a value, valid where the type allows it. Models,
         such as those a graph context holds, are validated as their JSON.
         """
-        values = {
-            name: value.model_dump(mode="json")
-            if isinstance(value, BaseModel)
-            else value
-            for name, value in kwargs.items()
-        }
+        values = {name: _as_json(value) for name, value in kwargs.items()}
         try:
             return self.input_class().model_validate(values).model_dump()
         except ValidationError as exc:
