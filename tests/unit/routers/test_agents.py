@@ -179,7 +179,7 @@ def test_agents_create_rejects_router_missing_required_capability(
         "/agents/", json=payload.model_dump(mode="json"), headers=headers
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "VISION" in response.json()["detail"]
 
 
@@ -220,7 +220,7 @@ def test_agents_update_rejects_input_type_not_supported_by_router(
         headers=headers,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "VISION" in response.json()["detail"]
 
 
@@ -245,7 +245,7 @@ def test_agents_update_rejects_router_missing_required_capability(
         headers=headers,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert "VISION" in response.json()["detail"]
 
 

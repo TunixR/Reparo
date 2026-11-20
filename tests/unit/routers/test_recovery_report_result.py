@@ -13,7 +13,7 @@ def test_report_result_invalid_uuid_format(client: TestClient):
         headers={"X-ROBOT-KEY": "some-key"},
         json={"success": True},
     )
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert "Invalid recovery ID format" in response.json()["detail"]
 
 

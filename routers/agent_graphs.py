@@ -38,8 +38,12 @@ AdminDep = Annotated[User, Depends(require_admin)]
 
 _REJECTIONS: dict[int | str, dict[str, Any]] = {
     status.HTTP_404_NOT_FOUND: {"description": "A referenced row doesn't exist."},
-    status.HTTP_400_BAD_REQUEST: {
-        "description": "The write breaks a rule; the detail lists the violations."
+    status.HTTP_409_CONFLICT: {
+        "description": "The write clashes with existing rows, such as a taken name; "
+        "the detail lists the violations."
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "description": "The write breaks a graph rule; the detail lists the violations."
     },
 }
 
@@ -64,7 +68,7 @@ def _write[T](session: Session, action: str, write: Callable[[], T]) -> T:
             "as a duplicate name, node key or edge; reload the graph and retry."
         )
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail={"message": message, "violations": [message]},
         ) from exc
     commit_or_500(session, action)

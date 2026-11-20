@@ -135,7 +135,7 @@ def create_user(
     existing_user = session.exec(statement).first()
     if existing_user:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail="Username already exists",
         )
 
@@ -252,7 +252,7 @@ def update_current_user(
             existing_user = session.exec(statement).first()
             if existing_user:
                 raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
+                    status_code=status.HTTP_409_CONFLICT,
                     detail="Username already exists",
                 )
             current_user.username = user_data.username
@@ -293,7 +293,7 @@ def update_user(
         existing_user = session.exec(statement).first()
         if existing_user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_409_CONFLICT,
                 detail="Username already exists",
             )
         user.username = user_data.username
@@ -383,7 +383,7 @@ def change_own_password(
     """
     if not password_data.current_password:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Current password is required",
         )
 

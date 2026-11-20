@@ -63,7 +63,7 @@ def create_agent(
         agent = Agent(**payload.model_dump(), router=router_obj)
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
         ) from e
 
@@ -98,7 +98,7 @@ def update_agent(
         _ = service.update_agent(session, agent, payload, router_obj)
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
         ) from e
     except service.AgentGraphError as e:
