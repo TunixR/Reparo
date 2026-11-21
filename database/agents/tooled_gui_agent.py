@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from database.agents.models import Agent
 
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +48,27 @@ TOOL_NAME = "tooled_guiagent"
 MAX_ACTIONS = 40
 
 GUI_RUN_STATE_KEY = "gui_run"
+
+
+def _coerce_to_held_type(held: Any, value: Any) -> Any:
+    """``value`` with the type of ``held``, the Variable's current value.
+
+    A Variable keeps the type the robot sent it with; one that holds a string or
+    null accepts any value. A string is parsed as JSON first, and an int is
+    accepted for a float. Any other type raises ``ValueError``.
+    """
+    if held is None or isinstance(held, str):
+        return value
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            pass
+    if isinstance(held, float) and type(value) is int:
+        value = float(value)
+    if type(value) is not type(held):
+        raise ValueError(f"expected {type(held).__name__}, got {json.dumps(value)}")
+    return value
 
 
 class GuiRunReport(BaseModel):
@@ -499,7 +521,10 @@ class TooledGuiAgent:
     def create_alter_variable_tool(self, variables: dict[str, Any]):
         @tool(
             name="alter_variable",
-            description="Alter the value of a given variable. The value must be JSON serializable",
+            description=(
+                "Alter the value of a given variable. The value must be JSON"
+                " serializable and keep the variable's JSON type."
+            ),
         )
         async def _alter_variable(
             name: str,
@@ -507,8 +532,12 @@ class TooledGuiAgent:
         ) -> str:
             if name not in variables:
                 return f"Error: Variable '{name}' not found."
+            try:
+                value = _coerce_to_held_type(variables[name], value)
+            except ValueError as exc:
+                raise ValueError(f"Variable '{name}' was not changed: {exc}") from exc
             variables[name] = value
-            return f"Variable '{name}' has been updated to '{value}'."
+            return f"Variable '{name}' has been updated to {json.dumps(value)}."
 
         return _alter_variable
 
