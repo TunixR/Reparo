@@ -8,8 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 import routers.evals as evals_module
-from database.agents.models import Agent, AgentType
-from database.provider.models import Router
+from database.agents.models import Agent
+from tests.unit.fixtures.robot_ws_fixtures import receive_skipping_pings
 
 WS_PATH = "/evals/recovery/ws"
 RESULT = {"success": False}
@@ -20,24 +20,6 @@ def robot_key_raw(make_robot_key) -> str:  # pyright: ignore[reportMissingParame
     key_raw = "test-robot-key-eval-task-0001"
     _ = make_robot_key(name="Eval task", enabled=True, key_raw=key_raw)
     return key_raw
-
-
-@pytest.fixture
-def gui_agent(
-    make_agent,  # pyright: ignore[reportMissingParameterType]
-    mock_router: Router,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Agent:
-    agent: Agent = make_agent(
-        router=mock_router,
-        name="GUI",
-        description="GUI agent",
-        prompt="prompt",
-        type=AgentType.GuiAgent,
-    )
-    # The agent lookup isn't under test (it passes the raw header to a UUID column).
-    monkeypatch.setattr(evals_module, "_get_valid_agent", lambda *_: agent)
-    return agent
 
 
 @pytest.fixture
@@ -54,30 +36,23 @@ def seen_tasks(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return tasks
 
 
-def _receive_skipping_pings(ws: Any) -> dict[str, Any]:
-    while True:
-        message = ws.receive_json()
-        if message.get("type") != "ping":
-            return message
-
-
-def _connect(client: TestClient, robot_key_raw: str, gui_agent: Agent) -> Any:
+def _connect(client: TestClient, robot_key_raw: str, agent: Agent) -> Any:
     return client.websocket_connect(
         WS_PATH,
-        headers={"X-ROBOT-KEY": robot_key_raw, "X-AGENT-ID": str(gui_agent.id)},
+        headers={"X-ROBOT-KEY": robot_key_raw, "X-AGENT-ID": str(agent.id)},
     )
 
 
 def test_eval_uses_the_payload_recovery_task(
     client: TestClient,
     robot_key_raw: str,
-    gui_agent: Agent,
+    eval_gui_agent: Agent,
     valid_recovery_payload: dict[str, Any],
     seen_tasks: list[str],
 ) -> None:
-    with _connect(client, robot_key_raw, gui_agent) as ws:
+    with _connect(client, robot_key_raw, eval_gui_agent) as ws:
         ws.send_json(valid_recovery_payload | {"recovery_task": "Approve the request"})
-        message = _receive_skipping_pings(ws)
+        message = receive_skipping_pings(ws)
 
     assert message["type"] == "eval_result"
     assert message["content"] == RESULT
@@ -88,14 +63,14 @@ def test_eval_uses_the_payload_recovery_task(
 def test_eval_without_a_recovery_task_is_rejected(
     client: TestClient,
     robot_key_raw: str,
-    gui_agent: Agent,
+    eval_gui_agent: Agent,
     valid_recovery_payload: dict[str, Any],
     seen_tasks: list[str],
     payload_task: str | None,
 ) -> None:
-    with _connect(client, robot_key_raw, gui_agent) as ws:
+    with _connect(client, robot_key_raw, eval_gui_agent) as ws:
         ws.send_json(valid_recovery_payload | {"recovery_task": payload_task})
-        message = _receive_skipping_pings(ws)
+        message = receive_skipping_pings(ws)
 
     assert message == {
         "type": "error",
@@ -108,13 +83,13 @@ def test_eval_without_a_recovery_task_is_rejected(
 def test_eval_still_rejects_unknown_payload_keys(
     client: TestClient,
     robot_key_raw: str,
-    gui_agent: Agent,
+    eval_gui_agent: Agent,
     valid_recovery_payload: dict[str, Any],
     seen_tasks: list[str],
 ) -> None:
-    with _connect(client, robot_key_raw, gui_agent) as ws:
+    with _connect(client, robot_key_raw, eval_gui_agent) as ws:
         ws.send_json(valid_recovery_payload | {"recovery_plan": "Approve"})
-        message = _receive_skipping_pings(ws)
+        message = receive_skipping_pings(ws)
 
     assert message["type"] == "error"
     assert message["code"] == "VALIDATION_ERROR"

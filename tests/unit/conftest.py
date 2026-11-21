@@ -27,4 +27,5 @@ pytest_plugins = [
     "tests.unit.fixtures.agent_graph_fixtures",
     "tests.unit.fixtures.payload_fixtures",
     "tests.unit.fixtures.logging_fixtures",
+    "tests.unit.fixtures.robot_ws_fixtures",
 ]

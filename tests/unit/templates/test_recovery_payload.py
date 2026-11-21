@@ -10,6 +10,7 @@ from templates.recovery_payload import RecoveryPayload
 
 def _valid_payload() -> dict[str, Any]:
     return {
+        "contract_version": 2,
         "task_name": "Submit invoice",
         "platform": "uipath",
         "os": "windows",

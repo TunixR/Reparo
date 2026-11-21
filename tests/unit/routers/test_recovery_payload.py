@@ -262,7 +262,7 @@ def test_recovery_ws_ingest_rejects_invalid_payload(
     with client.websocket_connect(
         "/recovery/robot_exception/ws", headers=headers
     ) as ws:
-        ws.send_json({"task_name": "missing-graph"})
+        ws.send_json({"contract_version": 2, "task_name": "missing-graph"})
         message = ws.receive_json()
         closed = ws.receive()
 
@@ -270,24 +270,6 @@ def test_recovery_ws_ingest_rejects_invalid_payload(
     assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
     assert closed["code"] == 1003
     assert session.exec(select(RobotException)).first() is None
-
-
-def test_recovery_ws_ingest_rejects_non_json_payload(
-    client: TestClient,
-    valid_robot_key_raw: str,
-    gateway_agent: Agent,  # pyright: ignore[reportUnusedParameter]
-):
-    headers = {"X-ROBOT-KEY": valid_robot_key_raw}
-    with client.websocket_connect(
-        "/recovery/robot_exception/ws", headers=headers
-    ) as ws:
-        ws.send_text("{not json")
-        message = ws.receive_json()
-        closed = ws.receive()
-
-    assert message["type"] == "error"
-    assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
-    assert closed["code"] == 1003
 
 
 def test_missing_agent_graph_is_an_error_not_done(

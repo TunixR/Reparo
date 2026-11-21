@@ -38,6 +38,7 @@ def test_recovery_context_persists_normalized_payload_fields(session: Session):
 
     recovery_context = RecoveryContext.from_payload(
         payload={
+            "contract_version": 2,
             "task_name": "Invoice Recovery",
             "platform": "uipath",
             "os": "windows",
@@ -153,6 +154,7 @@ def test_recovery_context_to_payload_returns_normalized_shape():
 
 def test_recovery_context_from_payload_accepts_nullable_fields() -> None:
     recovery_payload = {
+        "contract_version": 2,
         "task_name": "Invoice Recovery",
         "platform": "uipath",
         "os": "windows",

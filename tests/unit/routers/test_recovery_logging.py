@@ -137,7 +137,11 @@ def test_invalid_payload_logs_field_paths_not_values(
 ) -> None:
     caplog.set_level(logging.INFO)
     secret_value = "do-not-log-this-task"
-    payload = {"task_name": secret_value, "ui_log": [{"case_id": "1"}]}
+    payload = {
+        "contract_version": 2,
+        "task_name": secret_value,
+        "ui_log": [{"case_id": "1"}],
+    }
 
     headers = {"X-ROBOT-KEY": robot_key_raw}
     with client.websocket_connect(
