@@ -10,6 +10,8 @@ import pyautogui
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
+from templates.recovery_payload import CONTRACT_VERSION
+
 from .actions import execute_action
 from .config import ClientConfig
 from .logging import write_transcript
@@ -168,10 +170,16 @@ class RecoveryWsRunner:
             write_transcript(self.config.log_json, self.transcript)
 
     def initial_payload(self) -> dict[str, Any]:
-        """The recovery payload, carrying the recovery task in eval mode."""
+        """The recovery payload in Reparo's Contract version, carrying the
+        recovery task in eval mode.
+
+        The version replaces whatever the catalogue holds, so stored payloads
+        keep working when the contract moves on.
+        """
+        payload = self.payload | {"contract_version": CONTRACT_VERSION}
         if self.config.eval and self.config.recovery_task:
-            return self.payload | {"recovery_task": self.config.recovery_task}
-        return self.payload
+            payload["recovery_task"] = self.config.recovery_task
+        return payload
 
     async def run(self) -> int:
         pyautogui.FAILSAFE = True

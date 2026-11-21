@@ -42,10 +42,11 @@ Each entry has this shape:
 }
 ```
 
-Use `--payload-id` to choose which payload to send. The payload is sent as stored, so a UI log entry
-or `errored_act` that carries a `model_event_id` (the id of the Event it performed in `model`) is
-sent with it. `capabilities` is optional; without it the server assumes `vision` only. Use
-`--capabilities` to send other capabilities without editing the catalog.
+Use `--payload-id` to choose which payload to send. The payload is sent as stored, except that the
+client always sets `contract_version` to the Contract version the backend speaks, whatever the
+catalogue holds. A UI log entry or `errored_act` that carries a `model_event_id` (the id of the
+Event it performed in `model`) is sent with it. `capabilities` is optional; without it the server
+assumes `vision` only. Use `--capabilities` to send other capabilities without editing the catalog.
 
 ## Run
 

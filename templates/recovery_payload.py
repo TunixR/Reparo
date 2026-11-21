@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
@@ -125,6 +125,12 @@ class RecoveryCapabilities(TemplateModel):
         return value
 
 
+ContractVersion = Literal[2]
+"""The one robot contract version Reparo speaks."""
+
+CONTRACT_VERSION: Final[ContractVersion] = 2
+
+
 class RecoveryPayload(TemplateModel):
     """The one message a robot sends to start a recovery.
 
@@ -133,6 +139,9 @@ class RecoveryPayload(TemplateModel):
     `model_event_id`, while their `event_id` only identifies the occurrence in
     this run.
 
+    `contract_version` names the shape of the robot contract the payload follows.
+    It is checked before anything else, and only `CONTRACT_VERSION` is accepted.
+
     `recovery_task` is the process author's description of what recovering the
     failing activity should achieve. For now only evals use it; the recovery
     endpoint accepts it and ignores it.
@@ -140,6 +149,7 @@ class RecoveryPayload(TemplateModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    contract_version: ContractVersion
     task_name: str
     platform: str
     os: str
@@ -181,6 +191,8 @@ class RecoveryInputs(TemplateModel):
 
 
 __all__ = [
+    "CONTRACT_VERSION",
+    "ContractVersion",
     "Modality",
     "RecoveryCapabilities",
     "RecoveryErroredAct",

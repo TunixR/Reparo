@@ -1,4 +1,4 @@
-"""The reference client sends the recovery task inside the payload in eval mode."""
+"""What the reference client puts in the payload it sends first."""
 
 from __future__ import annotations
 
@@ -23,7 +23,13 @@ def runner_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return importlib.import_module("scripts.recovery_ws_client.runner")
 
 
-def _runner(runner_module: ModuleType, *, eval_mode: bool, task: str) -> Any:
+def _runner(
+    runner_module: ModuleType,
+    *,
+    eval_mode: bool,
+    task: str,
+    payload: dict[str, Any] = PAYLOAD,
+) -> Any:
     from scripts.recovery_ws_client.config import ClientConfig
 
     config = ClientConfig(
@@ -35,7 +41,7 @@ def _runner(runner_module: ModuleType, *, eval_mode: bool, task: str) -> Any:
         recovery_task=task,
         eval=eval_mode,
     )
-    return runner_module.RecoveryWsRunner(config, dict(PAYLOAD))
+    return runner_module.RecoveryWsRunner(config, dict(payload))
 
 
 def test_eval_mode_sends_the_recovery_task_in_the_payload(
@@ -44,7 +50,8 @@ def test_eval_mode_sends_the_recovery_task_in_the_payload(
     runner = _runner(runner_module, eval_mode=True, task="Approve the request")
 
     assert runner.initial_payload() == PAYLOAD | {
-        "recovery_task": "Approve the request"
+        "contract_version": 2,
+        "recovery_task": "Approve the request",
     }
 
 
@@ -54,4 +61,15 @@ def test_payload_has_no_recovery_task_otherwise(
 ) -> None:
     runner = _runner(runner_module, eval_mode=eval_mode, task=task)
 
-    assert runner.initial_payload() == PAYLOAD
+    assert runner.initial_payload() == PAYLOAD | {"contract_version": 2}
+
+
+@pytest.mark.parametrize(
+    "catalogue_payload", [PAYLOAD, PAYLOAD | {"contract_version": 1}]
+)
+def test_payload_speaks_contract_version_2_whatever_the_catalogue_holds(
+    runner_module: ModuleType, catalogue_payload: dict[str, Any]
+) -> None:
+    runner = _runner(runner_module, eval_mode=False, task="", payload=catalogue_payload)
+
+    assert runner.initial_payload()["contract_version"] == 2

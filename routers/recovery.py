@@ -46,7 +46,7 @@ from robot.channel import (
 from security.utils import robot_key_hash
 from templates.common import TemplateModel
 from templates.gateway import ResponseToRPA
-from templates.recovery_payload import RecoveryPayload
+from templates.recovery_payload import CONTRACT_VERSION, RecoveryPayload
 
 router = APIRouter(prefix="/recovery")
 tracer = trace.get_tracer(__name__)
@@ -56,6 +56,7 @@ ROBOT_KEY_HEADER = "X-ROBOT-KEY"
 
 
 INVALID_RECOVERY_PAYLOAD = "INVALID_RECOVERY_PAYLOAD"
+UNSUPPORTED_CONTRACT_VERSION = "UNSUPPORTED_CONTRACT_VERSION"
 NO_AGENT_GRAPH = "NO_AGENT_GRAPH"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
@@ -104,6 +105,26 @@ def _decode_payload_or_raise(raw: str) -> Any:
             content=f"Recovery payload is not valid JSON: {exc.msg}",
             close_code=CLOSE_INVALID_PAYLOAD,
         ) from exc
+
+
+def _check_contract_version_or_raise(data: Any) -> None:
+    """Refuse a decoded payload that doesn't speak Reparo's Contract version.
+
+    Runs before anything else reads the payload. Only the JSON integer equal to
+    `CONTRACT_VERSION` passes: a bool, a float or a string is not a version.
+    """
+    sent = data.get("contract_version") if isinstance(data, dict) else None
+    if type(sent) is int and sent == CONTRACT_VERSION:
+        return
+    received = "none" if sent is None else json.dumps(sent)
+    raise RecoveryWsDomainError(
+        code=UNSUPPORTED_CONTRACT_VERSION,
+        content=(
+            f"Reparo speaks contract version {CONTRACT_VERSION}; "
+            f"the payload sent {received}."
+        ),
+        close_code=CLOSE_INVALID_PAYLOAD,
+    )
 
 
 def _build_recovery_context_or_raise(data: Any):
@@ -308,6 +329,7 @@ async def _run_recovery_turn(
         raw = await robot.receive_text()
         data = _decode_payload_or_raise(raw)
         turn.payload_received(raw, data)
+        _check_contract_version_or_raise(data)
 
         # Validate before looking up the agent graph, so a malformed payload is
         # reported as such even on a misconfigured server.

@@ -68,10 +68,10 @@ sequenceDiagram
 1. **Connect.** A robot opens the recovery WebSocket with its robot key in the `X-ROBOT-KEY`
    header. Unknown or disabled keys are rejected before the socket is accepted. The server sends
    periodic pings while the recovery runs.
-2. **Submit.** The robot sends one recovery payload. It is validated against the payload model
-   (`templates/recovery_payload.py`) and normalised into a recovery context: the Process name, platform, the
-   ordered UI log, the failed activity, the variables, the process model and the robot's
-   capabilities (see [Robot protocol](#robot-protocol)).
+2. **Submit.** The robot sends one recovery payload. Its Contract version is checked first; then it
+   is validated against the payload model (`templates/recovery_payload.py`) and normalised into a
+   recovery context: the Process name, platform, the ordered UI log, the failed activity, the
+   variables, the process model and the robot's capabilities (see [Robot protocol](#robot-protocol)).
 3. **Persist.** The raw payload is saved as a robot exception together with its recovery context
    (`database/logging/models.py`). The exception id is the recovery id used everywhere afterwards.
 4. **Run the agent graph.** Every recovery runs the enabled default recovery agent graph
@@ -120,8 +120,15 @@ requests, except for `abort`, which it can send at any time. `robot/channel.py` 
 from accept to close: it sends keep-alive pings, routes `abort` away from the frames the GUI tools
 wait for, and closes the socket. The exact fields are in the models named below and in `/scalar`.
 
-**The payload** (`RecoveryPayload`) describes the failed run. Three kinds of id appear in it, and
-they mean different things:
+**The payload** (`RecoveryPayload`) describes the failed run. It opens with `contract_version`, the
+Contract version the robot speaks. The field is required and checked before anything else in the
+payload, on the recovery and the eval connection alike. Reparo speaks one Contract version at a
+time, today 2, and accepts only that JSON integer: a missing or `null` version, another number, or
+anything that isn't an integer (`"2"`, `2.0`, `true`) is refused, and so is a payload that is JSON
+but not an object. The refusal's content names the version Reparo speaks and the one received. The
+version is not stored with the recovery context.
+
+Three kinds of id appear in the payload, and they mean different things:
 
 - `model` is the **process model**, in BPMN 2.0 XML or another textual format (such as the
   Playwright bridge's compact outline). Its Event ids are **model event ids**: stable across runs and
@@ -159,6 +166,7 @@ frame) and `action` (the robot answers with a JSON result: `success`, `action_ty
 | Ending | Sent by | Message | Socket close |
 | --- | --- | --- | --- |
 | The recovery ran | server | `done`: the recovery `id` and `ResponseToRPA` (`templates/gateway.py`) | 1000 |
+| The Contract version is missing or unsupported | server | `error`, `UNSUPPORTED_CONTRACT_VERSION` | 1003 |
 | The payload is not JSON or not valid | server | `error`, `INVALID_RECOVERY_PAYLOAD` | 1003 |
 | No enabled default recovery agent graph | server | `error`, `NO_AGENT_GRAPH` | 1011 |
 | Anything unexpected | server | `error`, `INTERNAL_ERROR` | 1011 |

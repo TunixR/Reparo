@@ -32,10 +32,14 @@ from robot.capabilities import CAPABILITIES_STATE_KEY
 from robot.channel import ABORT_CLOSE_CODE, AbortedByRobot, RobotConnection
 from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
     ROBOT_KEY_HEADER,
+    RecoveryWsDomainError,
     _build_answer,
     _build_recovery_context_or_raise,
+    _check_contract_version_or_raise,
+    _decode_payload_or_raise,
     _persist_exception_with_context,
     _record_abort,
+    _send_error_and_close,
     find_enabled_robot_key,
 )
 from settings import PROVIDER_API_BASE, PROVIDER_API_KEY, PROVIDER_MODEL
@@ -249,7 +253,8 @@ async def _run_eval_turn(
     """
     exception: RobotException | None = None
     try:
-        payload = await robot.receive_json()
+        payload = _decode_payload_or_raise(await robot.receive_text())
+        _check_contract_version_or_raise(payload)
         recovery_task = _validate_payload(payload).recovery_task
         if recovery_task is None:
             raise ValueError("recovery_task must be a non-empty string")
@@ -285,6 +290,15 @@ async def _run_eval_turn(
         await robot.close(ABORT_CLOSE_CODE)
     except WebSocketDisconnect:
         pass
+    except RecoveryWsDomainError as exc:
+        # Refused before the eval request is read, the same way as a recovery.
+        log_event(
+            logger,
+            attrs.EVENT_RECOVERY_EVAL_INVALID,
+            {attrs.ERROR_TYPE: exc.code},
+            logging.WARNING,
+        )
+        await _send_error_and_close(robot, exc.code, exc.content, exc.close_code)
     except ValueError as exc:
         # The client sent an unusable eval request: a warning, not an error.
         log_event(

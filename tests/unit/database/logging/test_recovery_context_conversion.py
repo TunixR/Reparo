@@ -9,6 +9,7 @@ from database.logging.models import RecoveryContext
 
 def _base_payload() -> dict[str, Any]:
     return {
+        "contract_version": 2,
         "task_name": "Invoice Recovery",
         "platform": "uipath",
         "os": "windows",

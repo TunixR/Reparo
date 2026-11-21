@@ -8,6 +8,7 @@ import pytest
 @pytest.fixture
 def valid_recovery_payload() -> dict[str, Any]:
     return {
+        "contract_version": 2,
         "task_name": "Invoice Processing",
         "platform": "uipath",
         "os": "windows",
