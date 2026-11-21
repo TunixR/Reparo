@@ -121,8 +121,9 @@ from accept to close: it sends keep-alive pings, routes `abort` away from the fr
 wait for, and closes the socket. The exact fields are in the models named below and in `/scalar`.
 
 **The payload** (`RecoveryPayload`) describes the failed run. It opens with `contract_version`, the
-Contract version the robot speaks. The field is required and checked before anything else in the
-payload, on the recovery and the eval connection alike. Reparo speaks one Contract version at a
+Contract version the robot speaks. The field is required and checked before the payload is
+validated and before any other payload check, persistence or agent graph lookup, on the recovery
+and the eval connection alike. Reparo speaks one Contract version at a
 time, today 2, and accepts only that JSON integer: a missing or `null` version, another number, or
 anything that isn't an integer (`"2"`, `2.0`, `true`) is refused, and so is a payload that is JSON
 but not an object. The refusal's content names the version Reparo speaks and the one received. The

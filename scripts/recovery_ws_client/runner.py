@@ -173,7 +173,7 @@ class RecoveryWsRunner:
         """The recovery payload in Reparo's Contract version, carrying the
         recovery task in eval mode.
 
-        The version replaces whatever the catalogue holds, so stored payloads
+        The version replaces whatever the catalog holds, so stored payloads
         keep working when the contract moves on.
         """
         payload = self.payload | {"contract_version": CONTRACT_VERSION}

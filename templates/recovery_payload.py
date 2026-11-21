@@ -140,7 +140,8 @@ class RecoveryPayload(TemplateModel):
     this run.
 
     `contract_version` names the shape of the robot contract the payload follows.
-    It is checked before anything else, and only `CONTRACT_VERSION` is accepted.
+    It is checked before the payload is validated, and only `CONTRACT_VERSION`
+    is accepted.
 
     `recovery_task` is the process author's description of what recovering the
     failing activity should achieve. For now only evals use it; the recovery
@@ -192,7 +193,6 @@ class RecoveryInputs(TemplateModel):
 
 __all__ = [
     "CONTRACT_VERSION",
-    "ContractVersion",
     "Modality",
     "RecoveryCapabilities",
     "RecoveryErroredAct",

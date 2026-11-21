@@ -110,7 +110,8 @@ def _decode_payload_or_raise(raw: str) -> Any:
 def _check_contract_version_or_raise(data: Any) -> None:
     """Refuse a decoded payload that doesn't speak Reparo's Contract version.
 
-    Runs before anything else reads the payload. Only the JSON integer equal to
+    Runs before the payload is validated and before any other payload check,
+    persistence or agent graph lookup. Only the JSON integer equal to
     `CONTRACT_VERSION` passes: a bool, a float or a string is not a version.
     """
     sent = data.get("contract_version") if isinstance(data, dict) else None
