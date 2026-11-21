@@ -532,12 +532,10 @@ class TooledGuiAgent:
         ) -> str:
             if name not in variables:
                 return f"Error: Variable '{name}' not found."
-            try:
-                value = _coerce_to_held_type(variables[name], value)
-            except ValueError as exc:
-                raise ValueError(f"Variable '{name}' was not changed: {exc}") from exc
-            variables[name] = value
-            return f"Variable '{name}' has been updated to {json.dumps(value)}."
+            variables[name] = _coerce_to_held_type(variables[name], value)
+            return (
+                f"Variable '{name}' has been updated to {json.dumps(variables[name])}."
+            )
 
         return _alter_variable
 
