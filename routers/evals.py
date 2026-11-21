@@ -274,6 +274,10 @@ async def _run_eval_turn(
             }
         )
         await robot.close()
+
+        exception.infered_success = result["success"]
+        session.add(exception)
+        session.commit()
     except AbortedByRobot as exc:
         if exception is not None:
             _record_abort(session, exception, exc.abort)
