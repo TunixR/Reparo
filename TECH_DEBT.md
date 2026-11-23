@@ -98,9 +98,9 @@ knowingly leave one behind, add it here.
 - **Where:** the end of `TooledGuiAgent.tooled_guiagent` in `database/agents/tooled_gui_agent.py`,
   which returns every assistant message left in `run.agent.messages`.
 - **Why it's debt:** the conversation manager edits that list in place. `GUI_WINDOW_SIZE` fits a
-  run of `MAX_ACTIONS` actions, but `alter_variable` calls don't count against the budget, so a
-  longer run loses its first turns at the end-of-run trim. Proactive compression also drops old
-  turns mid-run when the context fills up. The parent agent then gets a history that starts
-  partway through, and the full history floods its context anyway.
+  run of `MAX_ACTIONS` actions, but `alter_variable` and `note_progress` calls don't count against
+  the budget, so a longer run loses its first turns at the end-of-run trim. Proactive compression
+  also drops old turns mid-run when the context fills up. The parent agent then gets a history
+  that starts partway through, and the full history floods its context anyway.
 - **What fixing it means:** return a condensed result built in code, such as the `GuiRunReport`
   the graph node already gets, so the window only has to manage the model's context.

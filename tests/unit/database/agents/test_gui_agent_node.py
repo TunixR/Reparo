@@ -81,8 +81,22 @@ async def test_report_lists_the_actions_and_the_finished_summary(
             GuiAction(action_type="left_single", success=True),
             GuiAction(action_type="type", success=True),
         ],
+        notes=[],
     )
     assert len(robot.actions) == 2
+
+
+async def test_report_carries_every_progress_note(gui_node: GuiNode) -> None:
+    notes = [f"Step {i} done" for i in range(tooled_module.NOTES_SHOWN + 1)]
+    agent = gui_node(
+        *(ToolCall("note_progress", {"note": note}) for note in notes),
+        ToolCall("finished", {"content": "Invoice filled"}),
+    )
+
+    run = await agent.run_node(node_state(_inputs(), websocket=make_robot()), {})
+
+    assert isinstance(run.output, GuiRunReport)
+    assert run.output.notes == notes
 
 
 async def test_output_model_of_a_gui_agent_is_the_run_report(
@@ -126,7 +140,7 @@ async def test_finished_without_success_reports_the_goal_not_reached(
     run = await agent.run_node(node_state(_inputs(), websocket=make_robot()), {})
 
     assert run.output == GuiRunReport(
-        goal_reached=False, summary="The form is gone", actions=[]
+        goal_reached=False, summary="The form is gone", actions=[], notes=[]
     )
 
 
