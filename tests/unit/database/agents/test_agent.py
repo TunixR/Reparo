@@ -272,7 +272,7 @@ def test_get_input_schema_describes_the_arguments() -> None:
 def test_as_tool_reflects_agent_metadata():
     agent = _make_agent(_make_router())
     decorated = behaviour_of(agent).as_tool()
-    assert decorated._tool_name == behaviour_of(agent).tool_name  # pyright: ignore[reportPrivateUsage]
+    assert decorated._tool_name == "validation_test_agent"  # pyright: ignore[reportPrivateUsage]
     assert decorated._tool_spec.get("description", "") == agent.description  # pyright: ignore[reportPrivateUsage]
     # Input schema from decoration should mirror dynamic schema
     tool_schema = decorated._tool_spec.get("inputSchema", JSONSchema()).get("json", {})  # pyright: ignore[reportPrivateUsage]

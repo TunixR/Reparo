@@ -35,7 +35,8 @@ class TextGuiAgent(GuiAgent, agent_type=AgentType.TextGuiAgent):
     def validate_parser_path(cls, parser_path: str | None) -> None:
         if parser_path is None:
             raise ValueError("A TextGuiAgent needs a parser_path.")
-        _ = load_parser(parser_path)
+        # Describing the actions fails for a parser with no syntax for one of them.
+        _ = load_parser(parser_path).describe(cls.actions)
 
     @cached_property
     def parser(self) -> ActionParser:
@@ -46,7 +47,7 @@ class TextGuiAgent(GuiAgent, agent_type=AgentType.TextGuiAgent):
         return load_parser(self.agent.parser_path)
 
     @override
-    def _prompt(self, run: GuiRun, instruction: str) -> str:
+    def _prompt(self, instruction: str) -> str:
         return self.agent.prompt.format(
             instruction=instruction, actions=self.parser.describe(self.actions)
         )

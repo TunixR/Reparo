@@ -44,7 +44,6 @@ depends_on: str | Sequence[str] | None = None
 
 OLD_TYPES = ("Agent", "GuiAgent")
 NEW_TYPES = ("Agent", "TooledGuiAgent", "TextGuiAgent")
-GUI_TYPES = ("TooledGuiAgent", "TextGuiAgent")
 
 UITARS = "UI Standalone UITARS"
 UITARS_PARSER = "database.agents.behaviours.gui.parsers.uitars:UITarsParser"

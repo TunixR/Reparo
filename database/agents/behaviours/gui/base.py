@@ -90,14 +90,20 @@ class GuiAgent(AgentBehaviour, ABC):
     async def run_tool(
         self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
     ) -> str | dict[str, Any]:
-        """The report, or the error that ended the run as a string.
+        """The report, the model's messages and the variables as the run left them.
 
-        A robot disconnect and a ``RuntimeError`` still propagate.
+        An error that ended the run comes back as a string; a robot disconnect and a
+        ``RuntimeError`` still propagate. The parent needs the variables, since an
+        extraction stores what it obtained in them, and the messages, to judge the
+        outcome from what the agent did and saw.
         """
         run = await self.drive(invocation_state, inputs, contain_errors=True)
         if run.error is not None:
             return run.error
-        return run.report().model_dump()
+        return run.report().model_dump() | {
+            "messages": run.transcript(),
+            "variables": run.variables,
+        }
 
     async def drive(
         self,
@@ -165,11 +171,7 @@ class GuiAgent(AgentBehaviour, ABC):
             {
                 "role": "user",
                 "content": [
-                    {
-                        "text": self._prompt(
-                            run, self._instruction(run, inputs, variables)
-                        )
-                    },
+                    {"text": self._prompt(self._instruction(run, inputs, variables))},
                     {"image": {"format": "jpeg", "source": {"bytes": image}}},
                 ],
             }
@@ -212,7 +214,7 @@ class GuiAgent(AgentBehaviour, ABC):
     IMPORTANT: Give coordinates in a {model_width}x{model_height} space: x from 0 to {model_width} (left to right), y from 0 to {model_height} (top to bottom).
     """
 
-    def _prompt(self, run: GuiRun, instruction: str) -> str:  # pyright: ignore[reportUnusedParameter]
+    def _prompt(self, instruction: str) -> str:
         """The first message's text: the agent's prompt with its ``{instruction}``."""
         return self.agent.prompt.format(instruction=instruction)
 

@@ -221,8 +221,9 @@ class Agent(SQLModel, table=True):
         return self.router.get_model(**self.get_model_params())
 
     def __init__(self, **data: Any) -> None:
-        # Typed loosely: definitions may come as JSON, which __setattr__ validates.
-        # No rule across fields runs here, since model_validate() builds an empty
+        # Typed loosely: definitions may come as JSON, which __setattr__ validates,
+        # and the type checker would otherwise ask for every defaulted column. No
+        # rule across fields runs here, since model_validate() builds an empty
         # instance first; `validate_agent` runs them (database.agents.behaviours).
         super().__init__(**data)
 

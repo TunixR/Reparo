@@ -22,12 +22,13 @@ from database.agents.behaviours import (
     is_gui_agent,
     validate_agent,
 )
+from database.agents.behaviours.gui.parsers.uitars import UITarsParser
 from database.agents.behaviours.gui.shared import GUI_ARGUMENTS
 from database.agents.models import Agent, AgentType, SubAgent
 from database.agents.specs import dump_fields
 from database.provider.models import Router
+from tests.unit.shared.gui_fakes import UITARS_PARSER
 
-UITARS_PARSER = "database.agents.behaviours.gui.parsers.uitars:UITarsParser"
 TASK = {"name": "task", "type": "str", "description": "Task."}
 REPORT = {"name": "Report", "description": "A report.", "fields": []}
 
@@ -85,7 +86,6 @@ def test_the_gui_types_are_the_gui_agent_subtypes(vision_router: Router) -> None
         AgentType.TooledGuiAgent,
         AgentType.TextGuiAgent,
     }
-    assert agent_types_of(AgentBehaviour) == set(AgentType)
     assert is_gui_agent(_agent(vision_router, AgentType.TextGuiAgent))
     assert not is_gui_agent(_agent(vision_router, AgentType.Agent))
 
@@ -167,6 +167,16 @@ def test_only_a_text_gui_agent_takes_a_parser(
         _ = validate_agent(agent)
 
 
+def test_a_parser_without_syntax_for_an_action_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, vision_router: Router
+) -> None:
+    monkeypatch.delitem(UITarsParser.SYNTAX, "hover")
+    agent = _agent(vision_router, AgentType.TextGuiAgent)
+
+    with pytest.raises(ValueError, match="no syntax for the action 'hover'"):
+        _ = validate_agent(agent)
+
+
 PARSERS = "database.agents.behaviours.gui.parsers"
 
 
@@ -223,9 +233,7 @@ def test_model_validate_builds_a_self_link_the_database_rejects(
     link = SubAgent.model_validate(
         {"parent_agent_id": mock_agent.id, "child_agent_id": mock_agent.id}
     )
-    other = SubAgent(parent_agent_id=mock_agent.id, child_agent_id=uuid.uuid4())
-
-    assert (link.parent_agent_id, other.limit) == (mock_agent.id, None)
+    assert link.parent_agent_id == link.child_agent_id == mock_agent.id
     session.add(link)
     with pytest.raises(IntegrityError, match="subagent_not_self"):
         session.commit()

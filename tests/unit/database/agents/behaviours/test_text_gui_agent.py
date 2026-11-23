@@ -15,13 +15,13 @@ from tests.unit.shared.gui_fakes import (
     make_gui_agent,
     make_robot,
     patch_gui_io,
+    UITARS_PARSER,
     scripted_model,
 )
 from tests.unit.shared.scripted_model import Turn
 
 pytestmark = pytest.mark.asyncio
 
-UITARS_PARSER = "database.agents.behaviours.gui.parsers.uitars:UITarsParser"
 CLICK = "Thought: Click Submit.\nAction: click(point='<point>10 20</point>')"
 FINISHED = "Thought: Saved.\nAction: finished(content='Invoice filled')"
 

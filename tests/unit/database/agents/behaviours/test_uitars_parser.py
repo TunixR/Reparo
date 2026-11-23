@@ -18,6 +18,7 @@ from database.agents.behaviours.gui.shared import (
     GuiActions,
     GuiActionSpec,
 )
+from tests.unit.shared.gui_fakes import UITARS_PARSER
 
 PARSER = UITarsParser()
 
@@ -98,7 +99,7 @@ REPLIES: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
 
 def test_the_ui_tars_parser_implements_the_interface() -> None:
     assert isinstance(PARSER, ActionParser)
-    parser = load_parser("database.agents.behaviours.gui.parsers.uitars:UITarsParser")
+    parser = load_parser(UITARS_PARSER)
     assert isinstance(parser, UITarsParser)
 
 

@@ -1,8 +1,9 @@
 from collections.abc import Sequence
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlmodel import select
 
 from database.agent_graphs import service
@@ -64,7 +65,7 @@ def create_agent(
     payload: AgentCreate,
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
-) -> Any:
+) -> BaseModel:
     router_obj = session.get(Router, payload.router_id)
     if not router_obj:
         raise HTTPException(
@@ -101,7 +102,7 @@ def update_agent(
     payload: AgentUpdate,
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
-) -> Any:
+) -> BaseModel:
     agent = session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(
@@ -134,7 +135,7 @@ def update_agent(
     return _saved(agent, ignored)
 
 
-def _saved(agent: Agent, ignored: list[IgnoredField]) -> Any:
+def _saved(agent: Agent, ignored: list[IgnoredField]) -> BaseModel:
     """The response of create and update: the agent and the fields its type ignores."""
     return SavedAgent.model_validate(
         agent.model_dump() | {"ignored_fields": [f.model_dump() for f in ignored]}

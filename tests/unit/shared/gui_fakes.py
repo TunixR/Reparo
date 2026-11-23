@@ -44,6 +44,9 @@ class FakeHook(HookProvider):
         return None
 
 
+UITARS_PARSER = "database.agents.behaviours.gui.parsers.uitars:UITarsParser"
+
+
 def make_robot(*, action_success: bool = True) -> FakeWebSocket:
     """A robot that serves 64x48 screenshots and answers actions with ``action_success``."""
     screenshots = [make_test_image_bytes(size=(64, 48)) for _ in range(10)]
@@ -85,6 +88,7 @@ def make_gui_agent[T: GuiAgent](
     prompt: str = "{instruction}",
     parser_path: str | None = None,
     name: str = "Test GUI Agent",
+    description: str = "A GUI agent for tests.",
 ) -> T:
     """A GUI agent of ``kind`` whose inner Strands model plays ``turns``.
 
@@ -94,7 +98,7 @@ def make_gui_agent[T: GuiAgent](
     model = ScriptedModel(*turns)
     row = Agent(
         name=name,
-        description="A GUI agent for tests.",
+        description=description,
         prompt=prompt,
         type=kind.agent_type,
         input_type=Agent.InputType.IMAGETEXT,

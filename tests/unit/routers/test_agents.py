@@ -12,6 +12,7 @@ from database.agents.models import Agent, AgentCreate, AgentType, AgentUpdate
 from database.auth.models import User
 from database.provider.models import Router
 from tests.unit.shared.auth_helpers import make_auth_headers
+from tests.unit.shared.gui_fakes import UITARS_PARSER
 
 
 def make_agent_payload(
@@ -470,7 +471,6 @@ def test_agents_reject_a_bad_definition_naming_the_field(
 # -- Agent types
 ##############################
 
-UITARS_PARSER = "database.agents.behaviours.gui.parsers.uitars:UITarsParser"
 GUI_IGNORED = ["arguments", "input_type", "output_model", "tools", "sub_agents"]
 
 

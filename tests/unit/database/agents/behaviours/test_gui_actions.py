@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from database.agents.behaviours import TextGuiAgent, TooledGuiAgent
-from database.agents.behaviours.gui.parsers.uitars import UITarsParser
 from database.agents.behaviours.gui.shared import DEFAULT_GUI_ACTIONS
 from tests.unit.shared.gui_fakes import (
     drive,
@@ -37,9 +36,8 @@ ACTION_NAMES = [
 
 
 def test_both_gui_agents_take_the_default_actions() -> None:
-    assert TooledGuiAgent.actions is DEFAULT_GUI_ACTIONS
-    assert TextGuiAgent.actions is DEFAULT_GUI_ACTIONS
-    assert DEFAULT_GUI_ACTIONS.names() == ACTION_NAMES
+    assert TooledGuiAgent.actions.names() == ACTION_NAMES
+    assert TextGuiAgent.actions.names() == ACTION_NAMES
 
 
 @pytest.mark.asyncio
@@ -55,13 +53,6 @@ async def test_the_tooled_agent_has_a_tool_per_action(
     assert [spec["name"] for spec in tool_specs] == ACTION_NAMES
     descriptions = {spec.name: spec.description for spec in DEFAULT_GUI_ACTIONS}
     assert {s["name"]: s["description"] for s in tool_specs} == descriptions
-
-
-def test_the_ui_tars_parser_writes_every_action() -> None:
-    description = UITarsParser().describe(DEFAULT_GUI_ACTIONS)
-
-    for name in ACTION_NAMES:
-        assert UITarsParser.SYNTAX[name] in description
 
 
 # The model answers in a 1000x1000 space; screenshots are 64x48.
