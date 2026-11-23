@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import Lock
@@ -23,61 +23,68 @@ from strands.types.tools import ToolResultContent
 
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
 from observability import attributes as attrs
-from settings import MAX_GUI_IMAGES
+from settings import MAX_GUI_IMAGES, MAX_GUI_IMAGES_PRUNE_CHUNK
 
 MAX_REQUIRED_TOOL_REMINDERS = 3
 
-OMITTED_IMAGE_TEXT = "ommited screenshot due to max allowed images per message"
+OMITTED_IMAGE_TEXT = "screenshot omitted to save context"
 
 
 class MaxGuiImagesHook(HookProvider):
-    """Keep only the most recent images in the conversation before each model call."""
+    """Bound the screenshots in the conversation, pruning them in batches.
 
-    def __init__(self, max_images: int = MAX_GUI_IMAGES):
+    Before each model call, the screenshots still in the conversation may grow to
+    `max_images + prune_chunk`, the real cap. Only when they exceed it are all but the
+    newest `max_images` replaced with a text placeholder. Between prunes the history, and so
+    the request prefix the provider caches, stays byte-identical.
+    """
+
+    def __init__(
+        self,
+        max_images: int = MAX_GUI_IMAGES,
+        prune_chunk: int = MAX_GUI_IMAGES_PRUNE_CHUNK,
+    ):
         """
         Initializer.
 
         Args:
-            max_images: Maximum number of screenshots to keep. Older images are
-                replaced with a text placeholder.
+            max_images: Number of newest screenshots kept after a prune.
+            prune_chunk: Screenshots allowed to pile up beyond `max_images` before
+                the next prune. 0 prunes on every call that exceeds `max_images`.
         """
         if max_images < 0:
             raise ValueError("max_images must be non-negative")
+        if prune_chunk < 0:
+            raise ValueError("prune_chunk must be non-negative")
         self.max_images = max_images
+        self.prune_chunk = prune_chunk
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         registry.add_callback(BeforeModelCallEvent, self.limit_images)
 
     def limit_images(self, event: BeforeModelCallEvent) -> None:
-        remaining = self.max_images
-        for message in reversed(event.agent.messages):
-            remaining = self._limit_message_images(message, remaining)
-
-    def _limit_message_images(self, message: Message, remaining: int) -> int:
-        content = message["content"]
-        for index in range(len(content) - 1, -1, -1):
-            block = content[index]
-            if "image" in block:
-                remaining = self._handle_image_block(block, remaining)
-            elif "toolResult" in block:
-                result_content = block["toolResult"].get("content", [])
-                for result_index in range(len(result_content) - 1, -1, -1):
-                    result_block = result_content[result_index]
-                    if "image" in result_block:
-                        remaining = self._handle_image_block(result_block, remaining)
-        return remaining
+        images = list(self._images_newest_first(event.agent.messages))
+        if len(images) <= self.max_images + self.prune_chunk:
+            return
+        for block in images[self.max_images :]:
+            del block["image"]
+            block["text"] = OMITTED_IMAGE_TEXT
 
     @staticmethod
-    def _handle_image_block(
-        block: ContentBlock | ToolResultContent, remaining: int
-    ) -> int:
-        if remaining > 0:
-            return remaining - 1
-
-        _ = block.pop("image", None)
-        block["text"] = OMITTED_IMAGE_TEXT
-        return remaining
+    def _images_newest_first(
+        messages: Sequence[Message],
+    ) -> Iterator[ContentBlock | ToolResultContent]:
+        """Blocks still holding an image, newest first; placeholders are text, not images."""
+        for message in reversed(messages):
+            for block in reversed(message["content"]):
+                if "image" in block:
+                    yield block
+                elif "toolResult" in block:
+                    result_content = block["toolResult"].get("content", [])
+                    for result_block in reversed(result_content):
+                        if "image" in result_block:
+                            yield result_block
 
 
 class RequireToolCalls(HookProvider):
