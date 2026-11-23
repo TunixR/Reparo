@@ -1,4 +1,8 @@
-"""``WS /evals/recovery/ws`` takes the recovery task from the payload, and only from there."""
+"""``WS /evals/recovery/ws`` takes the recovery task from the payload, and only from there.
+
+It ends a turn it can't run the way a recovery does: an ``error`` with a code, and the code as
+the close reason.
+"""
 
 from __future__ import annotations
 
@@ -102,3 +106,32 @@ def test_eval_still_rejects_unknown_payload_keys(
     assert closed["code"] == 1003
     assert closed["reason"] == "VALIDATION_ERROR"
     assert seen_tasks == []
+
+
+# A ValueError too: one raised by the run is not the robot's bad request.
+@pytest.mark.parametrize("error", [RuntimeError("model down"), ValueError("bad state")])
+def test_an_exception_during_the_eval_is_an_internal_error(
+    client: TestClient,
+    robot_key_raw: str,
+    eval_gui_agent: Agent,
+    valid_recovery_payload: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    async def _recovery(*_: Any) -> dict[str, Any]:
+        raise error
+
+    monkeypatch.setattr(evals_module, "_run_standalone_recovery", _recovery)
+
+    with _connect(client, robot_key_raw, eval_gui_agent) as ws:
+        ws.send_json(valid_recovery_payload | {"recovery_task": "Approve the request"})
+        message = receive_skipping_pings(ws)
+        closed = ws.receive()
+
+    assert message == {
+        "type": "error",
+        "code": "INTERNAL_ERROR",
+        "content": "Internal server error",
+    }
+    assert closed["code"] == 1011
+    assert closed["reason"] == "INTERNAL_ERROR"

@@ -156,7 +156,8 @@ depends on the connection:
 - On a **recovery** connection it is optional and experimental, and Reparo may ignore it. Today the
   recovery endpoint accepts it and ignores it, so the agents behave as if it were absent.
 - On an **eval** connection it is required and run as given: it is the recovery task the GUI agent
-  runs. A payload without one is refused with `error`, `VALIDATION_ERROR`, and close code 1003.
+  runs. A payload without one, or one that isn't valid, is refused with `error`, `VALIDATION_ERROR`,
+  and close code 1003; the eval connection's other endings are those of the table below.
 
 **During the recovery** the server sends `ping`, `screenshot` (the robot answers with one binary JPEG
 frame) and `action` (the robot answers with a JSON result: `success`, `action_type` and, on failure,

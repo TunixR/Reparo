@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from opentelemetry import trace
 from opentelemetry.trace import Span
-from pydantic import Field, ValidationError
+from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
 from sqlmodel import select
 from strands import Agent as StrandsAgent
@@ -46,6 +46,7 @@ from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
     _persist_exception_with_context,
     _record_abort,
     _send_error_and_close,
+    _validate_payload_or_raise,
     find_enabled_robot_key,
 )
 from settings import PROVIDER_API_BASE, PROVIDER_API_KEY, PROVIDER_MODEL
@@ -57,9 +58,8 @@ tracer = trace.get_tracer(__name__)
 
 logger = logging.getLogger(__name__)
 
-# An invalid payload on this connection. The recovery connection sends
-# INVALID_RECOVERY_PAYLOAD; the eval takes that code with the next
-# `contract_version` bump (#314).
+# An invalid payload on this connection; the recovery connection sends
+# INVALID_RECOVERY_PAYLOAD. See TECH_DEBT.md, entry 9.
 EVAL_VALIDATION_ERROR = "VALIDATION_ERROR"
 
 
@@ -131,20 +131,15 @@ def _get_valid_agent(
     return agent
 
 
-def _invalid_eval_payload(content: str) -> RecoveryWsDomainError:
-    return RecoveryWsDomainError(
-        code=EVAL_VALIDATION_ERROR, content=content, close_code=CLOSE_INVALID_PAYLOAD
-    )
-
-
 def _validate_eval_payload_or_raise(data: Any) -> tuple[RecoveryPayload, str]:
     """The payload and its recovery task, which an eval requires."""
-    try:
-        payload = RecoveryPayload.model_validate(data)
-    except ValidationError as exc:
-        raise _invalid_eval_payload(f"Invalid recovery payload: {exc}") from exc
+    payload = _validate_payload_or_raise(data, code=EVAL_VALIDATION_ERROR)
     if payload.recovery_task is None:
-        raise _invalid_eval_payload("recovery_task must be a non-empty string")
+        raise RecoveryWsDomainError(
+            code=EVAL_VALIDATION_ERROR,
+            content="recovery_task must be a non-empty string",
+            close_code=CLOSE_INVALID_PAYLOAD,
+        )
     return payload, payload.recovery_task
 
 
@@ -273,18 +268,18 @@ async def _run_eval_turn(
     """
     exception: RobotException | None = None
     try:
-        payload = _decode_payload_or_raise(await robot.receive_text())
-        _check_contract_version_or_raise(payload)
-        validated, recovery_task = _validate_eval_payload_or_raise(payload)
+        data = _decode_payload_or_raise(await robot.receive_text())
+        _check_contract_version_or_raise(data)
+        payload, recovery_task = _validate_eval_payload_or_raise(data)
 
-        recovery_context = RecoveryContext.from_payload(payload=validated)
+        recovery_context = RecoveryContext.from_payload(payload=payload)
         exception = _persist_exception_with_context(
-            session, payload, robot_key, recovery_context
+            session, data, robot_key, recovery_context
         )
 
         result = await robot.run(
             _run_standalone_recovery(
-                robot, payload, recovery_task, agent, str(exception.id)
+                robot, data, recovery_task, agent, str(exception.id)
             )
         )
 

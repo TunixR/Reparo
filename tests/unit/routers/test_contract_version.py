@@ -105,6 +105,7 @@ def test_non_json_payload_is_an_invalid_payload(
     assert message["type"] == "error"
     assert message["code"] == "INVALID_RECOVERY_PAYLOAD"
     assert closed["code"] == 1003
+    assert closed["reason"] == "INVALID_RECOVERY_PAYLOAD"
     assert session.exec(select(RobotException)).first() is None
 
 
