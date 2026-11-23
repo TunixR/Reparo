@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Enum, Field, Relationship, SQLModel
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.hooks import HookProvider
 from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
@@ -525,6 +526,12 @@ class Agent(SQLModel, table=True):
             hooks=hooks,
             system_prompt=self.prompt,
             messages=messages,  # type: ignore This works fine
+            # Strands' default window, with the seeded pair and the instruction
+            # pinned: it trims when the first run ends, and the structured-output
+            # call still has to see the inputs.
+            conversation_manager=SlidingWindowConversationManager(
+                pin_first=len(messages) + 1
+            ),
         )
 
         try:

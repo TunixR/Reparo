@@ -182,6 +182,25 @@ async def test_required_tools_are_reminded(
 
 
 @pytest.mark.asyncio
+async def test_the_structured_output_call_still_sees_the_instruction_after_many_tool_turns(
+    scripted_agent: ScriptedAgent, entry_point: EntryPoint, session: Session
+) -> None:
+    # 25 tool turns are 50 messages, past Strands' default 40-message window.
+    agent, model = scripted_agent(
+        *[ToolCall("ping", {})] * 25,
+        "Done.",
+        ToolCall("ScriptedReport", {"done": True}),
+    )
+    agent = _with_ping(session, agent)
+
+    assert await entry_point(agent, {"websocket": None}, INPUTS) == {"done": True}
+
+    user_texts = _user_texts(model)
+    assert user_texts[0] == agent.prompt
+    assert "task: Recover the robot" in user_texts
+
+
+@pytest.mark.asyncio
 async def test_traces_hang_off_the_callers_state(
     scripted_agent: ScriptedAgent,
     entry_point: EntryPoint,
