@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 import pytest
 from sqlmodel import Session
+from strands.models.openai import OpenAIModel
 
 from database.provider.models import Router
 
@@ -166,9 +167,10 @@ def test_router_get_model_leaves_an_unset_context_window_to_strands(
     make_router: Callable[..., Router],
 ):
     router = make_router(model_name="gpt-4o")
+    known = OpenAIModel(client_args={"api_key": "-"}, model_id="gpt-4o")
+    assert known.context_window_limit is not None  # Strands' table knows gpt-4o
 
     model = router.get_model()
 
-    # Strands' bundled table knows gpt-4o; an unset router doesn't override it.
-    assert model.context_window_limit == 128_000
-    assert model.get_config()["context_window_limit"] == 128_000
+    assert model.context_window_limit == known.context_window_limit
+    assert model.get_config()["context_window_limit"] == known.context_window_limit

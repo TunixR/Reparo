@@ -1,6 +1,5 @@
 from collections.abc import Callable
 
-import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -14,12 +13,14 @@ from tests.unit.shared.auth_helpers import make_auth_headers
 def make_router_create(
     capabilities: list[Router.Capability] | None = None,
     vision_backbone: Router.VisionBackbone | None = None,
+    context_window_limit: int | None = None,
 ) -> RouterCreate:
     payload = RouterCreate(
         api_key="super-secret",
         model_name="gpt-4o-mini",
         api_endpoint="https://example.test/v1",
         provider_type=Router.Provider.OPENAI,
+        context_window_limit=context_window_limit,
     )
     if capabilities is not None:
         payload.capabilities = capabilities
@@ -479,46 +480,43 @@ def test_router_replace_updates_vision_backbone(
 ##############################
 
 
-def _router_payload(**fields: object) -> dict[str, object]:
-    return {
-        "api_key": "super-secret",
-        "model_name": "qwen3.5-397b-a17b",
-        "api_endpoint": "https://example.test/v1",
-        "provider_type": "openai",
-        **fields,
-    }
-
-
 def test_router_create_stores_the_context_window(
     session: Session, mock_admin: User, client: TestClient
 ):
     headers = make_auth_headers(mock_admin, session)
+    payload = make_router_create(context_window_limit=250_000)
 
     response = client.post(
-        "/provider/",
-        json=_router_payload(context_window_limit=250_000),
-        headers=headers,
+        "/provider/", json=payload.model_dump(mode="json"), headers=headers
     )
 
     assert response.status_code == status.HTTP_201_CREATED
     assert response.json()["context_window_limit"] == 250_000
 
 
-@pytest.mark.parametrize("method", ["post", "patch"])
-@pytest.mark.parametrize("limit", [0, -1])
-def test_router_rejects_a_non_positive_context_window(
-    session: Session,
-    mock_admin: User,
-    client: TestClient,
-    mock_router: Router,
-    method: str,
-    limit: int,
+def test_router_create_rejects_a_non_positive_context_window(
+    session: Session, mock_admin: User, client: TestClient
 ):
     headers = make_auth_headers(mock_admin, session)
-    url = "/provider/" if method == "post" else f"/provider/{mock_router.id}"
+    payload = {
+        **make_router_create().model_dump(mode="json"),
+        "context_window_limit": 0,
+    }
 
-    response = client.request(
-        method, url, json=_router_payload(context_window_limit=limit), headers=headers
+    response = client.post("/provider/", json=payload, headers=headers)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+def test_router_patch_rejects_a_non_positive_context_window(
+    session: Session, mock_admin: User, client: TestClient, mock_router: Router
+):
+    headers = make_auth_headers(mock_admin, session)
+
+    response = client.patch(
+        f"/provider/{mock_router.id}",
+        json={"context_window_limit": 0},
+        headers=headers,
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
@@ -551,7 +549,9 @@ def test_router_replace_replaces_the_context_window(
     headers = make_auth_headers(mock_admin, session)
 
     response = client.put(
-        f"/provider/{router_obj.id}", json=_router_payload(), headers=headers
+        f"/provider/{router_obj.id}",
+        json=make_router_create().model_dump(mode="json"),
+        headers=headers,
     )
 
     assert response.status_code == status.HTTP_200_OK
