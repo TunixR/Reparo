@@ -10,7 +10,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span
 from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
-from sqlmodel import select
+from sqlmodel import col, select
 from strands import Agent as StrandsAgent
 
 import database.general as database
@@ -19,7 +19,8 @@ from agent_tools.utils import (
     PROCESS_MODEL_STATE_KEY,
     set_continuation,
 )
-from database.agents.models import Agent, AgentType
+from database.agents.behaviours import GuiAgent, agent_types_of, behaviour_of
+from database.agents.models import Agent
 from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
@@ -122,7 +123,9 @@ def _get_valid_agent(
 
     agent = session.exec(
         select(Agent).where(
-            Agent.id == agent_id, Agent.enabled, Agent.type == AgentType.GuiAgent
+            Agent.id == agent_id,
+            Agent.enabled,
+            col(Agent.type).in_(agent_types_of(GuiAgent)),
         )
     ).first()
     if not agent:
@@ -161,7 +164,7 @@ async def _run_standalone_recovery(
         PROCESS_MODEL_STATE_KEY: model,
         "variables": copy.deepcopy(variables),
     }
-    override_invocation_state = {
+    gui_state: dict[str, Any] = {
         "websocket": robot,
         "robot_exception_id": robot_exception_id,
         "variables": invocation_state["variables"],
@@ -169,19 +172,21 @@ async def _run_standalone_recovery(
         CAPABILITIES_STATE_KEY: payload.get("capabilities"),
     }
 
-    guiagent_result, _ = await agent.as_tool()(
-        task=recovery_task,
-        variables=variables,
-        ui_log=ui_log,
-        errored_act=errored_act,
-        model=model,
-        override_invocation_state=override_invocation_state,
+    gui_agent = behaviour_of(agent)
+    if not isinstance(gui_agent, GuiAgent):
+        raise TypeError(f"The eval agent '{agent.name}' is not a GUI agent.")
+    run = await gui_agent.drive(
+        gui_state,
+        {
+            "task": recovery_task,
+            "variables": variables,
+            "ui_log": ui_log,
+            "errored_act": errored_act,
+            "model": model,
+        },
+        contain_errors=True,
     )
-
-    if isinstance(guiagent_result, str):
-        trace_text = guiagent_result
-    else:
-        trace_text = str(guiagent_result)
+    trace_text = run.error if run.error is not None else str(run.transcript())
 
     agent_model = TracedOpenAIModel(
         client_args={"api_key": PROVIDER_API_KEY, "base_url": PROVIDER_API_BASE},

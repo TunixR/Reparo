@@ -7,9 +7,10 @@ from pydantic import BaseModel
 from sqlmodel import Session
 from strands.types.tools import JSONSchema
 
+from database.agents.behaviours import behaviour_of, validate_agent
+from database.agents.behaviours.gui.shared import GuiRunReport
 from database.agents.models import Agent, AgentType, AgentUpdate
 from database.agents.specs import OutputModelSpec
-from database.agents.tooled_gui_agent import GuiRunReport
 from database.logging.models import (
     ToolTrace,  # pyright: ignore[reportUnusedImport] # noqa: F401 Needs to be imported to register with SQLModel
 )
@@ -43,10 +44,16 @@ def _make_agent(router: Router, **overrides: Any) -> Agent:
         name="Validation Test Agent",
         description="Agent used for testing validation logic.",
         prompt="You are a test agent.",
-        input_type=Agent.InputType.TEXT,
         enabled=True,
         router=router,
-        **({"type": AgentType.Agent, "arguments": ARGUMENTS} | overrides),
+        **(
+            {
+                "type": AgentType.Agent,
+                "input_type": Agent.InputType.TEXT,
+                "arguments": ARGUMENTS,
+            }
+            | overrides
+        ),
     )
 
 
@@ -215,7 +222,7 @@ REPORT: dict[str, Any] = {
 def test_the_output_class_is_built_from_the_output_model() -> None:
     agent = _make_agent(_make_router(), output_model=REPORT)
 
-    report = agent.output_class()
+    report = behaviour_of(agent).output_class()
 
     assert report is not None
     assert report.__name__ == "TriageReport"
@@ -223,13 +230,15 @@ def test_the_output_class_is_built_from_the_output_model() -> None:
         "kind": "ui",
         "note": None,
     }
-    assert _make_agent(_make_router()).output_class() is None
+    assert behaviour_of(_make_agent(_make_router())).output_class() is None
 
 
 def test_a_gui_agent_always_reports_a_gui_run_report() -> None:
-    agent = _make_agent(_make_router(), type=AgentType.GuiAgent, output_model=REPORT)
+    agent = _make_agent(
+        _make_router(), type=AgentType.TooledGuiAgent, output_model=REPORT
+    )
 
-    assert agent.output_class() is GuiRunReport
+    assert behaviour_of(agent).output_class() is GuiRunReport
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +271,8 @@ def test_get_input_schema_describes_the_arguments() -> None:
 
 def test_as_tool_reflects_agent_metadata():
     agent = _make_agent(_make_router())
-    decorated = agent.as_tool()
-    assert decorated._tool_name == agent.get_tool_name()  # pyright: ignore[reportPrivateUsage]
+    decorated = behaviour_of(agent).as_tool()
+    assert decorated._tool_name == behaviour_of(agent).tool_name  # pyright: ignore[reportPrivateUsage]
     assert decorated._tool_spec.get("description", "") == agent.description  # pyright: ignore[reportPrivateUsage]
     # Input schema from decoration should mirror dynamic schema
     tool_schema = decorated._tool_spec.get("inputSchema", JSONSchema()).get("json", {})  # pyright: ignore[reportPrivateUsage]
@@ -288,30 +297,24 @@ def test_text_agent_aligns_with_text_capability(
     assert agent.input_type == Agent.InputType.TEXT
 
 
-def test_agent_construction_rejects_text_agent_on_vision_only_router(
-    make_agent: Callable[..., Agent],
+def test_validate_agent_rejects_a_text_agent_on_a_vision_only_router(
     make_router: Callable[..., Router],
 ):
-    router = make_router(
-        capabilities=[Router.Capability.VISION],
-        persist=False,
-    )
+    router = make_router(capabilities=[Router.Capability.VISION], persist=False)
+    agent = _make_agent(router, input_type=Agent.InputType.TEXT)
 
     with pytest.raises(ValueError, match="TEXT"):
-        make_agent(router=router, input_type=Agent.InputType.TEXT)
+        _ = validate_agent(agent)
 
 
-def test_agent_construction_rejects_image_agent_without_vision(
-    make_agent: Callable[..., Agent],
+def test_validate_agent_rejects_an_image_agent_without_vision(
     make_router: Callable[..., Router],
 ):
-    router = make_router(
-        capabilities=[Router.Capability.TEXT],
-        persist=False,
-    )
+    router = make_router(capabilities=[Router.Capability.TEXT], persist=False)
+    agent = _make_agent(router, input_type=Agent.InputType.IMAGETEXT)
 
     with pytest.raises(ValueError, match="VISION"):
-        make_agent(router=router, input_type=Agent.InputType.IMAGETEXT)
+        _ = validate_agent(agent)
 
 
 def test_imagtext_agent_aligns_with_text_and_vision_capabilities(
@@ -328,18 +331,17 @@ def test_imagtext_agent_aligns_with_text_and_vision_capabilities(
     assert agent.input_type == Agent.InputType.IMAGETEXT
 
 
-def test_agent_update_rejects_input_type_not_supported_by_router(
+def test_an_update_to_an_input_type_the_router_lacks_fails_validation(
     make_agent: Callable[..., Agent],
     make_router: Callable[..., Router],
 ):
     router = make_router(capabilities=[Router.Capability.TEXT])
     agent = make_agent(router=router, input_type=Agent.InputType.TEXT)
 
+    agent.apply_update(AgentUpdate(input_type=Agent.InputType.IMAGETEXT), router)
+
     with pytest.raises(ValueError, match="VISION"):
-        agent.apply_update(
-            AgentUpdate(input_type=Agent.InputType.IMAGETEXT),
-            router,
-        )
+        _ = validate_agent(agent)
 
 
 def test_agent_update_accepts_compatible_input_type(

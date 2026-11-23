@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
+from database.agents.behaviours import AgentBehaviour
 from database.agents.models import Agent
 from database.logging.models import RecoveryContext, RobotException
 from robot.capabilities import CAPABILITIES_STATE_KEY
@@ -59,7 +60,7 @@ def test_recovery_ws_ingest_stores_raw_payload_and_normalized_context(
         )
         return NodeRun(output=ResponseToRPA(success=True))
 
-    monkeypatch.setattr(Agent, "run_node", _fake_run_node, raising=True)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _fake_run_node, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     with client.websocket_connect(
@@ -195,7 +196,7 @@ def test_recovery_ws_ingest_stores_declared_capabilities(
         captured["capabilities"] = invocation_state[CAPABILITIES_STATE_KEY]
         return NodeRun(output=ResponseToRPA(success=False))
 
-    monkeypatch.setattr(Agent, "run_node", _fake_run_node, raising=True)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _fake_run_node, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     with client.websocket_connect(
@@ -228,7 +229,7 @@ def test_recovery_ws_accepts_recovery_task_and_does_not_pass_it_to_the_agent(
         calls.append({"invocation_state": invocation_state, "inputs": inputs})
         return NodeRun(output=ResponseToRPA(success=False))
 
-    monkeypatch.setattr(Agent, "run_node", _fake_run_node, raising=True)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _fake_run_node, raising=True)
 
     headers = {"X-ROBOT-KEY": valid_robot_key_raw}
     messages: list[dict[str, Any]] = []

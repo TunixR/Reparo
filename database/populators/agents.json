@@ -244,85 +244,20 @@
     },
     {
       "name": "UI Standalone UITARS",
-      "description": "Recovers the UI by acting on the robot's desktop through action tools, each returning a fresh screenshot.",
-      "prompt_file": "gui_agent_tooled.md",
+      "description": "Recovers the UI by writing UI-TARS actions as text, which its parser reads and runs on the robot's desktop.",
+      "prompt_file": "gui_agent_text.md",
       "router": "uitars",
-      "agent_type": "GuiAgent",
-      "input_type": "IMAGETEXT",
-      "enabled": false,
-      "arguments": [
-        {
-          "name": "task",
-          "type": "str",
-          "description": "Task describing what needs to be done to get the process back on track."
-        },
-        {
-          "name": "variables",
-          "type": "dict",
-          "description": "Execution variables."
-        },
-        {
-          "name": "ui_log",
-          "type": "list",
-          "description": "Ordered UI execution history leading up to the failure."
-        },
-        {
-          "name": "errored_act",
-          "type": "dict",
-          "description": "Structured information about the action that failed."
-        },
-        {
-          "name": "model",
-          "type": "str",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
-        }
-      ],
-      "output_model": null,
-      "tools": {
-        "names": [],
-        "limits": []
-      }
+      "agent_type": "TextGuiAgent",
+      "parser_path": "database.agents.behaviours.gui.parsers.uitars:UITarsParser",
+      "enabled": false
     },
     {
       "name": "Tooled GuiAgent",
-      "description": "Tool based GUI agent that uses tools for actions (database/agents/tooled_guiagent.py)",
+      "description": "Recovers the UI by acting on the robot's desktop through action tools, each returning a fresh screenshot.",
       "prompt_file": "gui_agent_tooled.md",
       "router": "grounding",
-      "agent_type": "GuiAgent",
-      "input_type": "IMAGETEXT",
-      "enabled": true,
-      "arguments": [
-        {
-          "name": "task",
-          "type": "str",
-          "description": "Task describing what needs to be done to get the process back on track."
-        },
-        {
-          "name": "variables",
-          "type": "dict",
-          "description": "Execution variables."
-        },
-        {
-          "name": "ui_log",
-          "type": "list",
-          "description": "Ordered UI execution history leading up to the failure."
-        },
-        {
-          "name": "errored_act",
-          "type": "dict",
-          "description": "Structured information about the action that failed."
-        },
-        {
-          "name": "model",
-          "type": "str",
-          "description": "Process model, in BPMN XML or another textual format, whose task ids are the model event ids that model_event_id refers to."
-        }
-      ],
-      "output_model": null,
-      "tools": {
-        "names": [],
-        "limits": []
-      }
+      "agent_type": "TooledGuiAgent",
+      "enabled": true
     },
     {
       "name": "Continuation Inferer",

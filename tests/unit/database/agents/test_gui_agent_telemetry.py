@@ -1,4 +1,4 @@
-"""TooledGuiAgent reports its task, actions and screenshots through GuiTaskTelemetry."""
+"""A TooledGuiAgent reports its task, actions and screenshots through GuiTaskTelemetry."""
 
 from __future__ import annotations
 
@@ -11,17 +11,13 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Tracer
 
-import database.agents.tooled_gui_agent as tooled_module
+import database.agents.behaviours.gui.base as gui_base
 import observability.instrumentation.gui_agent as gui_agent_module
-from database.agents.tooled_gui_agent import TooledGuiAgent
+from database.agents.behaviours.gui import GuiAgent
+from database.agents.behaviours.gui.shared import GuiRun
 from tests.unit.shared.fake_websocket import FakeWebSocket
+from tests.unit.shared.gui_fakes import drive, make_gui_agent, make_robot, patch_gui_io
 from tests.unit.shared.scripted_model import ToolCall
-from tests.unit.shared.tooled_gui_fakes import (
-    GUI_TASK_INPUT,
-    make_robot,
-    make_tooled_gui_agent,
-    patch_gui_io,
-)
 
 pytestmark = pytest.mark.asyncio
 
@@ -51,15 +47,12 @@ def _no_io(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _run(
-    tracer: Tracer, gui_agent: TooledGuiAgent, robot: FakeWebSocket
-) -> tuple[Any, int]:
-    """Call the tool inside a stand-in for its Strands ``execute_tool`` span."""
-    with tracer.start_as_current_span("execute_tool tooled_guiagent"):
-        result = await gui_agent.tooled_guiagent(  # pyright: ignore[reportCallIssue]
-            **GUI_TASK_INPUT,
-            override_invocation_state={"websocket": robot},
-        )
-    return result, len(robot.actions)
+    tracer: Tracer, gui_agent: GuiAgent, robot: FakeWebSocket
+) -> tuple[GuiRun, int]:
+    """Run the agent inside a stand-in for its Strands ``execute_tool`` span."""
+    with tracer.start_as_current_span("execute_tool test_gui_agent"):
+        run = await drive(gui_agent, robot)
+    return run, len(robot.actions)
 
 
 def _spans(exporter: InMemorySpanExporter, name: str) -> list[ReadableSpan]:
@@ -67,14 +60,14 @@ def _spans(exporter: InMemorySpanExporter, name: str) -> list[ReadableSpan]:
 
 
 def _task_attributes(exporter: InMemorySpanExporter) -> dict[str, Any]:
-    [task] = _spans(exporter, "execute_tool tooled_guiagent")
+    [task] = _spans(exporter, "execute_tool test_gui_agent")
     return dict(task.attributes or {})
 
 
 async def test_finished_task_reports_actions_and_screenshots(
     tracer: Tracer, exporter: InMemorySpanExporter
 ) -> None:
-    gui_agent = make_tooled_gui_agent(
+    gui_agent = make_gui_agent(
         ToolCall("click", {"start_box": [10, 20]}),
         ToolCall("finished", {"content": "Invoice filled"}),
     )
@@ -107,7 +100,7 @@ async def test_finished_task_reports_actions_and_screenshots(
 async def test_failed_action_is_recorded_without_its_inputs(
     tracer: Tracer, exporter: InMemorySpanExporter
 ) -> None:
-    gui_agent = make_tooled_gui_agent(
+    gui_agent = make_gui_agent(
         ToolCall("type_text", {"content": TYPED_SECRET}), "Gave up."
     )
 
@@ -129,17 +122,17 @@ async def test_failed_action_is_recorded_without_its_inputs(
 async def test_unexpected_error_is_recorded_on_the_task_span(
     tracer: Tracer, exporter: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    gui_agent = make_tooled_gui_agent("unused")
+    gui_agent = make_gui_agent("unused")
 
     async def _broken(*_: Any, **__: Any) -> Any:
         raise ConnectionError("model endpoint unreachable")
 
-    monkeypatch.setattr(tooled_module.StrandsAgent, "invoke_async", _broken)
+    monkeypatch.setattr(gui_base.StrandsAgent, "invoke_async", _broken)
 
-    (result, _), _ = await _run(tracer, gui_agent, make_robot())
+    run, _ = await _run(tracer, gui_agent, make_robot())
 
-    assert result == "model endpoint unreachable"
-    [task] = _spans(exporter, "execute_tool tooled_guiagent")
+    assert run.error == "model endpoint unreachable"
+    [task] = _spans(exporter, "execute_tool test_gui_agent")
     assert (task.attributes or {})["gui.task.outcome"] == "error"
     assert task.status.status_code.name == "ERROR"
     assert [event.name for event in task.events] == ["exception"]

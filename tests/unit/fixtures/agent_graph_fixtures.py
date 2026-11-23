@@ -304,7 +304,7 @@ def gui_agent(make_agent: Callable[..., Agent], mock_router: Router) -> Agent:
     return make_agent(
         router=mock_router,
         name="Clicker",
-        type=AgentType.GuiAgent,
+        type=AgentType.TooledGuiAgent,
         arguments=[argument("task")],
     )
 

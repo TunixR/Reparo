@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 import routers.evals as evals_module
 import routers.recovery as recovery_module
 from database.agent_graphs.runner import NodeRun
+from database.agents.behaviours import AgentBehaviour
 from database.agents.models import Agent, AgentType
 from database.logging.models import RobotException
 from database.provider.models import Router
@@ -81,7 +82,9 @@ def _gateway_cancelled_by_abort(
     seen = {"cancelled": False, "finished": False}
 
     async def _run_node(
-        _self: Agent, invocation_state: dict[str, Any], _inputs: Mapping[str, Any]
+        _self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        _inputs: Mapping[str, Any],
     ) -> NodeRun:
         channel = invocation_state["websocket"]
         assert isinstance(channel, RobotConnection)
@@ -157,7 +160,7 @@ def test_abort_mid_llm_turn_cancels_the_gateway(
         await asyncio.sleep(60)
 
     run_node, seen = _gateway_cancelled_by_abort(_thinking)
-    monkeypatch.setattr(Agent, "run_node", run_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", run_node)
 
     _assert_aborted(
         session,
@@ -191,7 +194,7 @@ def test_abort_mid_action_is_not_read_as_the_action_result(
         await asyncio.sleep(60)
 
     run_node, seen = _gateway_cancelled_by_abort(_acting)
-    monkeypatch.setattr(Agent, "run_node", run_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", run_node)
 
     _assert_aborted(
         session,
@@ -247,7 +250,7 @@ def test_disconnect_mid_llm_turn_cancels_the_gateway_and_is_recorded(
         await asyncio.sleep(60)
 
     run_node, seen = _gateway_cancelled_by_abort(_thinking)
-    monkeypatch.setattr(Agent, "run_node", run_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", run_node)
 
     with client.websocket_connect(
         WS_PATH, headers={"X-ROBOT-KEY": robot_key_raw}
@@ -282,7 +285,7 @@ def test_eval_abort_mid_run_cancels_it_and_sends_no_result(
         name="GUI",
         description="GUI agent",
         prompt="prompt",
-        type=AgentType.GuiAgent,
+        type=AgentType.TooledGuiAgent,
     )
     seen = {"cancelled": False}
     started = threading.Event()

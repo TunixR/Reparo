@@ -9,8 +9,9 @@ from typing import Any
 import pytest
 from sqlmodel import Session
 
-import database.agents.models as agent_models
+import database.agents.behaviours.default as default_behaviour
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
+from database.agents.behaviours import DefaultAgent, behaviour_of
 from database.agents.models import Agent, AgentType
 from database.agents.specs import FieldSpec, OutputModelSpec, build_output_model
 from database.provider.models import Router
@@ -124,9 +125,9 @@ def scripted_agent(
     async def _no_screenshot(_websocket: object) -> bytes:
         return b""
 
-    monkeypatch.setattr(agent_models, "screenshot_bytes", _no_screenshot)
+    monkeypatch.setattr(default_behaviour, "screenshot_bytes", _no_screenshot)
     # The logging hooks write audit rows outside the test session.
-    monkeypatch.setattr(Agent, "get_logging_hooks", lambda _self, _state: [])
+    monkeypatch.setattr(DefaultAgent, "logging_hooks", lambda _self, _state: [])
     # Strands rejects a blank prompt, and the instruction lists the arguments.
     task = FieldSpec(name="task", type="str", description="Task")
     agent = make_agent(
@@ -166,14 +167,14 @@ def with_graph_context(state: dict[str, Any], inputs: dict[str, Any]) -> dict[st
 async def _via_call(
     agent: Agent, state: dict[str, Any], inputs: dict[str, Any]
 ) -> dict[str, Any]:
-    return await agent(invocation_state=state, **inputs)
+    return await behaviour_of(agent)(invocation_state=state, **inputs)
 
 
 async def _via_run_node(
     agent: Agent, state: dict[str, Any], inputs: dict[str, Any]
 ) -> dict[str, Any]:
     return (
-        await agent.run_node(with_graph_context(state, inputs), {})
+        await behaviour_of(agent).run_node(with_graph_context(state, inputs), {})
     ).output.model_dump()
 
 

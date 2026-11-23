@@ -11,6 +11,7 @@ from strands import Agent as StrandsAgent
 from strands import tool
 
 from database.agent_graphs.runner import AgentGraphContext, NodeRun
+from database.agents.behaviours import AgentBehaviour, DefaultAgent, behaviour_of
 from database.agents.models import Agent, AgentTool
 from database.agents.specs import FieldSpec, OutputModelSpec
 from database.tools.models import Tool
@@ -79,10 +80,10 @@ async def test_run_node_returns_what_call_returns_as_a_model(
     scripted_agent: ScriptedAgent,
 ) -> None:
     agent, _ = scripted_agent(*TURNS)
-    as_dict = await agent(invocation_state={"websocket": None}, **INPUTS)
+    as_dict = await behaviour_of(agent)(invocation_state={"websocket": None}, **INPUTS)
 
     agent, _ = scripted_agent(*TURNS)
-    run = await agent.run_node(node_state(INPUTS, websocket=None), {})
+    run = await behaviour_of(agent).run_node(node_state(INPUTS, websocket=None), {})
 
     assert isinstance(run, NodeRun)
     assert isinstance(run.output, ScriptedReport)
@@ -95,8 +96,8 @@ def test_output_class_is_built_from_the_output_model(
 ) -> None:
     agent, _ = scripted_agent(*TURNS)
 
-    assert agent.output_class() is ScriptedReport
-    assert mock_agent.output_class() is None
+    assert behaviour_of(agent).output_class() is ScriptedReport
+    assert behaviour_of(mock_agent).output_class() is None
 
 
 EVERY_TYPE: list[tuple[str, str, Any]] = [
@@ -128,9 +129,9 @@ async def test_an_agent_defined_with_every_type_form_runs_and_reports_its_class(
     session.add(agent)
     session.commit()
 
-    run = await agent.run_node(node_state(report, websocket=None), {})
+    run = await behaviour_of(agent).run_node(node_state(report, websocket=None), {})
 
-    output_class = agent.output_class()
+    output_class = behaviour_of(agent).output_class()
     assert output_class is not None
     assert isinstance(run.output, output_class)
     assert run.output.model_dump() == report
@@ -141,7 +142,7 @@ async def test_run_node_validates_its_inputs(scripted_agent: ScriptedAgent) -> N
     agent, model = scripted_agent(*TURNS)
 
     with pytest.raises(ValueError, match="Missing required argument: task"):
-        _ = await agent.run_node(node_state({}, websocket=None), {})
+        _ = await behaviour_of(agent).run_node(node_state({}, websocket=None), {})
     assert model.calls == 0
 
 
@@ -191,12 +192,14 @@ async def test_traces_hang_off_the_callers_state(
     seen: list[dict[str, Any]] = []
     agent_trace_id = uuid.uuid4()
 
-    def _logging_hooks(_self: Agent, invocation_state: dict[str, Any]) -> list[Any]:
+    def _logging_hooks(
+        _self: AgentBehaviour, invocation_state: dict[str, Any]
+    ) -> list[Any]:
         seen.append(dict(invocation_state))
         invocation_state["parent_trace_id"] = agent_trace_id
         return []
 
-    monkeypatch.setattr(Agent, "get_logging_hooks", _logging_hooks)
+    monkeypatch.setattr(DefaultAgent, "logging_hooks", _logging_hooks)
     parent_trace_id = uuid.uuid4()
     state: dict[str, Any] = {"websocket": None, "parent_trace_id": parent_trace_id}
 
@@ -217,9 +220,10 @@ async def test_agent_as_a_tool_answers_with_its_structured_response(
     agent, _ = scripted_agent(*TURNS)
     parent = StrandsAgent(
         model=ScriptedModel(
-            ToolCall(agent.get_tool_name(), {"task": "Recover the robot"}), "Done."
+            ToolCall(behaviour_of(agent).tool_name, {"task": "Recover the robot"}),
+            "Done.",
         ),
-        tools=[agent.as_tool()],
+        tools=[behaviour_of(agent).as_tool()],
         callback_handler=None,
     )
 
@@ -259,7 +263,7 @@ async def test_run_node_binds_the_input_map_before_names(
     agent, _ = scripted_agent(*TURNS)
     state = node_state({"task": "by name", "goal": "mapped"}, websocket=None)
 
-    _ = await agent.run_node(state, {"task": "recovery.goal"})
+    _ = await behaviour_of(agent).run_node(state, {"task": "recovery.goal"})
 
     assert state["inputs"] == {"task": "mapped"}
 
@@ -271,7 +275,7 @@ async def test_run_node_rejects_a_mapped_path_without_a_value(
     agent, model = scripted_agent(*TURNS)
 
     with pytest.raises(ValueError, match="Missing required argument: task"):
-        _ = await agent.run_node(
+        _ = await behaviour_of(agent).run_node(
             node_state({}, websocket=None), {"task": "triage.task"}
         )
     assert model.calls == 0

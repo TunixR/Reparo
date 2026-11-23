@@ -23,12 +23,7 @@ from observability.instrumentation.genai import (
     install_genai_tracer,
 )
 from tests.unit.shared.scripted_model import ToolCall
-from tests.unit.shared.tooled_gui_fakes import (
-    GUI_TASK_INPUT,
-    make_robot,
-    make_tooled_gui_agent,
-    patch_gui_io,
-)
+from tests.unit.shared.gui_fakes import drive, make_gui_agent, make_robot, patch_gui_io
 
 
 @pytest.fixture
@@ -147,15 +142,13 @@ async def test_gui_task_is_one_tree_with_its_conversation(
     tracer: Tracer, exporter: InMemorySpanExporter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     patch_gui_io(monkeypatch)
-    gui_agent = make_tooled_gui_agent(
+    gui_agent = make_gui_agent(
         ToolCall("click", {"start_box": [10, 20]}),
         ToolCall("finished", {"content": "Invoice filled"}),
     )
 
     with tracer.start_as_current_span("recovery.eval"):
-        _ = await gui_agent.tooled_guiagent(  # pyright: ignore[reportCallIssue]
-            **GUI_TASK_INPUT, override_invocation_state={"websocket": make_robot()}
-        )
+        _ = await drive(gui_agent, make_robot())
 
     spans = exporter.get_finished_spans()
     ids = {_span_id(span) for span in spans}

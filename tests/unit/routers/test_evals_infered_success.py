@@ -30,7 +30,7 @@ def test_eval_stores_the_success_it_sends(
         name="GUI",
         description="GUI agent",
         prompt="prompt",
-        type=AgentType.GuiAgent,
+        type=AgentType.TooledGuiAgent,
     )
     monkeypatch.setattr(evals_module, "_get_valid_agent", lambda *_: agent)
 

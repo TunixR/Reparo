@@ -17,6 +17,7 @@ from database.agent_graphs import service
 from database.agent_graphs.models import AgentGraphEdge, AgentGraphNode
 from database.agent_graphs.runner import NodeRun
 from database.agent_graphs.service import MAX_NODE_EXECUTIONS
+from database.agents.behaviours import AgentBehaviour
 from database.agents.models import Agent
 from database.provider.models import Router
 from tests.unit.fixtures.agent_fixtures import ScriptedAgent, recovery_arguments
@@ -558,15 +559,17 @@ def test_a_graph_created_and_enabled_through_the_api_is_the_one_recoveries_run(
         "Working.", ToolCall("ScriptedReport", {"done": True})
     )
     ran: list[str] = []
-    original = Agent.run_node
+    original = AgentBehaviour.run_node
 
     async def _spy(
-        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+        self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        input_map: Mapping[str, str],
     ) -> NodeRun:
-        ran.append(self.name)
+        ran.append(self.agent.name)
         return await original(self, invocation_state, input_map)
 
-    monkeypatch.setattr(Agent, "run_node", _spy)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _spy)
     not_done = {"field": "done", "op": "eq", "value": False}
     _ = build_agent_graph(
         [

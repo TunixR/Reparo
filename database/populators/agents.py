@@ -12,17 +12,22 @@ Notes:
 - Arguments and output models are inline data (`FieldSpec`, `OutputModelSpec` in
   `database/agents/specs.py`), validated when the agent is built.
 - Supports sub-agent relationships and tool attachments via JSON.
+- Each agent passes its type's rules (`validate_agent`) before it is saved; the
+  entry's fields its type ignores are printed. A GUI agent takes the fixed GUI inputs, so its entry
+  leaves out ``arguments`` and ``input_type``.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
+from database.agents.behaviours import validate_agent
 from database.agents.models import (
     Agent,
     AgentTool,
@@ -95,8 +100,13 @@ def _create_agent(
     input_type: Agent.InputType = Agent.InputType.TEXT,
     enabled: bool = True,
     reasoning_effort: Agent.ReasoningEffort | None = None,
+    parser_path: str | None = None,
+    given: Collection[str] = (),
 ) -> Agent:
-    """Create and persist an Agent if it doesn't already exist."""
+    """Create and persist an Agent if it doesn't already exist.
+
+    Prints the fields in ``given`` (the entry's keys) that the agent's type ignores.
+    """
     existing = session.exec(select(Agent).where(Agent.name == name)).first()
     if existing:
         return existing
@@ -112,11 +122,18 @@ def _create_agent(
         reasoning_effort=reasoning_effort,
         router=router,
         type=agent_type,
+        parser_path=parser_path,
     )
+    ignored = validate_agent(agent)
     session.add(agent)
     session.commit()
     session.refresh(agent)
     print(f"[populate_agents] Created agent '{name}'.")
+    for field in ignored:
+        if field.field in given:
+            print(
+                f"[populate_agents]   '{name}' ignores {field.field}: {field.reason}."
+            )
     return agent
 
 
@@ -163,13 +180,10 @@ def _resolve_reasoning_effort(value: str | None) -> Agent.ReasoningEffort | None
 
 
 def _resolve_agent_type(value: str) -> AgentType:
-    mapping = {
-        "Agent": AgentType.Agent,
-        "GuiAgent": AgentType.GuiAgent,
-    }
-    if value not in mapping:
-        raise ValueError(f"Unknown AgentType '{value}'.")
-    return mapping[value]
+    try:
+        return AgentType(value)
+    except ValueError as e:
+        raise ValueError(f"Unknown AgentType '{value}'.") from e
 
 
 def _load_json_config() -> dict[str, Any]:
@@ -185,14 +199,15 @@ def _load_json_config() -> dict[str, Any]:
           "description": "...",
           "prompt_file": "agent_name.md",  // in default_prompts/
           "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
-          "agent_type": "Agent" | "GuiAgent",
-          "input_type": "TEXT" | "IMAGETEXT",
+          "agent_type": "Agent" | "TooledGuiAgent" | "TextGuiAgent",
+          "parser_path": "module:attribute",  // a TextGuiAgent's parser, else absent
+          "input_type": "TEXT" | "IMAGETEXT",  // a GUI agent's is always IMAGETEXT
           "enabled": true,
           "reasoning_effort": "medium",  // optional, unset keeps the provider default
-          "arguments": [  // FieldSpec: in order; a "default" makes one optional
+          "arguments": [  // FieldSpec, in order; a "default" makes one optional; a GUI agent has fixed ones
             {"name": "...", "type": "str | None", "description": "...", "default": null}
           ],
-          "output_model": {  // OutputModelSpec, or null; a GuiAgent ignores it
+          "output_model": {  // OutputModelSpec, or null; a GUI agent ignores it
             "name": "ClassName",  // the structured-output tool name the LLM sees
             "description": "...",  // the tool description
             "fields": [{"name": "...", "type": "Literal['a', 'b']", "description": "..."}]
@@ -277,6 +292,8 @@ def populate_agents(engine: Engine) -> None:
                 input_type=input_type,
                 enabled=enabled,
                 reasoning_effort=reasoning_effort,
+                parser_path=item.get("parser_path"),
+                given=item.keys(),
             )
             created_agents[name] = agent
 

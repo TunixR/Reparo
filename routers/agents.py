@@ -1,12 +1,19 @@
 from collections.abc import Sequence
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import select
 
 from database.agent_graphs import service
-from database.agents.models import Agent, AgentCreate, AgentUpdate
+from database.agents.behaviours import validate_agent
+from database.agents.models import (
+    Agent,
+    AgentCreate,
+    AgentUpdate,
+    IgnoredField,
+    SavedAgent,
+)
 from database.auth.models import User
 from database.engine import commit_or_500
 from database.general import SessionDep
@@ -43,15 +50,21 @@ def get_agent(
 
 @router.post(
     "/",
-    response_model=Agent,
+    response_model=SavedAgent,
     status_code=status.HTTP_201_CREATED,
     summary="Create agent",
+    description=(
+        "Creates an agent. Its type's rules apply: a GUI agent (TooledGuiAgent, "
+        "TextGuiAgent) gets the fixed GUI inputs and IMAGETEXT input whatever is "
+        "sent, and only a TextGuiAgent takes, and needs, a parser_path. The "
+        "response lists in ignored_fields what the type stores but doesn't use."
+    ),
 )
 def create_agent(
     payload: AgentCreate,
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
-) -> Agent:
+) -> Any:
     router_obj = session.get(Router, payload.router_id)
     if not router_obj:
         raise HTTPException(
@@ -61,6 +74,7 @@ def create_agent(
 
     try:
         agent = Agent(**payload.model_dump(), router=router_obj)
+        ignored = validate_agent(agent)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -70,16 +84,24 @@ def create_agent(
     session.add(agent)
     commit_or_500(session, "create agent")
     session.refresh(agent)
-    return agent
+    return _saved(agent, ignored)
 
 
-@router.patch("/{agent_id}", response_model=Agent, summary="Update agent")
+@router.patch(
+    "/{agent_id}",
+    response_model=SavedAgent,
+    summary="Update agent",
+    description=(
+        "Updates an agent; the rules of its resulting type apply as on create, and "
+        "the response lists in ignored_fields what the type stores but doesn't use."
+    ),
+)
 def update_agent(
     agent_id: UUID,
     payload: AgentUpdate,
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
-) -> Agent:
+) -> Any:
     agent = session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(
@@ -95,8 +117,9 @@ def update_agent(
         )
 
     try:
-        _ = service.update_agent(session, agent, payload, router_obj)
+        ignored = service.update_agent(session, agent, payload, router_obj)
     except ValueError as e:
+        session.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
@@ -108,7 +131,14 @@ def update_agent(
     session.add(agent)
     commit_or_500(session, "update agent")
     session.refresh(agent)
-    return agent
+    return _saved(agent, ignored)
+
+
+def _saved(agent: Agent, ignored: list[IgnoredField]) -> Any:
+    """The response of create and update: the agent and the fields its type ignores."""
+    return SavedAgent.model_validate(
+        agent.model_dump() | {"ignored_fields": [f.model_dump() for f in ignored]}
+    )
 
 
 @router.delete(

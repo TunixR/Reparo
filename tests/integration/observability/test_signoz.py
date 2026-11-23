@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from opentelemetry import trace
@@ -16,16 +16,16 @@ from sqlmodel import Session
 
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agent_graphs.runner import NodeRun
-from database.agents.models import Agent
+from database.agents.behaviours import AgentBehaviour
 from database.logging.models import RobotException
 from templates.gateway import ResponseToRPA
 from tests.integration.observability.conftest import SECRET, Telemetry
 from tests.integration.observability.signoz import Row
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
-from tests.unit.shared.tooled_gui_fakes import (
+from tests.unit.shared.gui_fakes import (
     GUI_TASK_INPUT,
+    make_gui_agent,
     make_robot,
-    make_tooled_gui_agent,
     patch_gui_io,
 )
 
@@ -150,7 +150,9 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
     robot_key = make_robot_key(name="Integration", key_raw=key_raw)
 
     async def _gateway(
-        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
+        _self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        _input_map: Mapping[str, str],
     ) -> NodeRun:
         # A real Strands agent with a scripted model: its spans must join the turn.
         from strands import Agent as StrandsAgent
@@ -166,7 +168,7 @@ def test_recovery_turn_is_one_trace_joined_to_the_database(
         )
         return NodeRun(output=ResponseToRPA(success=True))
 
-    monkeypatch.setattr(Agent, "run_node", _gateway)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _gateway)
 
     with telemetry.client.websocket_connect(
         "/recovery/robot_exception/ws", headers={"X-ROBOT-KEY": key_raw}
@@ -219,21 +221,23 @@ async def test_gui_task_records_actions_and_screenshots_as_child_spans(
     from strands import Agent as StrandsAgent
 
     patch_gui_io(monkeypatch)
-    gui_agent = make_tooled_gui_agent(
+    gui_agent = make_gui_agent(
         ToolCall("click", {"start_box": [10, 20]}),
         ToolCall("finished", {"content": "Invoice filled"}),
+        name="Tooled GuiAgent",
     )
     # A real gateway agent calls the GUI agent tool, as in a recovery turn.
     gateway = StrandsAgent(
         model=ScriptedModel(ToolCall("tooled_guiagent", GUI_TASK_INPUT), "Recovered."),
-        tools=[gui_agent.tooled_guiagent],
+        tools=[gui_agent.as_tool()],
         name="gateway",
         callback_handler=None,
     )
     tracer = trace.get_tracer("tests.integration.gui")
     with tracer.start_as_current_span("integration.gui") as root:
         await gateway.invoke_async(
-            "Recover the robot", invocation_state={"websocket": make_robot()}
+            "Recover the robot",
+            invocation_state={"websocket": make_robot(), "robot_exception_id": uuid4()},
         )
     telemetry.flush()
 

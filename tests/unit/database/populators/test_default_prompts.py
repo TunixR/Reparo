@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import re
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from database.agents.tooled_gui_agent import TOOL_NAME as GUI_AGENT_TOOL_NAME
-from database.agents.tooled_gui_agent import TooledGuiAgent
+from database.agents.behaviours import GuiAgent, TextGuiAgent, behaviour_class
+from database.agents.behaviours.gui.shared import DEFAULT_GUI_ACTIONS
 from database.populators.agents import DEFAULT_PROMPTS_DIR, _read_prompt  # pyright: ignore[reportPrivateUsage]
 from database.populators.tools import _gather_tool_functions  # pyright: ignore[reportPrivateUsage]
 
@@ -21,19 +20,15 @@ AGENTS: dict[str, dict[str, Any]] = {a["name"]: a for a in CONFIG["agents"]}
 
 
 def _sub_agent_tool_name(agent: dict[str, Any]) -> str:
-    """The tool name an agent is exposed as (`Agent.get_tool_name`)."""
-    if agent["agent_type"] == "GuiAgent":
-        return GUI_AGENT_TOOL_NAME
+    """The tool name an agent is exposed as (`AgentBehaviour.tool_name`)."""
     return agent["name"].lower().replace(" ", "_")
 
 
-def _gui_tool_names() -> set[str]:
-    router = SimpleNamespace(relative_dim=None, original_coords=None)
-    gui = TooledGuiAgent(SimpleNamespace(router=router))  # pyright: ignore[reportArgumentType]
-    return {t.tool_name for t in gui.get_gui_tools({})}
+def _is_gui(agent: dict[str, Any]) -> bool:
+    return issubclass(behaviour_class(agent["agent_type"]), GuiAgent)
 
 
-GUI_TOOLS = _gui_tool_names()
+GUI_TOOLS = set(DEFAULT_GUI_ACTIONS.names())
 ALL_TOOLS = (
     {t.tool_name for t in _gather_tool_functions()}
     | {_sub_agent_tool_name(a) for a in AGENTS.values()}
@@ -43,7 +38,7 @@ ALL_TOOLS = (
 
 def _given_tools(agent: dict[str, Any]) -> set[str]:
     """The tools an agent built from this seed gets, sub-agents included."""
-    if agent["agent_type"] == "GuiAgent":
+    if _is_gui(agent):
         return GUI_TOOLS
     given = set(agent.get("tools", {}).get("names", []))
     for link in CONFIG["sub_agents"]:
@@ -76,14 +71,19 @@ def test_prompt_names_every_tool_the_agent_is_given(name: str) -> None:
     assert _named_tools(prompt) == _given_tools(agent)
 
 
-@pytest.mark.parametrize(
-    "name", sorted(n for n, a in AGENTS.items() if a["agent_type"] == "GuiAgent")
-)
-def test_gui_prompt_takes_only_the_instruction(name: str) -> None:
-    # GUI agents fill their prompt with str.format(instruction=...).
-    prompt = _read_prompt(name, AGENTS[name]["prompt_file"])
+@pytest.mark.parametrize("name", sorted(n for n, a in AGENTS.items() if _is_gui(a)))
+def test_gui_prompt_takes_only_its_placeholders(name: str) -> None:
+    # A GUI agent fills its prompt with str.format(instruction=...); a TextGuiAgent
+    # also gives it the actions in its parser's syntax.
+    agent = AGENTS[name]
+    prompt = _read_prompt(name, agent["prompt_file"])
+    placeholders = {"instruction": "<the instruction>"}
+    if behaviour_class(agent["agent_type"]) is TextGuiAgent:
+        placeholders["actions"] = "<the actions>"
 
-    assert "<the instruction>" in prompt.format(instruction="<the instruction>")
+    filled = prompt.format(**placeholders)
+
+    assert all(value in filled for value in placeholders.values())
 
 
 def test_prompt_file_must_be_in_the_default_prompts_folder() -> None:
