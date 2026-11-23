@@ -128,15 +128,15 @@ def _check_contract_version_or_raise(data: Any) -> None:
     )
 
 
-def _build_recovery_context_or_raise(data: Any):
+def _validate_payload_or_raise(
+    data: Any, code: str = INVALID_RECOVERY_PAYLOAD
+) -> RecoveryPayload:
+    """The recovery payload, or a refusal with ``code`` (the eval's differs)."""
     try:
-        payload = RecoveryPayload.model_validate(data)
-        return RecoveryContext.from_payload(payload=payload)
+        return RecoveryPayload.model_validate(data)
     except ValidationError as exc:
         raise RecoveryWsDomainError(
-            code=INVALID_RECOVERY_PAYLOAD,
-            content=str(exc),
-            close_code=CLOSE_INVALID_PAYLOAD,
+            code=code, content=str(exc), close_code=CLOSE_INVALID_PAYLOAD
         ) from exc
 
 
@@ -334,7 +334,9 @@ async def _run_recovery_turn(
 
         # Validate before looking up the agent graph, so a malformed payload is
         # reported as such even on a misconfigured server.
-        recovery_context = _build_recovery_context_or_raise(data)
+        recovery_context = RecoveryContext.from_payload(
+            payload=_validate_payload_or_raise(data)
+        )
         turn.context_built(recovery_context)
 
         graph_id = AgentGraph.default_recovery_id(session)

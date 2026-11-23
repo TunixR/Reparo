@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from opentelemetry import trace
 from opentelemetry.trace import Span
-from pydantic import Field, ValidationError
+from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
 from sqlmodel import select
 from strands import Agent as StrandsAgent
@@ -21,25 +21,32 @@ from agent_tools.utils import (
 )
 from database.agents.models import Agent, AgentType
 from database.keys.models import RobotKey
-from database.logging.models import RobotException
+from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
 from observability.correlation import get_request_id
-from observability.events import error_type, log_event
+from observability.events import log_event
 from observability.exceptions import record_exception
 from observability.instrumentation.genai import TracedOpenAIModel
 from observability.instrumentation.recovery import record_answer, record_robot_abort
 from robot.capabilities import CAPABILITIES_STATE_KEY
-from robot.channel import ABORT_CLOSE_CODE, AbortedByRobot, RobotConnection
+from robot.channel import (
+    ABORT_CLOSE_CODE,
+    CLOSE_SERVER_ERROR,
+    AbortedByRobot,
+    RobotConnection,
+)
 from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
+    CLOSE_INVALID_PAYLOAD,
+    INTERNAL_ERROR,
     ROBOT_KEY_HEADER,
     RecoveryWsDomainError,
     _build_answer,
-    _build_recovery_context_or_raise,
     _check_contract_version_or_raise,
     _decode_payload_or_raise,
     _persist_exception_with_context,
     _record_abort,
     _send_error_and_close,
+    _validate_payload_or_raise,
     find_enabled_robot_key,
 )
 from settings import PROVIDER_API_BASE, PROVIDER_API_KEY, PROVIDER_MODEL
@@ -50,6 +57,10 @@ router = APIRouter(prefix="/evals")
 tracer = trace.get_tracer(__name__)
 
 logger = logging.getLogger(__name__)
+
+# An invalid payload on this connection; the recovery connection sends
+# INVALID_RECOVERY_PAYLOAD. See TECH_DEBT.md, entry 9.
+EVAL_VALIDATION_ERROR = "VALIDATION_ERROR"
 
 
 class ContinuationOutput(TemplateModel):
@@ -120,11 +131,16 @@ def _get_valid_agent(
     return agent
 
 
-def _validate_payload(data: dict[str, Any]) -> RecoveryPayload:
-    try:
-        return RecoveryPayload.model_validate(data)
-    except ValidationError as exc:
-        raise ValueError(f"Invalid recovery payload: {exc}") from exc
+def _validate_eval_payload_or_raise(data: Any) -> tuple[RecoveryPayload, str]:
+    """The payload and its recovery task, which an eval requires."""
+    payload = _validate_payload_or_raise(data, code=EVAL_VALIDATION_ERROR)
+    if payload.recovery_task is None:
+        raise RecoveryWsDomainError(
+            code=EVAL_VALIDATION_ERROR,
+            content="recovery_task must be a non-empty string",
+            close_code=CLOSE_INVALID_PAYLOAD,
+        )
+    return payload, payload.recovery_task
 
 
 async def _run_standalone_recovery(
@@ -204,7 +220,6 @@ Process Model:
     )
     report = inference.structured_output
     if not isinstance(report, ContinuationOutput):
-        # Not a ValueError: that is how this endpoint reports a bad eval request.
         raise TypeError("The continuation inferrer did not return a structured report.")
 
     # Scored against the same answer production sends in `done.content`.
@@ -253,20 +268,18 @@ async def _run_eval_turn(
     """
     exception: RobotException | None = None
     try:
-        payload = _decode_payload_or_raise(await robot.receive_text())
-        _check_contract_version_or_raise(payload)
-        recovery_task = _validate_payload(payload).recovery_task
-        if recovery_task is None:
-            raise ValueError("recovery_task must be a non-empty string")
+        data = _decode_payload_or_raise(await robot.receive_text())
+        _check_contract_version_or_raise(data)
+        payload, recovery_task = _validate_eval_payload_or_raise(data)
 
-        recovery_context = _build_recovery_context_or_raise(payload)
+        recovery_context = RecoveryContext.from_payload(payload=payload)
         exception = _persist_exception_with_context(
-            session, payload, robot_key, recovery_context
+            session, data, robot_key, recovery_context
         )
 
         result = await robot.run(
             _run_standalone_recovery(
-                robot, payload, recovery_task, agent, str(exception.id)
+                robot, data, recovery_task, agent, str(exception.id)
             )
         )
 
@@ -291,7 +304,7 @@ async def _run_eval_turn(
     except WebSocketDisconnect:
         pass
     except RecoveryWsDomainError as exc:
-        # Refused before the eval request is read, the same way as a recovery.
+        # An unusable eval request: a warning, not an error.
         log_event(
             logger,
             attrs.EVENT_RECOVERY_EVAL_INVALID,
@@ -299,26 +312,9 @@ async def _run_eval_turn(
             logging.WARNING,
         )
         await _send_error_and_close(robot, exc.code, exc.content, exc.close_code)
-    except ValueError as exc:
-        # The client sent an unusable eval request: a warning, not an error.
-        log_event(
-            logger,
-            attrs.EVENT_RECOVERY_EVAL_INVALID,
-            {attrs.ERROR_TYPE: error_type(exc)},
-            logging.WARNING,
-        )
-        try:
-            await robot.send_json(
-                {"type": "error", "code": "VALIDATION_ERROR", "content": str(exc)}
-            )
-            await robot.close(code=1003, reason=str(exc))
-        except Exception:
-            logger.debug("Failed to send eval validation error", exc_info=True)
     except Exception as exc:
         logger.exception("Error during eval")
         record_exception(span, exc, escaped=False)
-        try:
-            await robot.send_json({"type": "error", "content": "Internal server error"})
-            await robot.close()
-        except Exception:
-            logger.debug("Failed to send eval error", exc_info=True)
+        await _send_error_and_close(
+            robot, INTERNAL_ERROR, "Internal server error", CLOSE_SERVER_ERROR
+        )
