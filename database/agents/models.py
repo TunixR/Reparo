@@ -526,9 +526,6 @@ class Agent(SQLModel, table=True):
             hooks=hooks,
             system_prompt=self.prompt,
             messages=messages,  # type: ignore This works fine
-            # Strands' default window, with the seeded pair and the instruction
-            # pinned: it trims when the first run ends, and the structured-output
-            # call still has to see the inputs.
             conversation_manager=SlidingWindowConversationManager(
                 pin_first=len(messages) + 1
             ),

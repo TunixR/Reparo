@@ -3,7 +3,7 @@ from collections.abc import Callable
 import pytest
 from sqlmodel import Session
 
-from database.provider.models import Router
+from database.provider.models import DEFAULT_CONTEXT_WINDOW_LIMIT, Router
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def make_router(session: Session) -> Callable[..., Router]:
         api_endpoint: str = "https://example.test/v1",
         provider_type: Router.Provider = Router.Provider.OPENAI,
         api_key: str = "test-api-key",
-        context_window_limit: int | None = None,
+        context_window_limit: int | None = DEFAULT_CONTEXT_WINDOW_LIMIT,
         persist: bool = True,
     ) -> Router:
         router = Router(

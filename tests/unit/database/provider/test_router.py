@@ -155,18 +155,32 @@ def test_router_get_model_forwards_params(make_router: Callable[..., Router]):
     }
 
 
+def test_router_defaults_the_context_window_to_250k(session: Session):
+    router = Router(
+        api_key="test-api-key",
+        model_name="qwen3.5-unknown-id",
+        api_endpoint="https://example.test/v1",
+    )
+    session.add(router)
+    session.commit()
+    session.refresh(router)
+
+    assert router.context_window_limit == 250_000
+    assert router.get_model().context_window_limit == 250_000
+
+
 def test_router_get_model_uses_the_configured_context_window(
     make_router: Callable[..., Router],
 ):
-    router = make_router(model_name="qwen3.5-unknown-id", context_window_limit=250_000)
+    router = make_router(model_name="qwen3.5-unknown-id", context_window_limit=100_000)
 
-    assert router.get_model().context_window_limit == 250_000
+    assert router.get_model().context_window_limit == 100_000
 
 
 def test_router_get_model_leaves_an_unset_context_window_to_strands(
     make_router: Callable[..., Router],
 ):
-    router = make_router(model_name="gpt-4o")
+    router = make_router(model_name="gpt-4o", context_window_limit=None)
     known = OpenAIModel(client_args={"api_key": "-"}, model_id="gpt-4o")
     assert known.context_window_limit is not None  # Strands' table knows gpt-4o
 

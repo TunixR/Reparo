@@ -4,12 +4,15 @@ from datetime import datetime, timezone
 from typing import Any, override
 
 import requests
+from sqlalchemy import Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Field, Relationship, SQLModel
 from strands.models import Model
 
 from database.provider.scripts.image import Qwen2_5ImageResizer
 from observability.instrumentation.genai import TracedOpenAIModel
+
+DEFAULT_CONTEXT_WINDOW_LIMIT = 250_000
 
 
 class Router(SQLModel, table=True):
@@ -59,11 +62,13 @@ class Router(SQLModel, table=True):
         ),
     )
     context_window_limit: int | None = Field(
-        default=None,
+        default=DEFAULT_CONTEXT_WINDOW_LIMIT,
         gt=0,
+        sa_column=Column(Integer, nullable=True),
         description=(
-            "Context window of the model in tokens. Unset lets Strands look the "
-            "model id up, falling back to its default window for unknown ids."
+            "Context window of the model in tokens, 250000 by default. Null lets "
+            "Strands look the model id up, falling back to its default window for "
+            "unknown ids."
         ),
     )
 
@@ -162,8 +167,6 @@ class Router(SQLModel, table=True):
                 model_id=self.model_name,
                 params=params,
             )
-            # Only when set: an explicit None would blank the window Strands
-            # knows for the model id in get_config().
             if self.context_window_limit is not None:
                 model.update_config(context_window_limit=self.context_window_limit)
             return model
@@ -240,11 +243,12 @@ class RouterCreate(SQLModel):
         ),
     )
     context_window_limit: int | None = Field(
-        default=None,
+        default=DEFAULT_CONTEXT_WINDOW_LIMIT,
         gt=0,
         description=(
-            "Context window of the model in tokens. Unset lets Strands look the "
-            "model id up, falling back to its default window for unknown ids."
+            "Context window of the model in tokens, 250000 by default. Null lets "
+            "Strands look the model id up, falling back to its default window for "
+            "unknown ids."
         ),
     )
 

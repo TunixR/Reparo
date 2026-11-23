@@ -20,8 +20,9 @@ def make_router_create(
         model_name="gpt-4o-mini",
         api_endpoint="https://example.test/v1",
         provider_type=Router.Provider.OPENAI,
-        context_window_limit=context_window_limit,
     )
+    if context_window_limit is not None:
+        payload.context_window_limit = context_window_limit
     if capabilities is not None:
         payload.capabilities = capabilities
     if vision_backbone is not None:
@@ -484,14 +485,43 @@ def test_router_create_stores_the_context_window(
     session: Session, mock_admin: User, client: TestClient
 ):
     headers = make_auth_headers(mock_admin, session)
-    payload = make_router_create(context_window_limit=250_000)
+    payload = make_router_create(context_window_limit=100_000)
 
     response = client.post(
         "/provider/", json=payload.model_dump(mode="json"), headers=headers
     )
 
     assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["context_window_limit"] == 100_000
+
+
+def test_router_create_defaults_an_omitted_context_window_to_250k(
+    session: Session, mock_admin: User, client: TestClient
+):
+    headers = make_auth_headers(mock_admin, session)
+    payload = make_router_create().model_dump(
+        mode="json", exclude={"context_window_limit"}
+    )
+
+    response = client.post("/provider/", json=payload, headers=headers)
+
+    assert response.status_code == status.HTTP_201_CREATED
     assert response.json()["context_window_limit"] == 250_000
+
+
+def test_router_create_accepts_a_null_context_window(
+    session: Session, mock_admin: User, client: TestClient
+):
+    headers = make_auth_headers(mock_admin, session)
+    payload = {
+        **make_router_create().model_dump(mode="json"),
+        "context_window_limit": None,
+    }
+
+    response = client.post("/provider/", json=payload, headers=headers)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["context_window_limit"] is None
 
 
 def test_router_create_rejects_a_non_positive_context_window(
@@ -550,7 +580,10 @@ def test_router_replace_replaces_the_context_window(
 
     response = client.put(
         f"/provider/{router_obj.id}",
-        json=make_router_create().model_dump(mode="json"),
+        json={
+            **make_router_create().model_dump(mode="json"),
+            "context_window_limit": None,
+        },
         headers=headers,
     )
 

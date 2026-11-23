@@ -15,12 +15,9 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import Connection, create_engine, text
 
-import settings
 from database.agents.specs import FIELD_SPECS, OutputModelSpec
-from database.general import ALEMBIC_INI
 
 GATEWAY_ARGUMENTS = [
     ("task_name", "str", "The task name."),
@@ -28,29 +25,6 @@ GATEWAY_ARGUMENTS = [
     ("ui_log", "list", "The UI log."),
     ("attempts", "int", "Attempts so far."),
 ]
-
-
-@pytest.fixture
-def scratch_url(pg_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The URL of an empty database that ``alembic`` migrates instead of the real one."""
-    name = f"reparo_migration_{uuid.uuid4().hex[:12]}"
-    admin = pg_engine.execution_options(isolation_level="AUTOCOMMIT")
-    with admin.connect() as connection:
-        _ = connection.execute(text(f'CREATE DATABASE "{name}"'))
-    url = make_url(settings.POSTGRES_URL).set(database=name)
-    rendered = url.render_as_string(hide_password=False)
-    # migrations/env.py reads the URL from settings each time a command runs.
-    monkeypatch.setattr(settings, "POSTGRES_URL", rendered)
-    try:
-        yield rendered
-    finally:
-        with admin.connect() as connection:
-            _ = connection.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
-
-
-@pytest.fixture
-def alembic_config() -> Config:
-    return Config(str(ALEMBIC_INI))
 
 
 @contextmanager
