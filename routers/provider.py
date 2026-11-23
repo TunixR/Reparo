@@ -118,6 +118,7 @@ def replace_router(
     router_obj.capabilities = payload.capabilities
     router_obj.vision_backbone = payload.vision_backbone
     router_obj.normalize_vision_backbone()
+    router_obj.context_window_limit = payload.context_window_limit
     router_obj.updated_at = datetime.now(UTC)
 
     session.add(router_obj)
@@ -157,6 +158,8 @@ def update_router(
     if payload.vision_backbone is not None:
         router_obj.vision_backbone = payload.vision_backbone
     router_obj.normalize_vision_backbone()
+    if "context_window_limit" in payload.model_fields_set:
+        router_obj.context_window_limit = payload.context_window_limit
 
     router_obj.updated_at = datetime.now(UTC)
 

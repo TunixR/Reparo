@@ -18,6 +18,7 @@ def make_router(session: Session) -> Callable[..., Router]:
         api_endpoint: str = "https://example.test/v1",
         provider_type: Router.Provider = Router.Provider.OPENAI,
         api_key: str = "test-api-key",
+        context_window_limit: int | None = None,
         persist: bool = True,
     ) -> Router:
         router = Router(
@@ -27,6 +28,7 @@ def make_router(session: Session) -> Callable[..., Router]:
             provider_type=provider_type,
             capabilities=capabilities or [Router.Capability.TEXT],
             vision_backbone=vision_backbone,
+            context_window_limit=context_window_limit,
         )
 
         if persist:

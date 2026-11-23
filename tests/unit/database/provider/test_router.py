@@ -152,3 +152,23 @@ def test_router_get_model_forwards_params(make_router: Callable[..., Router]):
         "reasoning_effort": "low",
         "temperature": 0.2,
     }
+
+
+def test_router_get_model_uses_the_configured_context_window(
+    make_router: Callable[..., Router],
+):
+    router = make_router(model_name="qwen3.5-unknown-id", context_window_limit=250_000)
+
+    assert router.get_model().context_window_limit == 250_000
+
+
+def test_router_get_model_leaves_an_unset_context_window_to_strands(
+    make_router: Callable[..., Router],
+):
+    router = make_router(model_name="gpt-4o")
+
+    model = router.get_model()
+
+    # Strands' bundled table knows gpt-4o; an unset router doesn't override it.
+    assert model.context_window_limit == 128_000
+    assert model.get_config()["context_window_limit"] == 128_000

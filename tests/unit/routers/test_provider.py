@@ -1,5 +1,6 @@
 from collections.abc import Callable
 
+import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -471,3 +472,87 @@ def test_router_replace_updates_vision_backbone(
 
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["vision_backbone"] == "QWEN3.5"
+
+
+##############################
+# -- Context window
+##############################
+
+
+def _router_payload(**fields: object) -> dict[str, object]:
+    return {
+        "api_key": "super-secret",
+        "model_name": "qwen3.5-397b-a17b",
+        "api_endpoint": "https://example.test/v1",
+        "provider_type": "openai",
+        **fields,
+    }
+
+
+def test_router_create_stores_the_context_window(
+    session: Session, mock_admin: User, client: TestClient
+):
+    headers = make_auth_headers(mock_admin, session)
+
+    response = client.post(
+        "/provider/",
+        json=_router_payload(context_window_limit=250_000),
+        headers=headers,
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.json()["context_window_limit"] == 250_000
+
+
+@pytest.mark.parametrize("method", ["post", "patch"])
+@pytest.mark.parametrize("limit", [0, -1])
+def test_router_rejects_a_non_positive_context_window(
+    session: Session,
+    mock_admin: User,
+    client: TestClient,
+    mock_router: Router,
+    method: str,
+    limit: int,
+):
+    headers = make_auth_headers(mock_admin, session)
+    url = "/provider/" if method == "post" else f"/provider/{mock_router.id}"
+
+    response = client.request(
+        method, url, json=_router_payload(context_window_limit=limit), headers=headers
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+def test_router_patch_keeps_an_omitted_context_window_and_clears_a_null_one(
+    session: Session,
+    mock_admin: User,
+    client: TestClient,
+    make_router: Callable[..., Router],
+):
+    router_obj = make_router(context_window_limit=250_000)
+    headers = make_auth_headers(mock_admin, session)
+    url = f"/provider/{router_obj.id}"
+
+    kept = client.patch(url, json={"model_name": "renamed"}, headers=headers)
+    cleared = client.patch(url, json={"context_window_limit": None}, headers=headers)
+
+    assert kept.json()["context_window_limit"] == 250_000
+    assert cleared.json()["context_window_limit"] is None
+
+
+def test_router_replace_replaces_the_context_window(
+    session: Session,
+    mock_admin: User,
+    client: TestClient,
+    make_router: Callable[..., Router],
+):
+    router_obj = make_router(context_window_limit=250_000)
+    headers = make_auth_headers(mock_admin, session)
+
+    response = client.put(
+        f"/provider/{router_obj.id}", json=_router_payload(), headers=headers
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["context_window_limit"] is None

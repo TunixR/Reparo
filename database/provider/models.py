@@ -58,6 +58,14 @@ class Router(SQLModel, table=True):
             "vision-capable routers and stays unset otherwise."
         ),
     )
+    context_window_limit: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Context window of the model in tokens. Unset lets Strands look the "
+            "model id up, falling back to its default window for unknown ids."
+        ),
+    )
 
     agents: list["Agent"] = (  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
         Relationship(
@@ -145,7 +153,7 @@ class Router(SQLModel, table=True):
             or self.provider_type == self.Provider.VLLM
             or self.provider_type == self.Provider.OPENROUTER
         ):
-            return TracedOpenAIModel(
+            model = TracedOpenAIModel(
                 client_args={
                     "api_key": self.api_key or "api-key",
                     "base_url": self.api_endpoint,
@@ -154,6 +162,11 @@ class Router(SQLModel, table=True):
                 model_id=self.model_name,
                 params=params,
             )
+            # Only when set: an explicit None would blank the window Strands
+            # knows for the model id in get_config().
+            if self.context_window_limit is not None:
+                model.update_config(context_window_limit=self.context_window_limit)
+            return model
 
         raise NotImplementedError(
             f"Router provider {self.provider_type} not yet implemented."
@@ -200,6 +213,7 @@ class RouterPublic(SQLModel):
     provider_type: Router.Provider
     capabilities: list[Router.Capability]
     vision_backbone: Router.VisionBackbone | None
+    context_window_limit: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -223,6 +237,14 @@ class RouterCreate(SQLModel):
         description=(
             "Vision backbone used by the model. Defaults to OTHER for "
             "vision-capable routers and stays unset otherwise."
+        ),
+    )
+    context_window_limit: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Context window of the model in tokens. Unset lets Strands look the "
+            "model id up, falling back to its default window for unknown ids."
         ),
     )
 
@@ -249,4 +271,9 @@ class RouterUpdate(SQLModel):
     vision_backbone: Router.VisionBackbone | None = Field(
         default=None,
         description="Vision backbone used by the model behind this router.",
+    )
+    context_window_limit: int | None = Field(
+        default=None,
+        gt=0,
+        description="Context window of the model in tokens; null unsets it.",
     )
