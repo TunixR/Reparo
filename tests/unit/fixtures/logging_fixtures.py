@@ -3,7 +3,8 @@
 These keep router tests readable by centralizing common DB setup.
 """
 
-from typing import Callable
+from collections.abc import Callable
+from datetime import datetime
 from uuid import UUID
 
 import pytest
@@ -74,12 +75,15 @@ def make_agent_trace(session: Session):
         agent: Agent,
         inputs: dict[str, object] | None = None,
         robot_exception_id: UUID | None = None,
+        created_at: datetime | None = None,
     ) -> AgentTrace:
         trace = AgentTrace(
             agent_id=agent.id,
             inputs=inputs or {},
             robot_exception_id=robot_exception_id,
         )
+        if created_at is not None:
+            trace.created_at = created_at
         session.add(trace)
         session.commit()
         session.refresh(trace)
@@ -105,6 +109,7 @@ def make_gui_trace(session: Session):
         action_content: dict[str, object] | None = None,
         success: bool = True,
         screenshot_key: str = "screenshot-1",
+        created_at: datetime | None = None,
     ) -> GUITrace:
         gui = GUITrace(
             agent_trace_id=agent_trace.id,
@@ -113,6 +118,8 @@ def make_gui_trace(session: Session):
             success=success,
             screenshot_key=screenshot_key,
         )
+        if created_at is not None:
+            gui.created_at = created_at
         session.add(gui)
         session.commit()
         session.refresh(gui)
@@ -138,6 +145,7 @@ def make_tool_trace(session: Session):
         input: dict[str, object] | None = None,
         output: str = "",
         success: bool = True,
+        created_at: datetime | None = None,
     ) -> ToolTrace:
         ttrace = ToolTrace(
             agent_trace_id=agent_trace.id,
@@ -146,6 +154,8 @@ def make_tool_trace(session: Session):
             output=output,
             success=success,
         )
+        if created_at is not None:
+            ttrace.created_at = created_at
         session.add(ttrace)
         session.commit()
         session.refresh(ttrace)
