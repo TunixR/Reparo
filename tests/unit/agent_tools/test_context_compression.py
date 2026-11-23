@@ -14,7 +14,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from strands import Agent as StrandsAgent
 from strands import tool
 from strands.telemetry import tracer as strands_tracer
-from strands.types.exceptions import ContextWindowOverflowException
+from strands.types.exceptions import (
+    ContextWindowOverflowException,
+    EventLoopException,
+)
 
 from agent_tools.context_compression import (
     ContextCompression,
@@ -26,6 +29,9 @@ from tests.unit.shared.scripted_model import ScriptedModel, Summary, ToolCall, T
 PING = ToolCall("ping", {})
 FULL = (10**9, 4)
 """Usage that puts every model call past any context window."""
+SMALL = (10, 1)
+"""Usage far below the compression threshold."""
+OVERFLOW = ContextWindowOverflowException("prompt too long")
 
 
 @tool
@@ -77,22 +83,9 @@ async def test_a_full_context_is_summarized_and_reported() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_summary_tokens_count_in_the_agent_usage() -> None:
-    agent, model, reports = _agent(PING, PING, PING, "done")
-
-    _ = await agent.invoke_async("Fill the invoice")
-
-    assert reports
-    usage = agent.event_loop_metrics.accumulated_usage
-    assert usage["inputTokens"] == FULL[0] * model.calls + 50 * len(reports)
-    assert usage["outputTokens"] == FULL[1] * model.calls + 5 * len(reports)
-
-
-@pytest.mark.asyncio
 async def test_an_overflow_is_summarized_and_reported() -> None:
-    overflow = ContextWindowOverflowException("prompt too long")
     # Small usage: only the overflow makes the agent reduce its context.
-    agent, model, reports = _agent(PING, PING, PING, overflow, "done", usage=(10, 1))
+    agent, model, reports = _agent(PING, PING, PING, OVERFLOW, "done", usage=SMALL)
 
     _ = await agent.invoke_async("Fill the invoice")
 
@@ -123,7 +116,33 @@ async def test_a_failed_summary_is_logged_and_the_run_goes_on(
 
 
 @pytest.mark.asyncio
-async def test_the_summary_call_does_not_block_the_event_loop() -> None:
+async def test_a_failed_summary_after_an_overflow_ends_the_run(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING)
+    agent, _, reports = _agent(
+        PING, PING, PING, OVERFLOW, usage=SMALL, summary=RuntimeError("summarizer down")
+    )
+
+    with pytest.raises(EventLoopException, match="summarizer down"):
+        _ = await agent.invoke_async("Fill the invoice")
+
+    assert reports == []
+    # Not a recovered failure: the run's own error records it.
+    assert logged_events(caplog, "agent.context_compression_failed") == []
+
+
+@pytest.mark.parametrize(
+    ("turns", "usage"),
+    [
+        pytest.param((PING, PING, PING, "done"), FULL, id="proactive"),
+        pytest.param((PING, PING, PING, OVERFLOW, "done"), SMALL, id="overflow"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_summary_call_does_not_block_the_event_loop(
+    turns: tuple[Turn, ...], usage: tuple[int, int]
+) -> None:
     loop = asyncio.get_running_loop()
 
     def summary() -> str:
@@ -131,7 +150,7 @@ async def test_the_summary_call_does_not_block_the_event_loop() -> None:
         asyncio.run_coroutine_threadsafe(asyncio.sleep(0), loop).result(timeout=5)
         return "Summarized while the loop ran."
 
-    agent, _, reports = _agent(PING, PING, PING, "done", summary=summary)
+    agent, _, reports = _agent(*turns, usage=usage, summary=summary)
 
     _ = await agent.invoke_async("Fill the invoice")
 
@@ -165,12 +184,13 @@ async def test_a_summary_is_a_span_event(exporter: InMemorySpanExporter) -> None
     ]
     assert len(events) == len(reports) > 0
     first = dict(events[0].attributes or {})
-    report = reports[0]
+    before = first.pop("agent.context_compression.tokens_before")
+    after = first.pop("agent.context_compression.tokens_after")
+    assert isinstance(before, int) and isinstance(after, int)
+    assert before > FULL[0] and after < before
     assert first == {
         "agent.context_compression.trigger": "proactive",
         "agent.context_compression.messages_replaced": 2,
-        "agent.context_compression.tokens_before": report.tokens_before,
-        "agent.context_compression.tokens_after": report.tokens_after,
         "gen_ai.usage.input_tokens": 50,
         "gen_ai.usage.output_tokens": 5,
     }

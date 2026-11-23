@@ -58,8 +58,7 @@ a tool call and its result each. They hold every screenshot still in the context
 newest one is extra), and the summarizer reads only placeholders. A screenshot
 costs one to three thousand tokens; describing old screens again buys nothing, as
 the agent already wrote what it saw. ``note_progress`` and ``alter_variable`` steps
-have no screenshot, so they can push one into the summarized range, where it is sent
-to the vision model as it is."""
+have no screenshot, so they can push one into the summarized range (TECH_DEBT.md)."""
 
 BUDGET_WARNING_RATIO = 0.75
 """From this share of ``MAX_ACTIONS`` on, the context block tells the model to wrap up."""

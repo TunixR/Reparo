@@ -19,6 +19,7 @@ from tests.unit.shared.fake_websocket import FakeWebSocket
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
 from tests.unit.shared.tooled_gui_fakes import (
     GUI_TASK_INPUT,
+    FakeHook,
     make_robot,
     make_tooled_gui_agent,
     patch_gui_io,
@@ -233,6 +234,14 @@ async def test_a_full_context_is_summarized_but_keeps_the_task_and_the_latest_st
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     patch_gui_io(monkeypatch)
+    hooks: list[FakeHook] = []
+
+    class _Hook(FakeHook):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            hooks.append(self)
+
+    monkeypatch.setattr(tooled_module, "AgentLoggingHook", _Hook)
     clicks = [ToolCall("click", {"start_box": [10, 20]})] * 10
     # Every answer reports a prompt far past any context window.
     gui_agent = make_tooled_gui_agent(
@@ -260,6 +269,11 @@ async def test_a_full_context_is_summarized_but_keeps_the_task_and_the_latest_st
     assert not any("<recovery_state>" in _sent_text(m) for m in summarized)
     # The parent gets the summary in place of the steps it replaced.
     assert [{"text": "Earlier steps, summarized."}] in history
+    # And the trace marks each summary.
+    [hook] = hooks
+    assert [c.summary for c in hook.compressions] == [
+        "Earlier steps, summarized."
+    ] * len(model.summary_requests)
     assert len(robot.actions) == len(clicks)
 
 

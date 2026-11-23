@@ -104,14 +104,14 @@ knowingly leave one behind, add it here.
 - **What fixing it means:** return a condensed result built in code, such as the `GuiRunReport`
   the graph node already gets, so the summary only has to serve the model's context.
 
-## 11. A summary after a context overflow blocks the event loop
+## 11. A GUI agent's summary can be sent a few live screenshots
 
-- **Where:** `ReportingSummarizingManager.reduce_context` in `agent_tools/context_compression.py`,
-  when Strands calls it after the provider rejected a model call as too long.
-- **Why it's debt:** Strands calls it synchronously from the agent loop, and the summary is a model
-  call it waits for on a worker thread. Every recovery on the server, and the robots' sockets,
-  stall until it returns. Proactive compression, the usual path, runs off the loop; an overflow
-  happens only when a context grows past the window between two model calls, or the window is set
-  too large.
-- **What fixing it means:** an async overflow path in Strands, or catching the overflow in a hook
-  before Strands handles it and summarizing off the loop as the proactive hook does.
+- **Where:** `GUI_PRESERVED_MESSAGES` in `database/agents/tooled_gui_agent.py`.
+- **Why it's debt:** the latest steps a summary keeps hold every live screenshot only when each of
+  them took one. `note_progress` and `alter_variable` steps take none, so each one among the latest
+  steps leaves an older live screenshot in the summarized range, and the summarizer is sent it. A
+  screenshot is one to three thousand tokens, a small share of a summary call over half a full
+  context, and describing an old screen again buys nothing.
+- **What fixing it means:** replace the images of the summarized range with placeholders before
+  the summary call, which Strands has no public hook for, or count the latest steps by screenshot
+  instead of by message.

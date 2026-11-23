@@ -7,12 +7,14 @@ import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from strands.types.content import ContentBlock
 
 from agent_tools.context_compression import ContextCompression
 from agent_tools.hooks import AgentLoggingHook
 from database.logging.models import AgentTrace, GUITrace
 from tests.unit.agent_tools._shared.fakes import (
     FakeBeforeInvocationEvent,
+    FakeMessageAddedEvent,
     FakeRegistry,
     is_bound_method_of,
 )
@@ -168,16 +170,10 @@ COMPRESSION = ContextCompression(
 )
 
 
-class _MessageEvent:
-    def __init__(self, message: dict[str, Any]):
-        self.message = message
-
-
 def test_a_context_compression_is_a_marker_in_the_trace_messages():
     hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={"inputs": {}})
     hook.log_start(FakeBeforeInvocationEvent())
-    user_msg = {"role": "user", "content": [{"text": "Fill the invoice"}]}
-    hook.log_message(_MessageEvent(user_msg))  # pyright: ignore[reportArgumentType]
+    hook.log_message(FakeMessageAddedEvent("user", [{"text": "Fill the invoice"}]))
 
     hook.log_context_compression(COMPRESSION)
 
@@ -204,8 +200,8 @@ def test_a_context_compression_is_a_marker_in_the_trace_messages():
 async def test_a_screenshot_is_linked_past_a_compression_marker():
     hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={}, is_gui_agent=True)
     hook.log_start(FakeBeforeInvocationEvent())
-    screenshot = {"role": "user", "content": [{"image": {"format": "jpeg"}}]}
-    hook.log_message(_MessageEvent(screenshot))  # pyright: ignore[reportArgumentType]
+    screenshot: ContentBlock = {"image": {"format": "jpeg", "source": {"bytes": b""}}}
+    hook.log_message(FakeMessageAddedEvent("user", [screenshot]))
     hook.log_context_compression(COMPRESSION)
 
     await hook.register_gui_trace(

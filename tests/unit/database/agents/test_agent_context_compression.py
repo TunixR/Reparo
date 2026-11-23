@@ -10,7 +10,6 @@ from sqlmodel import Session
 from strands import tool
 from strands.hooks import HookRegistry
 
-from agent_tools.context_compression import ContextCompression
 from agent_tools.hooks import AgentLoggingHook
 from database.agents.models import Agent, AgentTool
 from database.provider.models import Router
@@ -30,18 +29,12 @@ def ping() -> str:
     return "pong " * 100
 
 
-class _RecordingHook(AgentLoggingHook):
-    """An ``AgentLoggingHook`` that keeps the compressions instead of writing rows."""
-
-    compressions: list[ContextCompression] = []
+class _UnsavedHook(AgentLoggingHook):
+    """An ``AgentLoggingHook`` that keeps its trace messages instead of writing rows."""
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
         return None
-
-    @override
-    def log_context_compression(self, compression: ContextCompression) -> None:
-        self.compressions.append(compression)
 
     @override
     def update_trace(self, finished: bool = False, cost: float = 0.0) -> None:
@@ -53,7 +46,7 @@ def pinging_agent(
     scripted_agent: ScriptedAgent,
     session: Session,
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Agent, ScriptedModel, list[ContextCompression]]:
+) -> tuple[Agent, ScriptedModel, list[_UnsavedHook]]:
     """An agent with the ``ping`` tool whose every answer reports a full context."""
     agent, model = scripted_agent(*PINGS, "Pinged.", REPORT, usage=(10**9, 4))
     ping_tool = Tool(
@@ -66,24 +59,21 @@ def pinging_agent(
     )
     session.commit()
     session.refresh(agent)
-    compressions: list[ContextCompression] = []
-    monkeypatch.setattr(_RecordingHook, "compressions", compressions)
-    monkeypatch.setattr(
-        Agent,
-        "get_logging_hooks",
-        lambda self, state: [_RecordingHook(agent_id=self.id, invocation_state=state)],
-    )
-    monkeypatch.setattr(
-        Router, "get_conversation_cost", lambda _self, i, o: i * 0.001 + o * 0.01
-    )
-    return agent, model, compressions
+    hooks: list[_UnsavedHook] = []
+
+    def logging_hooks(self: Agent, state: dict[str, Any]) -> list[_UnsavedHook]:
+        hooks.append(_UnsavedHook(agent_id=self.id, invocation_state=state))
+        return hooks[-1:]
+
+    monkeypatch.setattr(Agent, "get_logging_hooks", logging_hooks)
+    return agent, model, hooks
 
 
 @pytest.mark.asyncio
 async def test_a_full_context_is_summarized_after_the_pinned_instruction(
-    pinging_agent: tuple[Agent, ScriptedModel, list[ContextCompression]],
+    pinging_agent: tuple[Agent, ScriptedModel, list[_UnsavedHook]],
 ) -> None:
-    agent, model, compressions = pinging_agent
+    agent, model, hooks = pinging_agent
 
     result = await agent(invocation_state={"websocket": None}, task="Recover it")
 
@@ -93,16 +83,22 @@ async def test_a_full_context_is_summarized_after_the_pinned_instruction(
     assert first_three[2]["content"] == [{"text": "task: Recover it"}]
     assert all(request[:3] == first_three for request in model.requests)
     assert model.requests[-1][3]["content"] == [{"text": "Earlier steps, summarized."}]
-    assert compressions
-    assert compressions[0].summary == "Earlier steps, summarized."
+    [hook] = hooks
+    markers = [m for m in hook.messages if m["role"] == "context_compression"]
+    assert markers
+    assert markers[0]["content"] == [{"text": "Earlier steps, summarized."}]
 
 
 @pytest.mark.asyncio
 async def test_the_summary_tokens_are_priced_with_the_run(
-    pinging_agent: tuple[Agent, ScriptedModel, list[ContextCompression]],
+    pinging_agent: tuple[Agent, ScriptedModel, list[_UnsavedHook]],
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     caplog.set_level(logging.INFO)
+    monkeypatch.setattr(
+        Router, "get_conversation_cost", lambda _self, i, o: i * 0.001 + o * 0.01
+    )
     agent, model, _ = pinging_agent
 
     _ = await agent(invocation_state={"websocket": None}, task="Recover it")

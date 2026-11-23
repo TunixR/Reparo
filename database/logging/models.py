@@ -97,7 +97,7 @@ class AgentTrace(SQLModel, table=True):
             for i, msg in enumerate(self.messages):
                 log_msg = f"\n### Message {i}:\n"
                 if msg.get("role") == CONTEXT_COMPRESSION_ROLE:
-                    log_msg += _compression_header(msg.get("compression", {}))
+                    log_msg += _compression_header(msg["compression"])
                 else:
                     log_msg += f"- **{msg.get('role', '').capitalize()}:** "
                 content = msg.get("content", [])
@@ -186,9 +186,9 @@ def _compression_header(details: dict[str, Any]) -> str:
     """The first line of a context compression marker in the markdown log."""
     header = (
         "- **Context compression:** a summary replaced "
-        f"{details.get('messages_replaced', '?')} earlier messages"
+        f"{details['messages_replaced']} earlier messages"
     )
-    before, after = details.get("tokens_before"), details.get("tokens_after")
+    before, after = details["tokens_before"], details["tokens_after"]
     if before is not None and after is not None:
         header += f" (about {before} to {after} tokens)"
     return header + ".\n"

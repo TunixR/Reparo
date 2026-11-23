@@ -8,32 +8,28 @@ recovered failure, so it is a WARN log event: the run goes on without it.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
 
+if TYPE_CHECKING:
+    from agent_tools.context_compression import ContextCompression
+
 logger = logging.getLogger(__name__)
 
 
-def context_compressed(
-    *,
-    trigger: str,
-    messages_replaced: int,
-    tokens_before: int | None,
-    tokens_after: int | None,
-    input_tokens: int,
-    output_tokens: int,
-) -> None:
+def context_compressed(compression: ContextCompression) -> None:
     """Old messages were replaced by a summary before a model call."""
     attributes = {
-        attrs.AGENT_CONTEXT_COMPRESSION_TRIGGER: trigger,
-        attrs.AGENT_CONTEXT_COMPRESSION_MESSAGES_REPLACED: messages_replaced,
-        attrs.AGENT_CONTEXT_COMPRESSION_TOKENS_BEFORE: tokens_before,
-        attrs.AGENT_CONTEXT_COMPRESSION_TOKENS_AFTER: tokens_after,
-        attrs.GEN_AI_USAGE_INPUT_TOKENS: input_tokens,
-        attrs.GEN_AI_USAGE_OUTPUT_TOKENS: output_tokens,
+        attrs.AGENT_CONTEXT_COMPRESSION_TRIGGER: compression.trigger,
+        attrs.AGENT_CONTEXT_COMPRESSION_MESSAGES_REPLACED: compression.messages_replaced,
+        attrs.AGENT_CONTEXT_COMPRESSION_TOKENS_BEFORE: compression.tokens_before,
+        attrs.AGENT_CONTEXT_COMPRESSION_TOKENS_AFTER: compression.tokens_after,
+        attrs.GEN_AI_USAGE_INPUT_TOKENS: compression.input_tokens,
+        attrs.GEN_AI_USAGE_OUTPUT_TOKENS: compression.output_tokens,
     }
     trace.get_current_span().add_event(
         attrs.EVENT_AGENT_CONTEXT_COMPRESSED,

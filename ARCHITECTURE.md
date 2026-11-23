@@ -214,8 +214,9 @@ inputs, runs it, and asks for a structured response in its output model.
 - **Context compression.** When an agent's context reaches 70% of its model's window, its oldest
   messages are replaced by a summary written by the same model (`agent_tools/context_compression.py`).
   The messages that state the task are pinned and never summarized: a GUI agent's task message, a
-  generic agent's prompt and instruction. The latest steps are kept as they are. A failed summary
-  leaves the context as it was.
+  generic agent's prompt and instruction. The latest steps are kept as they are. After a
+  failed summary the run goes on with the context as it was, unless the provider already rejected it
+  as too long.
 - **Prompts.** An agent's prompt is part of its row; the robot's payload and result models live in
   `templates/`. A prompt names only the tools the agent is given and leaves the response layout to
   the output model. Prompts used only by the evals live in `evals/`.
