@@ -1,14 +1,15 @@
 import zipfile
 from collections.abc import Sequence
 from io import BytesIO
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
+from sqlmodel.sql.expression import SelectOfScalar
 
 from database.engine import commit_or_500
 from database.general import SessionDep
@@ -69,6 +70,27 @@ router = APIRouter(
     tags=["Logging"],
     dependencies=[Depends(get_current_user)],
 )
+
+
+RobotExceptionFilter = Annotated[
+    UUID | None,
+    Query(description="Only the traces of this robot exception."),
+]
+
+
+def _traces_of_recovery[T: (AgentTrace, GUITrace, ToolTrace)](
+    trace: type[T], robot_exception_id: UUID | None
+) -> SelectOfScalar[T]:
+    """Traces oldest first; only those of one recovery if given.
+
+    GUI and tool traces belong to a recovery through their agent trace.
+    """
+    query = select(trace).order_by(col(trace.created_at))
+    if robot_exception_id is None:
+        return query
+    if trace is not AgentTrace:
+        query = query.join(AgentTrace)
+    return query.where(AgentTrace.robot_exception_id == robot_exception_id)
 
 
 def _get_recovery_context_or_404(
@@ -162,10 +184,7 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
         )
     gui_traces = (
         session.exec(
-            select(GUITrace)
-            .join(AgentTrace)
-            .where(AgentTrace.robot_exception_id == exception_id)
-            .where(GUITrace.success)
+            _traces_of_recovery(GUITrace, exception_id).where(col(GUITrace.success))
         )
         .unique()
         .all()
@@ -228,9 +247,11 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
     "/agent_traces", response_model=Sequence[AgentTrace], summary="List AgentTraces"
 )
 def list_agent_traces(
-    session: SessionDep,
+    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
 ) -> Sequence[AgentTrace]:
-    return session.exec(select(AgentTrace)).unique().all()
+    return (
+        session.exec(_traces_of_recovery(AgentTrace, robot_exception_id)).unique().all()
+    )
 
 
 @router.get(
@@ -273,7 +294,7 @@ def delete_agent_trace(
     summary="List AgentGraphTraces",
 )
 def list_agent_graph_traces(
-    session: SessionDep, robot_exception_id: UUID | None = None
+    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
 ) -> Sequence[AgentGraphTrace]:
     """Agent graph runs, newest first; only those of one recovery if given."""
     query = select(AgentGraphTrace).order_by(col(AgentGraphTrace.created_at).desc())
@@ -320,9 +341,11 @@ async def get_agent_graph_trace_markdown(
 
 @router.get("/gui_traces", response_model=Sequence[GUITrace], summary="List GUITraces")
 def list_gui_traces(
-    session: SessionDep,
+    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
 ) -> Sequence[GUITrace]:
-    return session.exec(select(GUITrace)).unique().all()
+    return (
+        session.exec(_traces_of_recovery(GUITrace, robot_exception_id)).unique().all()
+    )
 
 
 @router.get(
@@ -361,9 +384,11 @@ def delete_gui_trace(
     "/tool_traces", response_model=Sequence[ToolTrace], summary="List ToolTraces"
 )
 def list_tool_traces(
-    session: SessionDep,
+    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
 ) -> Sequence[ToolTrace]:
-    return session.exec(select(ToolTrace)).unique().all()
+    return (
+        session.exec(_traces_of_recovery(ToolTrace, robot_exception_id)).unique().all()
+    )
 
 
 @router.get(
