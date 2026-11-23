@@ -40,10 +40,10 @@ class FakeHook(HookProvider):
         return None
 
 
-def make_robot(*, action_success: bool = True) -> FakeWebSocket:
-    """A robot that serves 64x48 screenshots and answers actions with ``action_success``."""
-    screenshots = [make_test_image_bytes(size=(64, 48)) for _ in range(10)]
-    return FakeWebSocket(screenshots, action_success=action_success)
+def make_robot(*, action_success: bool = True, screenshots: int = 10) -> FakeWebSocket:
+    """A robot that serves ``screenshots`` 64x48 screenshots and answers actions with ``action_success``."""
+    images = [make_test_image_bytes(size=(64, 48)) for _ in range(screenshots)]
+    return FakeWebSocket(images, action_success=action_success)
 
 
 def patch_gui_io(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -56,9 +56,11 @@ def patch_gui_io(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tooled_module, "asyncio", SimpleNamespace(sleep=_no_sleep))
 
 
-def make_tooled_gui_agent(*turns: Turn) -> TooledGuiAgent:
-    """A GUI agent whose inner Strands model plays ``turns``."""
-    model = ScriptedModel(*turns)
+def make_tooled_gui_agent(
+    *turns: Turn, usage: tuple[int, int] = (12, 4)
+) -> TooledGuiAgent:
+    """A GUI agent whose inner Strands model plays ``turns``, reporting ``usage`` tokens."""
+    model = ScriptedModel(*turns, usage=usage)
     router = SimpleNamespace(
         relative_dim=lambda h, w: [h, w],
         original_coords=lambda x, y, _w, _h: [x, y],

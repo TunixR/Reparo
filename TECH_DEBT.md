@@ -92,3 +92,15 @@ knowingly leave one behind, add it here.
 - **What fixing it means:** drop `EVAL_VALIDATION_ERROR`, so the eval connection sends
   `INVALID_RECOVERY_PAYLOAD`, as part of the next `contract_version` bump, through the Contract changes checklist in ReparoHome's
   `docs/agents/issue-tracker.md`, and update the eval line in `ARCHITECTURE.md` "Robot protocol".
+
+## 10. The `tooled_guiagent` tool returns the inner agent's trimmed history
+
+- **Where:** the end of `TooledGuiAgent.tooled_guiagent` in `database/agents/tooled_gui_agent.py`,
+  which returns every assistant message left in `run.agent.messages`.
+- **Why it's debt:** the conversation manager edits that list in place. `GUI_WINDOW_SIZE` fits a
+  run of `MAX_ACTIONS` actions, but `alter_variable` calls don't count against the budget, so a
+  longer run loses its first turns at the end-of-run trim. Proactive compression also drops old
+  turns mid-run when the context fills up. The parent agent then gets a history that starts
+  partway through, and the full history floods its context anyway.
+- **What fixing it means:** return a condensed result built in code, such as the `GuiRunReport`
+  the graph node already gets, so the window only has to manage the model's context.

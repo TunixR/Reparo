@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from database.agents.models import Agent
 
 import asyncio
+import html
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -34,8 +35,10 @@ from fastapi import WebSocketDisconnect
 from pydantic import BaseModel, Field
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.types.content import ContentBlock, Messages
 from strands.types.tools import ToolResult
+from strands.vended_plugins.context_injector import ContextInjector, InjectionContext
 
 from agent_tools.hooks import AgentLoggingHook, MaxGuiImagesHook
 from agent_tools.image import capture_screenshot
@@ -46,6 +49,15 @@ TOOL_NAME = "tooled_guiagent"
 """The tool name every GUI agent is exposed as to its parent agent."""
 
 MAX_ACTIONS = 40
+
+GUI_WINDOW_SIZE = 2 * MAX_ACTIONS + 3
+"""Messages a run of ``MAX_ACTIONS`` actions holds: the task, a tool call and result
+per action, and the refused action at the cap or the ``finished`` call. The end-of-run
+trim then leaves the history ``tooled_guiagent`` returns whole, unless the run also
+called ``alter_variable`` (TECH_DEBT.md)."""
+
+BUDGET_WARNING_RATIO = 0.75
+"""From this share of ``MAX_ACTIONS`` on, the context block tells the model to wrap up."""
 
 GUI_RUN_STATE_KEY = "gui_run"
 
@@ -88,12 +100,41 @@ class _GuiRun:
     telemetry: GuiTaskTelemetry
     variables: dict[str, Any]
     agent: StrandsAgent
+    task: str
     actions: int = 0
+    last_action: tuple[str, bool] | None = None
+    """The tool name of the last action sent to the robot, and whether it succeeded."""
     cap_reached: bool = False
     summary: str | None = None
     success: bool = False
     disconnect: WebSocketDisconnect | None = None
     error: str | None = None
+
+    def context_block(self) -> str:
+        """The run's state, as the model reads it before each call."""
+        lines = [
+            "<recovery_state>",
+            # The task is model-written from robot data: escaped, it cannot close the block.
+            f"<task>{html.escape(self.task, quote=False)}</task>",
+            f"Actions used: {self.actions} of {MAX_ACTIONS}",
+        ]
+        if self.last_action is not None:
+            name, succeeded = self.last_action
+            result = "succeeded" if succeeded else "failed"
+            lines.append(f"Last action: {name}, {result}.")
+        left = MAX_ACTIONS - self.actions
+        if left <= 0:
+            lines.append(
+                "Actions left: 0. Call finished now, with success=false"
+                " if the goal is not reached."
+            )
+        elif self.actions >= BUDGET_WARNING_RATIO * MAX_ACTIONS:
+            lines.append(
+                f"Actions left: {left}. Finish the task, or call finished with"
+                " success=false if the goal can't be reached."
+            )
+        lines.append("</recovery_state>")
+        return "\n".join(lines)
 
     def report(self) -> GuiRunReport:
         if self.summary is not None:
@@ -155,12 +196,17 @@ class TooledGuiAgent:
             )
 
         run.actions += 1
+        succeeded = False
         try:
-            return await self._send_action(run, state, action_type, action_inputs)
+            result = await self._send_action(run, state, action_type, action_inputs)
+            succeeded = True
+            return result
         except WebSocketDisconnect as exc:
             run.disconnect = exc
             tool_context.agent.cancel()
             raise
+        finally:
+            run.last_action = (tool_context.tool_use["name"], succeeded)
 
     async def _send_action(
         self,
@@ -684,12 +730,22 @@ class TooledGuiAgent:
             }
         ]
 
+        def render_state(_: InjectionContext) -> str:
+            return run.context_block()
+
         agent = StrandsAgent(  # type: ignore
             model=self.agent.get_model(),
             tools=self.get_gui_tools(variables),
             hooks=[hook, MaxGuiImagesHook()],
+            # The task message is pinned: no trim, end-of-run or proactive, evicts it.
+            conversation_manager=SlidingWindowConversationManager(
+                window_size=GUI_WINDOW_SIZE, pin_first=1, proactive_compression=True
+            ),
+            # Restates the task and the budget at the tail of every request, tool-result
+            # turns included; only the latest block is sent.
+            plugins=[ContextInjector(render_state, trigger="everyTurn")],
         )
-        run = _GuiRun(telemetry=telemetry, variables=variables, agent=agent)
+        run = _GuiRun(telemetry=telemetry, variables=variables, agent=agent, task=task)
         inner_state[GUI_RUN_STATE_KEY] = run
 
         try:
