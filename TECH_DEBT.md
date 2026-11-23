@@ -80,3 +80,14 @@ knowingly leave one behind, add it here.
   structured-output tool call out of the messages.
 - **What fixing it means:** store the reported output as JSON on the agent trace (or node trace),
   and show it in the trace log.
+
+## 9. The eval connection refuses an invalid payload with its own code
+
+- **Where:** `EVAL_VALIDATION_ERROR` in `routers/evals.py`.
+- **Why it's debt:** the eval connection answers an invalid payload, or one without a recovery
+  task, with `VALIDATION_ERROR`; the recovery connection uses `INVALID_RECOVERY_PAYLOAD` for the
+  same payload. Robots have to match two codes for one ending. The Playwright Bridge matches on
+  `VALIDATION_ERROR`, so the rename is a breaking contract change (ADR 0001) (#314).
+- **What fixing it means:** send `INVALID_RECOVERY_PAYLOAD` from the eval connection as part of the
+  next `contract_version` bump, through the Contract changes checklist in ReparoHome's
+  `docs/agents/issue-tracker.md`, and update the eval line in `ARCHITECTURE.md` "Robot protocol".

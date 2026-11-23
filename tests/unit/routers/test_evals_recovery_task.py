@@ -71,12 +71,15 @@ def test_eval_without_a_recovery_task_is_rejected(
     with _connect(client, robot_key_raw, eval_gui_agent) as ws:
         ws.send_json(valid_recovery_payload | {"recovery_task": payload_task})
         message = receive_skipping_pings(ws)
+        closed = ws.receive()
 
     assert message == {
         "type": "error",
         "code": "VALIDATION_ERROR",
         "content": "recovery_task must be a non-empty string",
     }
+    assert closed["code"] == 1003
+    assert closed["reason"] == "VALIDATION_ERROR"
     assert seen_tasks == []
 
 
@@ -90,8 +93,12 @@ def test_eval_still_rejects_unknown_payload_keys(
     with _connect(client, robot_key_raw, eval_gui_agent) as ws:
         ws.send_json(valid_recovery_payload | {"recovery_plan": "Approve"})
         message = receive_skipping_pings(ws)
+        closed = ws.receive()
 
     assert message["type"] == "error"
     assert message["code"] == "VALIDATION_ERROR"
     assert "recovery_plan" in message["content"]
+    # The validation text can pass the 123 bytes a close reason may hold; the code fits.
+    assert closed["code"] == 1003
+    assert closed["reason"] == "VALIDATION_ERROR"
     assert seen_tasks == []
