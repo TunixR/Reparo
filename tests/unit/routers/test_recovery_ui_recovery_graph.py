@@ -215,7 +215,10 @@ def test_a_ui_failure_runs_all_four_nodes_and_is_recovered(
         {
             GATEWAY: _classified(ui_exception=True),
             INFERER: INFERRED,
-            GUI: RECOVERED_ON_THE_DESKTOP,
+            GUI: [
+                ToolCall("note_progress", {"note": "The third request is open"}),
+                *RECOVERED_ON_THE_DESKTOP,
+            ],
             CONTINUATION: CONTINUED,
         }
     )
@@ -237,6 +240,7 @@ def test_a_ui_failure_runs_all_four_nodes_and_is_recovered(
     assert "recovery_task: Approve the current spending request" in continuation_inputs
     assert "gui_summary: Request approved" in continuation_inputs
     assert "goal_reached: True" in continuation_inputs
+    assert "gui_notes: ['The third request is open']" in continuation_inputs
 
 
 @pytest.mark.usefixtures("ui_recovery")

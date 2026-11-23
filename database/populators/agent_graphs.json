@@ -22,7 +22,8 @@
           "agent": "Continuation Inferer",
           "input_map": {
             "gui_summary": "tooled_guiagent.summary",
-            "goal_reached": "tooled_guiagent.goal_reached"
+            "goal_reached": "tooled_guiagent.goal_reached",
+            "gui_notes": "tooled_guiagent.notes"
           }
         }
       ],

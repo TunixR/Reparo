@@ -27,7 +27,7 @@ import asyncio
 import html
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -54,10 +54,20 @@ GUI_WINDOW_SIZE = 2 * MAX_ACTIONS + 3
 """Messages a run of ``MAX_ACTIONS`` actions holds: the task, a tool call and result
 per action, and the refused action at the cap or the ``finished`` call. The end-of-run
 trim then leaves the history ``tooled_guiagent`` returns whole, unless the run also
-called ``alter_variable`` (TECH_DEBT.md)."""
+called ``alter_variable`` or ``note_progress`` (TECH_DEBT.md)."""
 
 BUDGET_WARNING_RATIO = 0.75
 """From this share of ``MAX_ACTIONS`` on, the context block tells the model to wrap up."""
+
+MAX_NOTE_CHARS = 300
+"""Characters a progress note keeps; a longer one is cut."""
+
+MAX_NOTES = 20
+"""Progress notes a run keeps; it refuses more. Notes are for milestones, so a run
+that reaches this many is looping, and the report stays short for its reader."""
+
+NOTES_SHOWN = 5
+"""The latest progress notes the context block lists; the report keeps them all."""
 
 GUI_RUN_STATE_KEY = "gui_run"
 
@@ -91,6 +101,9 @@ class GuiRunReport(BaseModel):
     )
     summary: str = Field(description="The agent's finished summary, or why it stopped.")
     actions: list[GuiAction] = Field(description="Actions sent to the robot, in order.")
+    notes: list[str] = Field(
+        description="The agent's progress notes (note_progress), oldest first."
+    )
 
 
 @dataclass(slots=True)
@@ -105,6 +118,8 @@ class _GuiRun:
     last_action: tuple[str, bool] | None = None
     """The tool name of the last action sent to the robot, and whether it succeeded."""
     cap_reached: bool = False
+    notes: list[str] = field(default_factory=list)
+    """Progress notes the model wrote with ``note_progress``, oldest first."""
     summary: str | None = None
     success: bool = False
     disconnect: WebSocketDisconnect | None = None
@@ -122,6 +137,15 @@ class _GuiRun:
             name, succeeded = self.last_action
             result = "succeeded" if succeeded else "failed"
             lines.append(f"Last action: {name}, {result}.")
+        if self.notes:
+            shown = self.notes[-NOTES_SHOWN:]
+            hidden = len(self.notes) > NOTES_SHOWN
+            which = f" the last {NOTES_SHOWN} of {len(self.notes)}," if hidden else ""
+            lines.append(f"Progress notes,{which} oldest first:")
+            # Model-written too: escaped like the task.
+            lines.extend(
+                f"<note>{html.escape(note, quote=False)}</note>" for note in shown
+            )
         left = MAX_ACTIONS - self.actions
         if left <= 0:
             lines.append(
@@ -149,6 +173,7 @@ class _GuiRun:
             goal_reached=self.success and not self.cap_reached,
             summary=summary,
             actions=list(self.telemetry.action_log),
+            notes=list(self.notes),
         )
 
 
@@ -547,6 +572,34 @@ class TooledGuiAgent:
         tool_context.agent.cancel()
         return f"Task completed: {content}"
 
+    @tool(
+        name="note_progress",
+        description=(
+            "Keep a short progress note for the rest of the run. Your latest notes"
+            " are shown to you on every step. It is not an action and doesn't use"
+            " the action budget."
+        ),
+        context=True,
+    )
+    async def note_progress(self, note: str, tool_context: ToolContext) -> str:
+        """Keep a short progress note for the rest of the run.
+
+        Args:
+            note: One short sentence, e.g. 'Invoice 42 found, total 17.50'.
+        """
+        run: _GuiRun = tool_context.invocation_state[GUI_RUN_STATE_KEY]
+        # One line per note, so a note can't pass for another line of the block.
+        note = " ".join(note.split())
+        if not note:
+            return "Error: the note is empty; nothing was noted."
+        if len(run.notes) >= MAX_NOTES:
+            return f"Error: the run keeps at most {MAX_NOTES} notes; nothing was noted."
+        cut = len(note) > MAX_NOTE_CHARS
+        run.notes.append(note[: MAX_NOTE_CHARS - 1] + "…" if cut else note)
+        if cut:
+            return f"Noted, cut to {MAX_NOTE_CHARS} characters; keep notes short."
+        return "Noted."
+
     def get_gui_tools(self, variables: dict[str, Any]):
         return [
             self.click,
@@ -561,6 +614,7 @@ class TooledGuiAgent:
             self.drag,
             self.wait,
             self.finished,
+            self.note_progress,
             self.create_alter_variable_tool(variables),
         ]
 
