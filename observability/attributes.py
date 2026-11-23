@@ -58,6 +58,12 @@ AGENT_GRAPH_NODE_KEY = "agent_graph.node.key"
 AGENT_GRAPH_NODE_EXECUTION_INDEX = "agent_graph.node.execution_index"
 AGENT_TRACE_ID = "agent_trace.id"
 AGENT_COST = "agent.cost"
+AGENT_CONTEXT_COMPRESSION_TRIGGER = "agent.context_compression.trigger"
+AGENT_CONTEXT_COMPRESSION_MESSAGES_REPLACED = (
+    "agent.context_compression.messages_replaced"
+)
+AGENT_CONTEXT_COMPRESSION_TOKENS_BEFORE = "agent.context_compression.tokens_before"
+AGENT_CONTEXT_COMPRESSION_TOKENS_AFTER = "agent.context_compression.tokens_after"
 
 GUI_RECOVERY_TASK_NAME = "gui.recovery_task.name"
 GUI_TASK_PROCESS_MODEL = "gui.task.process_model"
@@ -108,6 +114,8 @@ EVENT_GUI_ACTION_RETRY = "gui.action_retry"
 EVENT_GUI_MAX_ACTIONS_EXCEEDED = "gui.max_actions_exceeded"
 
 EVENT_AGENT_USAGE = "agent.usage"
+EVENT_AGENT_CONTEXT_COMPRESSED = "agent.context_compressed"
+EVENT_AGENT_CONTEXT_COMPRESSION_FAILED = "agent.context_compression_failed"
 EVENT_AGENT_GRAPH_CONDITION_ERROR = "agent_graph.condition_error"
 EVENT_AGENT_GRAPH_NODE_CANCELLED = "agent_graph.node_cancelled"
 EVENT_AGENT_GRAPH_FAILED = "agent_graph.failed"

@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 from copy import deepcopy
+from dataclasses import asdict
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any, override
@@ -21,6 +22,7 @@ from strands.hooks import (
 from strands.types.content import ContentBlock, Message
 from strands.types.tools import ToolResultContent
 
+from agent_tools.context_compression import CONTEXT_COMPRESSION_ROLE, ContextCompression
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
 from observability import attributes as attrs
 from settings import MAX_GUI_IMAGES
@@ -371,6 +373,24 @@ class AgentLoggingHook(HookProvider):
                         item["image"]["uuid"] = "<uuid_pending>"
 
         self.messages.append(message)
+        self.update_trace()
+
+    def log_context_compression(self, compression: ContextCompression) -> None:
+        """Mark in the trace where a summary replaced the agent's oldest messages.
+
+        The messages it replaced stay in the trace, which is written as messages are
+        added; the marker records what the model reads from here on instead of them.
+        """
+        details = asdict(compression)
+        summary = details.pop("summary")
+        self.messages.append(
+            {
+                "role": CONTEXT_COMPRESSION_ROLE,
+                "content": [{"text": summary}],
+                "timestamp": datetime.now(UTC).isoformat(),
+                "compression": details,
+            }
+        )
         self.update_trace()
 
     def update_trace(self, finished: bool = False, cost: float = 0.0):

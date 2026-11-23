@@ -16,6 +16,7 @@ from strands.models import Model
 from strands.tools.decorator import DecoratedFunctionTool
 from strands.types.content import Messages
 
+from agent_tools.context_compression import ReportingSummarizingManager
 from agent_tools.hooks import (
     AgentLoggingHook,
     LimitToolCounts,
@@ -518,6 +519,9 @@ class Agent(SQLModel, table=True):
             self.get_required_tools_hook(),
             *self.get_logging_hooks(invocation_state),
         ]
+        agent_logging_hook: AgentLoggingHook | None = next(
+            (h for h in hooks if isinstance(h, AgentLoggingHook)), None
+        )
 
         strands_agent = StrandsAgent(
             model=model,
@@ -525,6 +529,14 @@ class Agent(SQLModel, table=True):
             hooks=hooks,
             system_prompt=self.prompt,
             messages=messages,  # type: ignore This works fine
+            # The seeded messages and the instruction are pinned: a summary never
+            # replaces them, so the structured-output call still sees the inputs.
+            conversation_manager=ReportingSummarizingManager(
+                pin_first=len(messages) + 1,
+                on_compression=agent_logging_hook.log_context_compression
+                if agent_logging_hook
+                else None,
+            ),
         )
 
         try:
@@ -550,17 +562,12 @@ class Agent(SQLModel, table=True):
             return response
         finally:
             # Every AgentResult.metrics is this same object; accumulated_usage sums
-            # both invocations above, including tokens spent before a failure.
+            # both invocations above, including tokens spent before a failure, and
+            # the summary calls of the conversation manager.
             usage = strands_agent.event_loop_metrics.accumulated_usage
             input_tokens = usage.get("inputTokens", 0)
             output_tokens = usage.get("outputTokens", 0)
             cost = self.router.get_conversation_cost(input_tokens, output_tokens)
-            agent_logging_hook: AgentLoggingHook | None = next(
-                filter(  # pyright: ignore[reportAssignmentType]
-                    lambda h: isinstance(h, AgentLoggingHook), hooks
-                ),
-                None,
-            )
             if agent_logging_hook:
                 agent_logging_hook.update_trace(finished=True, cost=cost)
             log_event(

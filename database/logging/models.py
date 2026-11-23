@@ -13,6 +13,7 @@ from sqlmodel import (
     SQLModel,
 )
 
+from agent_tools.context_compression import CONTEXT_COMPRESSION_ROLE
 from database.keys.models import RobotKey
 from database.tools.models import Tool
 from s3 import S3Client
@@ -95,7 +96,10 @@ class AgentTrace(SQLModel, table=True):
         if self.messages:
             for i, msg in enumerate(self.messages):
                 log_msg = f"\n### Message {i}:\n"
-                log_msg += f"- **{msg.get('role', '').capitalize()}:** "
+                if msg.get("role") == CONTEXT_COMPRESSION_ROLE:
+                    log_msg += _compression_header(msg.get("compression", {}))
+                else:
+                    log_msg += f"- **{msg.get('role', '').capitalize()}:** "
                 content = msg.get("content", [])
                 for part in content:
                     if "text" in part:
@@ -176,6 +180,18 @@ class AgentTrace(SQLModel, table=True):
             log += log_msg
 
         return log
+
+
+def _compression_header(details: dict[str, Any]) -> str:
+    """The first line of a context compression marker in the markdown log."""
+    header = (
+        "- **Context compression:** a summary replaced "
+        f"{details.get('messages_replaced', '?')} earlier messages"
+    )
+    before, after = details.get("tokens_before"), details.get("tokens_after")
+    if before is not None and after is not None:
+        header += f" (about {before} to {after} tokens)"
+    return header + ".\n"
 
 
 class SubAgentTrace(SQLModel, table=True):

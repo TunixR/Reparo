@@ -211,6 +211,11 @@ inputs, runs it, and asks for a structured response in its output model.
   (`database/agents/uitars.py`), which parses actions from the model's text output, is kept for a
   future rework; its text-based prompt is seeded with a disabled agent. A hook caps how many
   screenshots stay in the conversation.
+- **Context compression.** When an agent's context reaches 70% of its model's window, its oldest
+  messages are replaced by a summary written by the same model (`agent_tools/context_compression.py`).
+  The messages that state the task are pinned and never summarized: a GUI agent's task message, a
+  generic agent's prompt and instruction. The latest steps are kept as they are. A failed summary
+  leaves the context as it was.
 - **Prompts.** An agent's prompt is part of its row; the robot's payload and result models live in
   `templates/`. A prompt names only the tools the agent is given and leaves the response layout to
   the output model. Prompts used only by the evals live in `evals/`.
@@ -271,7 +276,10 @@ exported per recovery:
   sequence lives in the node traces, while agents called as tools inside a node still nest under
   their caller as sub-agent traces. **Tool traces** have inputs, outputs and status; **GUI traces**
   the action taken and the screenshot it was based on. Hooks in `agent_tools/hooks.py` write them as
-  agents run.
+  agents run. Messages are recorded as they are added, so the trace keeps every message even after a
+  context compression replaced it in the agent's own history; the compression adds a
+  `context_compression` entry to the messages, with the summary the model reads from then on and
+  what it replaced.
 - Screenshots are stored in S3 (`s3/`), and deleted with their trace (`database/logging/orm_events.py`).
 - `routers/logging.py` serves traces, the recovery context, markdown reports of an agent trace and of
   a whole agent graph run (each node in order, followed by its agent trace), and a ZIP with the UI

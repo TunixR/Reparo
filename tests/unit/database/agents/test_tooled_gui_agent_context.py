@@ -31,6 +31,7 @@ def _gui_run(task: str = "Fill the invoice", **state: Any) -> _GuiRun:
         telemetry=None,  # pyright: ignore[reportArgumentType]  # not read
         variables={},
         agent=None,  # pyright: ignore[reportArgumentType]  # not read
+        conversation=None,  # pyright: ignore[reportArgumentType]  # not read
         task=task,
         **state,
     )
@@ -217,25 +218,49 @@ async def test_a_run_to_the_action_cap_returns_its_whole_history(
     assert len(history) == MAX_ACTIONS + 1
 
 
+def _has_image(message: dict[str, Any]) -> bool:
+    return any(
+        "image" in block
+        or any(
+            "image" in item for item in block.get("toolResult", {}).get("content", [])
+        )
+        for block in message["content"]
+    )
+
+
 @pytest.mark.asyncio
-async def test_a_full_context_drops_old_turns_but_keeps_the_task(
+async def test_a_full_context_is_summarized_but_keeps_the_task_and_the_latest_steps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     patch_gui_io(monkeypatch)
-    clicks = [ToolCall("click", {"start_box": [10, 20]})] * 3
+    clicks = [ToolCall("click", {"start_box": [10, 20]})] * 10
     # Every answer reports a prompt far past any context window.
     gui_agent = make_tooled_gui_agent(
         *clicks, ToolCall("finished", {"content": "done"}), usage=(10**9, 4)
     )
     model = _model(gui_agent)
+    robot = make_robot(screenshots=len(clicks) + 1)
 
-    _ = await _run_tool(gui_agent, make_robot())
+    history, _ = await _run_tool(gui_agent, robot)
 
     task_prompt = model.requests[0][0]["content"][0]
     assert "Task: Fill the invoice" in task_prompt["text"]
     assert all(request[0]["content"][0] == task_prompt for request in model.requests)
-    # Uncompressed, the last call would carry the task and three click turns.
-    assert len(model.requests[-1]) < 1 + 2 * len(clicks)
+    last = model.requests[-1]
+    assert _sent_text(last[1]) == "Earlier steps, summarized."
+    # The summary is followed by whole steps, and the latest ones are kept.
+    assert "toolUse" in last[2]["content"][0]
+    assert len(last) >= 2 + 2 * (tooled_module.MAX_GUI_IMAGES + 1)
+    assert _sent_text(last[-1]).endswith("</recovery_state>")
+    # The summarizer reads no screenshot: the live ones are all in the kept steps.
+    assert model.summary_requests
+    summarized = [m for request in model.summary_requests for m in request]
+    assert not any(_has_image(message) for message in summarized)
+    # Nor an old state block: only the latest user message's block is ever sent.
+    assert not any("<recovery_state>" in _sent_text(m) for m in summarized)
+    # The parent gets the summary in place of the steps it replaced.
+    assert [{"text": "Earlier steps, summarized."}] in history
+    assert len(robot.actions) == len(clicks)
 
 
 @pytest.mark.asyncio

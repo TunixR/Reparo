@@ -35,26 +35,31 @@ from fastapi import WebSocketDisconnect
 from pydantic import BaseModel, Field
 from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
-from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.types.content import ContentBlock, Messages
 from strands.types.tools import ToolResult
 from strands.vended_plugins.context_injector import ContextInjector, InjectionContext
 
+from agent_tools.context_compression import ReportingSummarizingManager
 from agent_tools.hooks import AgentLoggingHook, MaxGuiImagesHook
 from agent_tools.image import capture_screenshot
 from observability.instrumentation.gui_agent import GuiAction, GuiTaskTelemetry
 from robot.capabilities import require_vision
+from settings import MAX_GUI_IMAGES
 
 TOOL_NAME = "tooled_guiagent"
 """The tool name every GUI agent is exposed as to its parent agent."""
 
 MAX_ACTIONS = 40
 
-GUI_WINDOW_SIZE = 2 * MAX_ACTIONS + 3
-"""Messages a run of ``MAX_ACTIONS`` actions holds: the task, a tool call and result
-per action, and the refused action at the cap or the ``finished`` call. The end-of-run
-trim then leaves the history ``tooled_guiagent`` returns whole, unless the run also
-called ``alter_variable`` or ``note_progress`` (TECH_DEBT.md)."""
+GUI_PRESERVED_MESSAGES = 2 * (MAX_GUI_IMAGES + 1)
+"""Latest messages a summary never replaces: the last ``MAX_GUI_IMAGES + 1`` steps,
+a tool call and its result each. They hold every screenshot still in the context
+(``MaxGuiImagesHook`` keeps ``MAX_GUI_IMAGES`` and runs after the summary, so the
+newest one is extra), and the summarizer reads only placeholders. A screenshot
+costs one to three thousand tokens; describing old screens again buys nothing, as
+the agent already wrote what it saw. ``note_progress`` and ``alter_variable`` steps
+have no screenshot, so they can push one into the summarized range, where it is sent
+to the vision model as it is."""
 
 BUDGET_WARNING_RATIO = 0.75
 """From this share of ``MAX_ACTIONS`` on, the context block tells the model to wrap up."""
@@ -113,6 +118,7 @@ class _GuiRun:
     telemetry: GuiTaskTelemetry
     variables: dict[str, Any]
     agent: StrandsAgent
+    conversation: ReportingSummarizingManager
     task: str
     actions: int = 0
     last_action: tuple[str, bool] | None = None
@@ -694,8 +700,12 @@ class TooledGuiAgent:
         )
         if run.error is not None:
             return run.error, run.variables
+        # The summary, if any, stands in for the assistant turns it replaced.
+        summary = run.conversation.summary_message
         conversation_history = [
-            m["content"] for m in run.agent.messages if m["role"] == "assistant"
+            m["content"]
+            for m in run.agent.messages
+            if m["role"] == "assistant" or m is summary
         ]
         return conversation_history, run.variables
 
@@ -787,19 +797,28 @@ class TooledGuiAgent:
         def render_state(_: InjectionContext) -> str:
             return run.context_block()
 
+        # The task message is pinned: a summary never replaces it.
+        conversation = ReportingSummarizingManager(
+            pin_first=1,
+            preserve_recent_messages=GUI_PRESERVED_MESSAGES,
+            on_compression=hook.log_context_compression,
+        )
         agent = StrandsAgent(  # type: ignore
             model=self.agent.get_model(),
             tools=self.get_gui_tools(variables),
             hooks=[hook, MaxGuiImagesHook()],
-            # The task message is pinned: no trim, end-of-run or proactive, evicts it.
-            conversation_manager=SlidingWindowConversationManager(
-                window_size=GUI_WINDOW_SIZE, pin_first=1, proactive_compression=True
-            ),
+            conversation_manager=conversation,
             # Restates the task and the budget at the tail of every request, tool-result
             # turns included; only the latest block is sent.
             plugins=[ContextInjector(render_state, trigger="everyTurn")],
         )
-        run = _GuiRun(telemetry=telemetry, variables=variables, agent=agent, task=task)
+        run = _GuiRun(
+            telemetry=telemetry,
+            variables=variables,
+            agent=agent,
+            conversation=conversation,
+            task=task,
+        )
         inner_state[GUI_RUN_STATE_KEY] = run
 
         try:

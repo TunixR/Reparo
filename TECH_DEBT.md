@@ -93,14 +93,25 @@ knowingly leave one behind, add it here.
   `INVALID_RECOVERY_PAYLOAD`, as part of the next `contract_version` bump, through the Contract changes checklist in ReparoHome's
   `docs/agents/issue-tracker.md`, and update the eval line in `ARCHITECTURE.md` "Robot protocol".
 
-## 10. The `tooled_guiagent` tool returns the inner agent's trimmed history
+## 10. The `tooled_guiagent` tool returns the inner agent's compressed history
 
 - **Where:** the end of `TooledGuiAgent.tooled_guiagent` in `database/agents/tooled_gui_agent.py`,
-  which returns every assistant message left in `run.agent.messages`.
-- **Why it's debt:** the conversation manager edits that list in place. `GUI_WINDOW_SIZE` fits a
-  run of `MAX_ACTIONS` actions, but `alter_variable` and `note_progress` calls don't count against
-  the budget, so a longer run loses its first turns at the end-of-run trim. Proactive compression
-  also drops old turns mid-run when the context fills up. The parent agent then gets a history
-  that starts partway through, and the full history floods its context anyway.
+  which returns every assistant message left in `run.agent.messages`, and the latest summary.
+- **Why it's debt:** the conversation manager edits that list in place. Nothing is trimmed when a
+  run ends, but a long run's oldest turns are replaced by a summary when its context fills up. The
+  parent agent then gets that summary and only the turns after it, and the full history floods its
+  context anyway.
 - **What fixing it means:** return a condensed result built in code, such as the `GuiRunReport`
-  the graph node already gets, so the window only has to manage the model's context.
+  the graph node already gets, so the summary only has to serve the model's context.
+
+## 11. A summary after a context overflow blocks the event loop
+
+- **Where:** `ReportingSummarizingManager.reduce_context` in `agent_tools/context_compression.py`,
+  when Strands calls it after the provider rejected a model call as too long.
+- **Why it's debt:** Strands calls it synchronously from the agent loop, and the summary is a model
+  call it waits for on a worker thread. Every recovery on the server, and the robots' sockets,
+  stall until it returns. Proactive compression, the usual path, runs off the loop; an overflow
+  happens only when a context grows past the window between two model calls, or the window is set
+  too large.
+- **What fixing it means:** an async overflow path in Strands, or catching the overflow in a hook
+  before Strands handles it and summarizing off the loop as the proactive hook does.

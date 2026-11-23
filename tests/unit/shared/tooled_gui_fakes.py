@@ -10,6 +10,7 @@ import pytest
 from strands.hooks import HookProvider, HookRegistry
 
 import database.agents.tooled_gui_agent as tooled_module
+from agent_tools.context_compression import ContextCompression
 from database.agents.tooled_gui_agent import TooledGuiAgent
 from tests.unit.shared.fake_websocket import FakeWebSocket, make_test_image_bytes
 from tests.unit.shared.scripted_model import ScriptedModel, Turn
@@ -20,6 +21,7 @@ class FakeHook(HookProvider):
 
     def __init__(self, **_: Any) -> None:
         self.gui_traces: list[tuple[str, bool]] = []
+        self.compressions: list[ContextCompression] = []
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -35,6 +37,9 @@ class FakeHook(HookProvider):
         success: bool = True,
     ) -> None:
         self.gui_traces.append((action_type, success))
+
+    def log_context_compression(self, compression: ContextCompression) -> None:
+        self.compressions.append(compression)
 
     def update_trace(self, finished: bool = False, cost: float = 0.0) -> None:
         return None

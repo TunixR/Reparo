@@ -157,6 +157,35 @@ async def test_messages_are_rendered_in_log_after_bug_fix():
     assert "Response from assistant" in log
 
 
+@pytest.mark.asyncio
+async def test_a_context_compression_is_rendered_with_what_it_replaced():
+    agent = make_agent()
+    msgs = [
+        {
+            "role": "context_compression",
+            "content": [{"text": "Opened invoice 42; Save failed twice."}],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "compression": {
+                "trigger": "proactive",
+                "messages_replaced": 6,
+                "tokens_before": 180_000,
+                "tokens_after": 90_000,
+                "input_tokens": 120_000,
+                "output_tokens": 300,
+            },
+        },
+    ]
+    trace = make_agent_trace(agent, messages=msgs)
+
+    log = await trace.get_makdown_log()
+
+    assert (
+        "- **Context compression:** a summary replaced 6 earlier messages"
+        " (about 180000 to 90000 tokens).\n"
+        "Opened invoice 42; Save failed twice.\n"
+    ) in log
+
+
 @pytest.mark.parametrize(
     "include_sub, include_tools",
     [

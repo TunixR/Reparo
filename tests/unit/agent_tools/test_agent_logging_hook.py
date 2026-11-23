@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import ANY
 from uuid import uuid4
 
 import pytest
@@ -7,6 +8,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from agent_tools.context_compression import ContextCompression
 from agent_tools.hooks import AgentLoggingHook
 from database.logging.models import AgentTrace, GUITrace
 from tests.unit.agent_tools._shared.fakes import (
@@ -149,6 +151,73 @@ def test_log_message_updates_trace_output_and_finished():
     trace2: AgentTrace | None = _STORE.get(hook.agent_trace_id)  # type: ignore[assignment]
     assert isinstance(trace2, AgentTrace)
     assert trace2.finished_at is not None
+
+
+# ---------------------------------------------------------------------------
+# log_context_compression
+# ---------------------------------------------------------------------------
+
+COMPRESSION = ContextCompression(
+    trigger="proactive",
+    summary="Opened invoice 42; Save failed twice.",
+    messages_replaced=6,
+    tokens_before=180_000,
+    tokens_after=90_000,
+    input_tokens=120_000,
+    output_tokens=300,
+)
+
+
+class _MessageEvent:
+    def __init__(self, message: dict[str, Any]):
+        self.message = message
+
+
+def test_a_context_compression_is_a_marker_in_the_trace_messages():
+    hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={"inputs": {}})
+    hook.log_start(FakeBeforeInvocationEvent())
+    user_msg = {"role": "user", "content": [{"text": "Fill the invoice"}]}
+    hook.log_message(_MessageEvent(user_msg))  # pyright: ignore[reportArgumentType]
+
+    hook.log_context_compression(COMPRESSION)
+
+    trace: AgentTrace | None = _STORE.get(hook.agent_trace_id)  # type: ignore[assignment]
+    assert isinstance(trace, AgentTrace)
+    assert trace.messages is not None
+    assert trace.messages[-1] == {
+        "role": "context_compression",
+        "content": [{"text": "Opened invoice 42; Save failed twice."}],
+        "timestamp": ANY,
+        "compression": {
+            "trigger": "proactive",
+            "messages_replaced": 6,
+            "tokens_before": 180_000,
+            "tokens_after": 90_000,
+            "input_tokens": 120_000,
+            "output_tokens": 300,
+        },
+    }
+    assert datetime.fromisoformat(trace.messages[-1]["timestamp"]).tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_a_screenshot_is_linked_past_a_compression_marker():
+    hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={}, is_gui_agent=True)
+    hook.log_start(FakeBeforeInvocationEvent())
+    screenshot = {"role": "user", "content": [{"image": {"format": "jpeg"}}]}
+    hook.log_message(_MessageEvent(screenshot))  # pyright: ignore[reportArgumentType]
+    hook.log_context_compression(COMPRESSION)
+
+    await hook.register_gui_trace(
+        action_type="click",
+        action_content={"x": 10, "y": 20},
+        screenshot_bytes=b"\x89PNG",
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+    )
+
+    [gui] = [o for o in _STORE.values() if isinstance(o, GUITrace)]
+    assert hook.messages[0]["content"][0]["image"] == {"uuid": str(gui.screenshot_key)}
 
 
 # ---------------------------------------------------------------------------
