@@ -79,13 +79,14 @@ RobotExceptionFilter = Annotated[
 
 
 def _traces_of_recovery[T: (AgentTrace, GUITrace, ToolTrace)](
-    trace: type[T], robot_exception_id: UUID | None
+    trace: type[T], robot_exception_id: UUID | None, *, oldest_first: bool = False
 ) -> SelectOfScalar[T]:
-    """Traces oldest first; only those of one recovery if given.
+    """Traces newest first; only those of one recovery if given.
 
     GUI and tool traces belong to a recovery through their agent trace.
     """
-    query = select(trace).order_by(col(trace.created_at))
+    created_at = col(trace.created_at)
+    query = select(trace).order_by(created_at if oldest_first else created_at.desc())
     if robot_exception_id is None:
         return query
     if trace is not AgentTrace:
@@ -184,7 +185,9 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
         )
     gui_traces = (
         session.exec(
-            _traces_of_recovery(GUITrace, exception_id).where(col(GUITrace.success))
+            _traces_of_recovery(GUITrace, exception_id, oldest_first=True).where(
+                col(GUITrace.success)
+            )
         )
         .unique()
         .all()

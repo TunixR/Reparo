@@ -76,7 +76,7 @@ TRACE_LISTS = ["agent_traces", "gui_traces", "tool_traces"]
 
 
 @pytest.mark.parametrize("trace_list", TRACE_LISTS)
-def test_logging_trace_list_filtered_by_robot_exception_holds_its_steps_in_order(
+def test_logging_trace_list_filtered_by_robot_exception_holds_its_steps_newest_first(
     trace_list: str,
     session: Session,
     mock_user: User,
@@ -102,9 +102,9 @@ def test_logging_trace_list_filtered_by_robot_exception_holds_its_steps_in_order
 
     ours, other = make_robot_exception(), make_robot_exception()
     start = datetime(2026, 1, 1, tzinfo=UTC)
-    # Saved out of order: the step saved first ran second.
-    second = step(ours, start + timedelta(seconds=1))
+    # Saved oldest first, the order the database returns without an ORDER BY.
     first = step(ours, start)
+    second = step(ours, start + timedelta(seconds=1))
     _ = step(other, start + timedelta(seconds=2))
 
     response = client.get(
@@ -115,8 +115,8 @@ def test_logging_trace_list_filtered_by_robot_exception_holds_its_steps_in_order
 
     assert response.status_code == status.HTTP_200_OK
     assert [item["id"] for item in response.json()] == [
-        first[trace_list],
         second[trace_list],
+        first[trace_list],
     ]
 
 
