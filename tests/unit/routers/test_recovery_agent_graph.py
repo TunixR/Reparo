@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
+from database.agents.behaviours import AgentBehaviour, DefaultAgent
 from database.agents.models import Agent, AgentTool, AgentType
 from database.logging.models import RobotException
 from database.provider.models import Router
@@ -126,7 +127,7 @@ def script(
             )
         }
         monkeypatch.setattr(Agent, "get_model", lambda self: models[self.name])  # pyright: ignore[reportUnknownLambdaType,reportUnknownMemberType]
-        monkeypatch.setattr(Agent, "get_logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(DefaultAgent, "logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
         monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
         return models
 
@@ -137,15 +138,17 @@ def script(
 def node_runs(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
     """Each node run, in order: its agent's name and the state it saw."""
     runs: list[tuple[str, dict[str, Any]]] = []
-    original = Agent.run_node
+    original = AgentBehaviour.run_node
 
     async def _spy(
-        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+        self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        input_map: Mapping[str, str],
     ) -> NodeRun:
-        runs.append((self.name, invocation_state))
+        runs.append((self.agent.name, invocation_state))
         return await original(self, invocation_state, input_map)
 
-    monkeypatch.setattr(Agent, "run_node", _spy)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _spy)
     return runs
 
 
@@ -308,10 +311,12 @@ def test_leftover_state_is_cleaned_but_never_copied_between_nodes(
     linear_graph()
     _ = script(gateway=_triage(), inferer=_inference(), continuation=_continued())
     seen: list[set[str]] = []
-    spy = Agent.run_node
+    spy = AgentBehaviour.run_node
 
     async def _leave_leftovers(
-        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+        self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        input_map: Mapping[str, str],
     ) -> NodeRun:
         seen.append(set(invocation_state))
         run = await spy(self, invocation_state, input_map)
@@ -320,7 +325,7 @@ def test_leftover_state_is_cleaned_but_never_copied_between_nodes(
         )
         return run
 
-    monkeypatch.setattr(Agent, "run_node", _leave_leftovers)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _leave_leftovers)
 
     message = _recover(client, robot_key_raw, payload)
 
@@ -359,15 +364,15 @@ def test_a_passed_execution_timeout_is_done_without_success(
     ran: list[str] = []
 
     async def _slow_node(
-        self: Agent, _state: dict[str, Any], _input_map: Mapping[str, str]
+        self: AgentBehaviour, _state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
-        ran.append(self.name)
+        ran.append(self.agent.name)
         await asyncio.sleep(0.05)
         return NodeRun(
             output=Triage.model_validate({"diagnosis": "slow", "ui_exception": True})
         )
 
-    monkeypatch.setattr(Agent, "run_node", _slow_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _slow_node)
 
     message = _recover(client, robot_key_raw, payload)
 
@@ -386,7 +391,7 @@ def test_a_node_timeout_is_an_internal_error(
     linear_graph(node_timeout_s=0.05)
 
     async def _hanging_node(
-        _self: Agent, _state: dict[str, Any], _input_map: Mapping[str, str]
+        _self: AgentBehaviour, _state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
         await asyncio.sleep(1)
         return NodeRun(
@@ -395,7 +400,7 @@ def test_a_node_timeout_is_an_internal_error(
             )
         )
 
-    monkeypatch.setattr(Agent, "run_node", _hanging_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _hanging_node)
 
     message = _recover(client, robot_key_raw, payload)
 
@@ -437,20 +442,22 @@ def test_the_next_node_is_cancelled_once_a_graph_agent_is_disabled_mid_run(
 ):
     linear_graph()
     models = script(gateway=_triage(), inferer=_inference(), continuation=_continued())
-    original = Agent.run_node
+    original = AgentBehaviour.run_node
 
     async def _disable_an_agent_after_the_gateway(
-        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+        self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        input_map: Mapping[str, str],
     ) -> NodeRun:
         run = await original(self, invocation_state, input_map)
-        if self.name == GATEWAY:
+        if self.agent.name == GATEWAY:
             agent = agents[disabled]
             agent.enabled = False
             session.add(agent)
             session.commit()
         return run
 
-    monkeypatch.setattr(Agent, "run_node", _disable_an_agent_after_the_gateway)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _disable_an_agent_after_the_gateway)
 
     message = _recover(client, robot_key_raw, payload)
 

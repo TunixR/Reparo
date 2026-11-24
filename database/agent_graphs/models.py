@@ -23,7 +23,8 @@ from database.agent_graphs.runner import (
     NodeCancelledError,
     clean_state,
 )
-from database.agents.models import Agent, AgentType
+from database.agents.behaviours import behaviour_of, is_gui_agent
+from database.agents.models import Agent
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
 from observability.instrumentation.agent_graph import (
@@ -43,7 +44,7 @@ class AgentGraphFlag(str, enum.Enum):
 
 def _reports_success(node: "AgentGraphNode") -> bool:
     """Whether the node's output model has a boolean ``success``."""
-    model = node.agent.output_class()
+    model = behaviour_of(node.agent).output_class()
     success = None if model is None else model.model_fields.get("success")
     return success is not None and success.annotation is bool
 
@@ -146,7 +147,7 @@ class AgentGraph(SQLModel, table=True):
     def recovery_gaps(self) -> list[str]:
         """Why recoveries can't run the graph; empty when they can."""
         gaps: list[str] = []
-        if not any(node.agent.type == AgentType.GuiAgent for node in self.nodes):
+        if not any(is_gui_agent(node.agent) for node in self.nodes):
             gaps.append(
                 "no node runs a GUI agent, so nothing acts on the robot's desktop; "
                 "add one"
@@ -231,7 +232,7 @@ class AgentGraph(SQLModel, table=True):
                 if not self.can_run:
                     self._cancel(node)
                 async with asyncio.timeout(self.node_timeout_s):
-                    run = await node.agent.run_node(state, node.input_map)
+                    run = await behaviour_of(node.agent).run_node(state, node.input_map)
             context.record(node.key, run.output)
             terminal_node, output = node.key, run.output
             nodes_run += 1

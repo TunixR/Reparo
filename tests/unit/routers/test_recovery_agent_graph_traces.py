@@ -18,6 +18,7 @@ from httpx import Headers
 from sqlmodel import Session
 
 from database.agent_graphs.runner import NodeRun
+from database.agents.behaviours import AgentBehaviour
 from database.agents.models import Agent, AgentTool, AgentType, SubAgent
 from database.logging.models import AgentGraphTrace
 from database.provider.models import Router
@@ -242,10 +243,12 @@ def inferer_disabled_after_the_gateway(
     session: Session, agents: dict[str, Agent], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Disable the inferer once the gateway node has run, so its node is cancelled."""
-    original = Agent.run_node
+    original = AgentBehaviour.run_node
 
     async def _disable_the_inferer_after_the_gateway(
-        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+        self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        input_map: Mapping[str, str],
     ) -> NodeRun:
         run = await original(self, invocation_state, input_map)
         inferer = agents[INFERER]
@@ -254,7 +257,9 @@ def inferer_disabled_after_the_gateway(
         session.commit()
         return run
 
-    monkeypatch.setattr(Agent, "run_node", _disable_the_inferer_after_the_gateway)
+    monkeypatch.setattr(
+        AgentBehaviour, "run_node", _disable_the_inferer_after_the_gateway
+    )
 
 
 @pytest.mark.usefixtures("recovery_graph")

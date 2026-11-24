@@ -6,14 +6,14 @@ from typing import Any
 
 import pytest
 
-from database.agents.tooled_gui_agent import TooledGuiAgent
-from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
-from tests.unit.shared.tooled_gui_fakes import (
-    GUI_TASK_INPUT,
+from tests.unit.shared.gui_fakes import (
+    drive,
+    make_gui_agent,
     make_robot,
-    make_tooled_gui_agent,
     patch_gui_io,
+    scripted_model,
 )
+from tests.unit.shared.scripted_model import ToolCall
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,17 +28,13 @@ async def _alter(variables: dict[str, Any], value: Any) -> tuple[dict[str, Any],
 
     Returns the variables handed back and the alter_variable result the model saw.
     """
-    gui_agent: TooledGuiAgent = make_tooled_gui_agent(
+    gui_agent = make_gui_agent(
         ToolCall("alter_variable", {"name": "budget", "value": value}),
         ToolCall("finished", {"content": "done"}),
     )
-    task_input: dict[str, Any] = {**GUI_TASK_INPUT, "variables": variables}
-    _, handed_back = await gui_agent.tooled_guiagent(  # pyright: ignore[reportCallIssue]
-        **task_input,
-        override_invocation_state={"websocket": make_robot()},
-    )
-    model: ScriptedModel = gui_agent.agent.get_model()  # pyright: ignore[reportAssignmentType]
-    tool_result = model.requests[1][-1]["content"][0]["toolResult"]
+    run = await drive(gui_agent, make_robot(), variables=variables)
+    tool_result = scripted_model(gui_agent).requests[1][-1]["content"][0]["toolResult"]
+    handed_back = run.variables
     return handed_back, tool_result
 
 

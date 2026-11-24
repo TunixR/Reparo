@@ -37,6 +37,8 @@ class ScriptedModel(Model):
         self._input_tokens, self._output_tokens = usage
         self.calls = 0
         self.requests: list[Any] = []
+        self.tool_specs: list[Any] = []
+        """The tool specs of each call, in order."""
 
     @override
     def update_config(self, **model_config: Any) -> None:
@@ -66,6 +68,7 @@ class ScriptedModel(Model):
         **kwargs: Any,
     ) -> AsyncIterator[Any]:
         self.requests.append(messages)
+        self.tool_specs.append(tool_specs)
         turn = self._turns[min(self.calls, len(self._turns) - 1)]
         self.calls += 1
         if isinstance(turn, Exception):

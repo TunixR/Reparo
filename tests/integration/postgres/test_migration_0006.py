@@ -1,26 +1,22 @@
 """Migration 0006 moves agent arguments and output models into ``agent`` as data.
 
-Each test migrates a scratch database of its own on the configured server, so the
-framework's database is never touched. The scratch database is dropped afterwards.
+Each test migrates a scratch database of its own (``scratch_url``), so the framework's
+database is never touched.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import text
 
-import settings
 from database.agents.specs import FIELD_SPECS, OutputModelSpec
-from database.general import ALEMBIC_INI
+from tests.integration.postgres.scratch import connect
 
 GATEWAY_ARGUMENTS = [
     ("task_name", "str", "The task name."),
@@ -30,45 +26,12 @@ GATEWAY_ARGUMENTS = [
 ]
 
 
-@pytest.fixture
-def scratch_url(pg_engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """The URL of an empty database that ``alembic`` migrates instead of the real one."""
-    name = f"reparo_migration_{uuid.uuid4().hex[:12]}"
-    admin = pg_engine.execution_options(isolation_level="AUTOCOMMIT")
-    with admin.connect() as connection:
-        _ = connection.execute(text(f'CREATE DATABASE "{name}"'))
-    url = make_url(settings.POSTGRES_URL).set(database=name)
-    rendered = url.render_as_string(hide_password=False)
-    # migrations/env.py reads the URL from settings each time a command runs.
-    monkeypatch.setattr(settings, "POSTGRES_URL", rendered)
-    try:
-        yield rendered
-    finally:
-        with admin.connect() as connection:
-            _ = connection.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
-
-
-@pytest.fixture
-def alembic_config() -> Config:
-    return Config(str(ALEMBIC_INI))
-
-
-@contextmanager
-def _connect(url: str) -> Iterator[Connection]:
-    engine = create_engine(url)
-    try:
-        with engine.begin() as connection:
-            yield connection
-    finally:
-        engine.dispose()
-
-
 def _seed_0005(url: str, agents: dict[str, str | None]) -> dict[str, uuid.UUID]:
     """Write a router and one agent per name, with the given response models; the
     first agent also gets `GATEWAY_ARGUMENTS`."""
     now = datetime.now(UTC)
     ids = {name: uuid.uuid4() for name in agents}
-    with _connect(url) as connection:
+    with connect(url) as connection:
         router_id = uuid.uuid4()
         _ = connection.execute(
             text(
@@ -113,7 +76,7 @@ def _seed_0005(url: str, agents: dict[str, str | None]) -> dict[str, uuid.UUID]:
 
 
 def _agents(url: str) -> dict[str, dict[str, Any]]:
-    with _connect(url) as connection:
+    with connect(url) as connection:
         rows = connection.execute(
             text("SELECT name, arguments, output_model FROM agent")
         ).all()
@@ -124,7 +87,7 @@ def _agents(url: str) -> dict[str, dict[str, Any]]:
 
 
 def _arguments_table(url: str) -> list[tuple[str, str, str]]:
-    with _connect(url) as connection:
+    with connect(url) as connection:
         rows = connection.execute(
             text("SELECT name, type, description FROM argument ORDER BY ctid")
         ).all()
@@ -181,7 +144,7 @@ def test_downgrade_rebuilds_the_argument_rows(
     command.downgrade(alembic_config, "0005")
 
     assert _arguments_table(scratch_url) == GATEWAY_ARGUMENTS
-    with _connect(scratch_url) as connection:
+    with connect(scratch_url) as connection:
         response_model = connection.execute(
             text("SELECT response_model FROM agent")
         ).scalar_one()

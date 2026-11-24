@@ -29,8 +29,7 @@
 "area: gui-agent":
   - changed-files:
       - any-glob-to-any-file:
-          - database/agents/uitars.py
-          - database/agents/tooled_gui_agent.py
+          - database/agents/behaviours/gui/**
           - database/populators/default_prompts/gui_agent_*.md
           - agent_tools/image.py
 

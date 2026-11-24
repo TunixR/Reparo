@@ -8,8 +8,9 @@ invocation state run as they do for the production error agent.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Iterator, Mapping
+from types import SimpleNamespace
+from typing import Any, override
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -18,6 +19,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import routers.evals as evals_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
+from database.agents.behaviours import TooledGuiAgent
+from database.agents.behaviours.gui.shared import GuiRun
 from tests.unit.agent_tools._shared.process_models import (
     COMPACT_MODEL,
     SPENDING_APPROVAL_MODEL,
@@ -49,20 +52,25 @@ def _report(success: bool, **overrides: Any) -> ToolCall:
     return ToolCall("ContinuationOutput", {"success": success} | overrides)
 
 
-class _FakeGuiAgent:
-    """Stands in for a GUI agent row: its tool changes one variable, like `alter_variable`."""
+class _FakeGuiAgent(TooledGuiAgent):
+    """Stands in for a GUI agent's run: it changes one variable, like `alter_variable`."""
 
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
+    @override
+    def bind_inputs(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return dict(inputs)
 
-    def as_tool(self):
-        async def run(**kwargs: Any) -> tuple[str, dict[str, Any]]:
-            self.calls.append(kwargs)
-            variables = kwargs["override_invocation_state"]["variables"]
-            variables["request_id"] = "r4"
-            return "clicked Approve", variables
-
-        return run
+    @override
+    async def drive(
+        self,
+        invocation_state: dict[str, Any],
+        inputs: Mapping[str, Any],
+        *,
+        contain_errors: bool,
+    ) -> GuiRun:
+        invocation_state["variables"]["request_id"] = "r4"
+        return SimpleNamespace(error=None, transcript=lambda: "clicked Approve")  # pyright: ignore[reportReturnType]
 
 
 @pytest.fixture
@@ -80,6 +88,9 @@ def _run(
 ) -> tuple[dict[str, Any], ScriptedModel, ReadableSpan]:
     scripted = ScriptedModel(*turns)
     monkeypatch.setattr(evals_module, "TracedOpenAIModel", lambda **_: scripted)
+    monkeypatch.setattr(
+        evals_module, "behaviour_of", lambda agent: _FakeGuiAgent(agent)
+    )
     payload = {
         "variables": VARIABLES,
         "ui_log": [],
@@ -95,7 +106,7 @@ def _run(
                 robot=object(),  # pyright: ignore[reportArgumentType]
                 payload=payload,
                 recovery_task="Approve the request",
-                agent=_FakeGuiAgent(),  # pyright: ignore[reportArgumentType]
+                agent=SimpleNamespace(name="Fake GUI Agent"),  # pyright: ignore[reportArgumentType]
                 robot_exception_id="exc-1",
             )
         )

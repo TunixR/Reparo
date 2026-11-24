@@ -12,6 +12,7 @@ from database.agents.models import Agent, AgentCreate, AgentType, AgentUpdate
 from database.auth.models import User
 from database.provider.models import Router
 from tests.unit.shared.auth_helpers import make_auth_headers
+from tests.unit.shared.gui_fakes import UITARS_PARSER
 
 
 def make_agent_payload(
@@ -464,3 +465,124 @@ def test_agents_reject_a_bad_definition_naming_the_field(
     for response in (created, updated):
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
         assert named in response.text, response.text
+
+
+##############################
+# -- Agent types
+##############################
+
+GUI_IGNORED = ["arguments", "input_type", "output_model", "tools", "sub_agents"]
+
+
+@pytest.fixture
+def vision_router(make_router: Callable[..., Router]) -> Router:
+    return make_router(capabilities=[Router.Capability.TEXT, Router.Capability.VISION])
+
+
+def _gui_payload(router: Router, **fields: Any) -> dict[str, Any]:
+    payload = make_agent_payload(router.id).model_dump(mode="json")
+    return (
+        payload
+        | {
+            "type": AgentType.TextGuiAgent.value,
+            "parser_path": UITARS_PARSER,
+            "arguments": _fields({"task": "str"}),
+        }
+        | fields
+    )
+
+
+def test_a_plain_agent_ignores_no_field(
+    mock_router: Router, admin_headers: Headers, client: TestClient
+):
+    payload = make_agent_payload(mock_router.id).model_dump(mode="json")
+
+    created = client.post("/agents/", json=payload, headers=admin_headers)
+
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    assert created.json()["ignored_fields"] == []
+
+
+def test_a_gui_agent_gets_the_gui_inputs_and_lists_the_fields_it_ignores(
+    vision_router: Router, admin_headers: Headers, client: TestClient
+):
+    created = client.post(
+        "/agents/", json=_gui_payload(vision_router), headers=admin_headers
+    )
+
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    body = created.json()
+    assert [field["field"] for field in body["ignored_fields"]] == GUI_IGNORED
+    assert [a["name"] for a in body["arguments"]] == [
+        "task",
+        "variables",
+        "ui_log",
+        "errored_act",
+        "model",
+    ]
+    assert body["input_type"] == Agent.InputType.IMAGETEXT.value
+    assert body["parser_path"] == UITARS_PARSER
+    # The stored agent has no ignored_fields; a read returns the agent alone.
+    read = client.get(f"/agents/{body['id']}", headers=admin_headers).json()
+    assert "ignored_fields" not in read
+    assert read["arguments"] == body["arguments"]
+
+    updated = client.patch(
+        f"/agents/{body['id']}",
+        json={"arguments": _fields({"other": "int"})},
+        headers=admin_headers,
+    )
+
+    assert updated.status_code == status.HTTP_200_OK, updated.text
+    assert updated.json()["arguments"] == body["arguments"]
+    assert [f["field"] for f in updated.json()["ignored_fields"]] == GUI_IGNORED
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"parser_path": None}, "needs a parser_path"),
+        ({"parser_path": "os:getcwd"}, "must name a module in"),
+        ({"parser_path": f"{UITARS_PARSER}Missing"}, "has no attribute"),
+        ({"type": AgentType.Agent.value}, "set it to null for Agent"),
+        ({"type": AgentType.TooledGuiAgent.value}, "set it to null for TooledGuiAgent"),
+    ],
+)
+def test_create_rejects_a_parser_path_its_type_cant_use(
+    vision_router: Router,
+    admin_headers: Headers,
+    client: TestClient,
+    fields: dict[str, Any],
+    message: str,
+):
+    created = client.post(
+        "/agents/", json=_gui_payload(vision_router, **fields), headers=admin_headers
+    )
+
+    assert created.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, created.text
+    assert message in created.json()["detail"]
+
+
+def test_update_rejects_a_parser_path_its_type_cant_use_and_keeps_the_agent(
+    vision_router: Router,
+    admin_headers: Headers,
+    client: TestClient,
+):
+    agent_id = client.post(
+        "/agents/", json=_gui_payload(vision_router), headers=admin_headers
+    ).json()["id"]
+
+    cleared = client.patch(
+        f"/agents/{agent_id}", json={"parser_path": None}, headers=admin_headers
+    )
+    retyped = client.patch(
+        f"/agents/{agent_id}",
+        json={"type": AgentType.Agent.value},
+        headers=admin_headers,
+    )
+
+    assert cleared.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, cleared.text
+    assert "needs a parser_path" in cleared.json()["detail"]
+    assert retyped.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, retyped.text
+    read = client.get(f"/agents/{agent_id}", headers=admin_headers).json()
+    assert (read["type"], read["parser_path"]) == ("TextGuiAgent", UITARS_PARSER)

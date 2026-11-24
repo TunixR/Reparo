@@ -54,21 +54,14 @@ Action: ...
 
 ## Action Space
 
-click(point='<point>x1 y1</point>')
-left_double(point='<point>x1 y1</point>')
-right_single(point='<point>x1 y1</point>')
-drag(start_point='<point>x1 y1</point>', end_point='<point>x2 y2</point>')
-hotkey(key='ctrl c') # Split keys with a space and use lowercase. Also, do not use more than 3 keys in one hotkey action.
-type(content='xxx') # Use escape characters \', \" and \n in content part to ensure we can parse the content in normal python string format. If you want to submit your input, use \n at the end of content.
-scroll(point='<point>x1 y1</point>', direction='down or up or right or left') # Show more information on the `direction` side.
-wait() #Sleep for 5s and take a screenshot to check for any changes.
-finished(content='xxx') # Use escape characters \', \" and \n in content part to ensure we can parse the content in normal python string format.
+{actions}
 
 
 ## Note
 - Use english in `Thought` part.
 - On your first turn, you MUST reason in thought what the expected end result of the task is (e.g, reaching X screen, submitting a form, etc.) Based on the task description and model.
 - Write a small plan and finally summarize your next action (with its target element) in one sentence in `Thought` part.
+- Give coordinates in the space the instruction names.
 - If the original task is completed, use the `finished` action to end the task. Use finished when and only when the task is fully completed. You must reason in thought about the task progress. Meaning, if task says complete X task, you cannot just do half of it and be done, even if the failure only covered the first half.
 - Do not invent missing process facts; rely on screenshot evidence, `errored_act`, `ui_log`, `variables`, and `model`.
 

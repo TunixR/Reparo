@@ -27,7 +27,7 @@ body:
       description: Endpoint, agent or tool, and the files involved (`routers/recovery.py:120`).
       placeholder: |
         - `WS /recovery/robot_exception/ws`
-        - `database/agents/tooled_gui_agent.py`
+        - `database/agents/behaviours/gui/tooled.py`
     validations:
       required: true
   - type: textarea
