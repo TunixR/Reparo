@@ -12,6 +12,7 @@ from strands.hooks import HookProvider, HookRegistry
 
 import database.agents.behaviours.base as behaviour_base
 import database.agents.behaviours.gui.shared as gui_shared
+from agent_tools.context_compression import ContextCompression
 from database.agents.behaviours.gui import GuiAgent, TextGuiAgent, TooledGuiAgent
 from database.agents.behaviours.gui.shared import GUI_ARGUMENTS, GuiRun
 from database.agents.models import Agent
@@ -24,6 +25,7 @@ class FakeHook(HookProvider):
 
     def __init__(self, **_: Any) -> None:
         self.gui_traces: list[tuple[str, bool]] = []
+        self.compressions: list[ContextCompression] = []
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -40,6 +42,9 @@ class FakeHook(HookProvider):
     ) -> None:
         self.gui_traces.append((action_type, success))
 
+    def log_context_compression(self, compression: ContextCompression) -> None:
+        self.compressions.append(compression)
+
     def update_trace(self, finished: bool = False, cost: float = 0.0) -> None:
         return None
 
@@ -47,10 +52,11 @@ class FakeHook(HookProvider):
 UITARS_PARSER = "database.agents.behaviours.gui.parsers.uitars:UITarsParser"
 
 
-def make_robot(*, action_success: bool = True) -> FakeWebSocket:
-    """A robot that serves 64x48 screenshots and answers actions with ``action_success``."""
-    screenshots = [make_test_image_bytes(size=(64, 48)) for _ in range(10)]
-    return FakeWebSocket(screenshots, action_success=action_success)
+def make_robot(*, action_success: bool = True, screenshots: int = 10) -> FakeWebSocket:
+    """A robot that serves ``screenshots`` 64x48 screenshots and answers actions with
+    ``action_success``."""
+    images = [make_test_image_bytes(size=(64, 48)) for _ in range(screenshots)]
+    return FakeWebSocket(images, action_success=action_success)
 
 
 def patch_gui_io(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,13 +95,17 @@ def make_gui_agent[T: GuiAgent](
     parser_path: str | None = None,
     name: str = "Test GUI Agent",
     description: str = "A GUI agent for tests.",
+    usage: tuple[int, int] = (12, 4),
+    context_window_limit: int | None = None,
 ) -> T:
     """A GUI agent of ``kind`` whose inner Strands model plays ``turns``.
 
     Its row is a stand-in: a real `Agent` validates its inputs, and the stand-in
     gives it ``router`` and the scripted model.
     """
-    model = ScriptedModel(*turns)
+    model = ScriptedModel(
+        *turns, usage=usage, context_window_limit=context_window_limit
+    )
     row = Agent(
         name=name,
         description=description,

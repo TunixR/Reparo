@@ -219,6 +219,13 @@ inputs, runs it, and asks for a structured response in its output model.
   reads them back (the UI-TARS parser, used by a disabled seeded agent). Like any agent, a GUI
   agent is exposed to its parent as a tool named after its row. A hook caps how many screenshots
   stay in the conversation.
+- **Context compression.** Every agent type shares one conversation manager
+  (`agent_tools/context_compression.py`), built by its behaviour class. When an agent's context
+  nears its model's window, which its router stores, the oldest messages are replaced by a
+  summary written by the same model, with placeholders for their screenshots. The messages that
+  state the task are pinned and never summarized: a GUI agent's task message, a generic agent's
+  prompt and instruction. The latest steps are kept as they are. After a failed summary the run
+  goes on with the context as it was, unless the provider already rejected it as too long.
 - **Prompts.** An agent's prompt is part of its row; the robot's payload and result models live in
   `templates/`. A prompt names only the tools the agent is given and leaves the response layout to
   the output model. Prompts used only by the evals live in `evals/`.
@@ -279,7 +286,10 @@ exported per recovery:
   sequence lives in the node traces, while agents called as tools inside a node still nest under
   their caller as sub-agent traces. **Tool traces** have inputs, outputs and status; **GUI traces**
   the action taken and the screenshot it was based on. Hooks in `agent_tools/hooks.py` write them as
-  agents run.
+  agents run. Messages are recorded as they are added, so the trace keeps every message even after a
+  context compression replaced it in the agent's own history; the compression adds a
+  `context_compression` entry to the messages, with the summary the model reads from then on and
+  what it replaced.
 - Screenshots are stored in S3 (`s3/`), and deleted with their trace (`database/logging/orm_events.py`).
 - `routers/logging.py` serves traces, the recovery context, markdown reports of an agent trace and of
   a whole agent graph run (each node in order, followed by its agent trace), and a ZIP with the UI

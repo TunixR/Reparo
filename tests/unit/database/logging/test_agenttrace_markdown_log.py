@@ -158,6 +158,52 @@ async def test_messages_are_rendered_in_log_after_bug_fix():
 
 
 @pytest.mark.parametrize(
+    ("trigger", "tokens", "header"),
+    [
+        pytest.param(
+            "proactive",
+            (180_000, 90_000),
+            "a summary replaced 6 earlier messages (about 180000 to 90000 tokens).",
+            id="proactive",
+        ),
+        pytest.param(
+            "overflow",
+            (None, None),
+            "a summary replaced 6 earlier messages.",
+            id="overflow",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_context_compression_is_rendered_with_what_it_replaced(
+    trigger: str, tokens: tuple[int | None, int | None], header: str
+):
+    agent = make_agent()
+    msgs = [
+        {
+            "role": "context_compression",
+            "content": [{"text": "Opened invoice 42; Save failed twice."}],
+            "timestamp": datetime.now(UTC).isoformat(),
+            "compression": {
+                "trigger": trigger,
+                "messages_replaced": 6,
+                "tokens_before": tokens[0],
+                "tokens_after": tokens[1],
+                "input_tokens": 120_000,
+                "output_tokens": 300,
+            },
+        },
+    ]
+    trace = make_agent_trace(agent, messages=msgs)
+
+    log = await trace.get_makdown_log()
+
+    assert (
+        f"- **Context compression:** {header}\nOpened invoice 42; Save failed twice.\n"
+    ) in log
+
+
+@pytest.mark.parametrize(
     "include_sub, include_tools",
     [
         (True, True),

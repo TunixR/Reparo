@@ -533,7 +533,12 @@ class GuiRun:
         )
 
     def transcript(self) -> list[list[ContentBlock]]:
-        """The content of the model's messages, in order."""
+        """The content of the model's messages, in order, after the summary of older ones if any."""
         if self.agent is None:
             return []
-        return [m["content"] for m in self.agent.messages if m["role"] == "assistant"]
+        summary = self.agent.conversation_manager.get_state().get("summary_message")
+        return [
+            m["content"]
+            for m in self.agent.messages
+            if m["role"] == "assistant" or m is summary
+        ]

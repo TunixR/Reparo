@@ -137,9 +137,13 @@ def scripted_agent(
     )
 
     def _scripted(
-        *turns: Turn, usage: tuple[int, int] = (12, 4)
+        *turns: Turn,
+        usage: tuple[int, int] = (12, 4),
+        context_window_limit: int | None = None,
     ) -> tuple[Agent, ScriptedModel]:
-        model = ScriptedModel(*turns, usage=usage)
+        model = ScriptedModel(
+            *turns, usage=usage, context_window_limit=context_window_limit
+        )
         monkeypatch.setattr(Router, "get_model", lambda _self, **_params: model)
         return agent, model
 

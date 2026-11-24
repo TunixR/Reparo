@@ -18,6 +18,7 @@ from strands import Agent as StrandsAgent
 from strands import ToolContext, tool
 from strands.tools.decorator import DecoratedFunctionTool
 
+from agent_tools.context_compression import RecoveryConversationManager
 from agent_tools.hooks import AgentLoggingHook
 from database.agent_graphs.runner import (
     AGENT_GRAPH_CONTEXT_KEY,
@@ -46,6 +47,13 @@ class AgentBehaviour(ABC):
 
     IGNORED_FIELDS: ClassVar[tuple[IgnoredField, ...]] = ()
     """The fields an agent of this type stores but doesn't use."""
+
+    PINNED_MESSAGES: ClassVar[int]
+    """The messages that open the conversation and state the task: a summary never
+    replaces them."""
+
+    RECENT_MESSAGES: ClassVar[int] = 10
+    """The latest messages a summary never replaces."""
 
     def __init_subclass__(
         cls, agent_type: AgentType | None = None, **kwargs: Any
@@ -184,8 +192,19 @@ class AgentBehaviour(ABC):
         return agent_tool
 
     # ------------------------------------------------------------------
-    # Traces and usage
+    # Context, traces and usage
     # ------------------------------------------------------------------
+
+    def conversation_manager(
+        self, hook: AgentLoggingHook | None
+    ) -> RecoveryConversationManager:
+        """The manager that summarizes the run's oldest messages when its context
+        fills, and marks each summary in ``hook``'s trace."""
+        return RecoveryConversationManager(
+            pin_first=self.PINNED_MESSAGES,
+            preserve_recent_messages=self.RECENT_MESSAGES,
+            on_compression=hook.log_context_compression if hook is not None else None,
+        )
 
     def logging_hook(self, invocation_state: dict[str, Any]) -> AgentLoggingHook:
         """The hook that writes this run's agent trace, under the caller's trace."""

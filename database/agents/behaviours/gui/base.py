@@ -34,6 +34,7 @@ from database.agents.behaviours.gui.shared import (
 from database.agents.models import Agent, IgnoredField, ModelClass
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
 from robot.capabilities import require_vision
+from settings import MAX_GUI_IMAGES
 
 
 class GuiAgent(AgentBehaviour, ABC):
@@ -41,6 +42,13 @@ class GuiAgent(AgentBehaviour, ABC):
 
     actions: ClassVar[GuiActions] = DEFAULT_GUI_ACTIONS
     """The actions this agent can take."""
+
+    PINNED_MESSAGES: ClassVar[int] = 1
+    """The task message, with the first screenshot."""
+
+    RECENT_MESSAGES: ClassVar[int] = 2 * (MAX_GUI_IMAGES + 1)
+    """The latest steps, an action and its observation each, that still show the
+    model their screenshots."""
 
     IGNORED_FIELDS: ClassVar[tuple[IgnoredField, ...]] = (
         IgnoredField(
@@ -157,6 +165,7 @@ class GuiAgent(AgentBehaviour, ABC):
             model=self.agent.get_model(),
             tools=self._tools(run),
             hooks=[hook, MaxGuiImagesHook()],
+            conversation_manager=self.conversation_manager(hook),
         )
         run.agent = agent
         messages: Messages = [

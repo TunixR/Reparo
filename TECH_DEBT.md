@@ -105,3 +105,28 @@ knowingly leave one behind, add it here.
   for the same model, or another model that needs the tags, gets the wrong framing silently.
 - **What fixing it means:** a property of the router (like its `vision_backbone`), set when it is
   configured, that says how the model wants observations framed.
+
+## 11. A GUI agent's tool returns its model's messages
+
+- **Where:** `GuiAgent.run_tool` in `database/agents/behaviours/gui/base.py`, which returns the report
+  with `GuiRun.transcript()`: the latest summary, if any, and every model message after it.
+- **Why it's debt:** nothing is trimmed when a run ends, but a long run's oldest turns are replaced
+  by a summary when its context fills up. The parent agent gets that summary and only the turns
+  after it, and the transcript floods the parent's context anyway, which then needs summaries of
+  its own sooner.
+- **What fixing it means:** return only the report once it carries what a parent needs, as the
+  graph node already does.
+
+## 12. Context compression works around Strands' synchronous summary
+
+- **Where:** `RecoveryConversationManager` in `agent_tools/context_compression.py`.
+- **Why it's debt:** Strands summarizes from synchronous code, proactively from a hook and after an
+  overflow from the agent loop, and blocks the event loop, and every recovery socket on it, for the
+  whole summary call. The manager turns Strands' proactive compression off and runs both paths from
+  async hooks of its own, on a thread. It also overrides two private methods: `_summarize_oldest`,
+  to keep the error Strands swallows for the WARN, and `_generate_summary`, to replace screenshots
+  with placeholders; and it calls a private function, `_create_auxiliary_invocation_context`, to
+  give the summary call the context Strands gives it. A Strands upgrade can change either without notice; the tests in
+  `tests/unit/agent_tools/test_context_compression.py` fail if it does.
+- **What fixing it means:** drop the hooks and overrides once Strands awaits the summary call and
+  exposes a hook for the summarized messages and for a failed summary.

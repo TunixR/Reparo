@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, override
+from typing import Any, ClassVar, override
 
 from pydantic import BaseModel
 from strands import Agent as StrandsAgent
@@ -29,6 +29,9 @@ class DefaultAgent(AgentBehaviour, agent_type=AgentType.Agent):
     An agent's role in a recovery (gateway, inferer…) comes from its place in the
     graph, not from its type.
     """
+
+    PINNED_MESSAGES: ClassVar[int] = 3
+    """The seeded prompt and answer, and the instruction."""
 
     @override
     def output_class(self) -> ModelClass | None:
@@ -118,6 +121,7 @@ class DefaultAgent(AgentBehaviour, agent_type=AgentType.Agent):
             self.required_tools_hook(),
             *self.logging_hooks(invocation_state),
         ]
+        hook = next((h for h in hooks if isinstance(h, AgentLoggingHook)), None)
 
         strands_agent = StrandsAgent(
             model=agent.get_model(),
@@ -125,6 +129,7 @@ class DefaultAgent(AgentBehaviour, agent_type=AgentType.Agent):
             hooks=hooks,
             system_prompt=agent.prompt,
             messages=messages,  # type: ignore This works fine
+            conversation_manager=self.conversation_manager(hook),
         )
 
         try:
@@ -149,8 +154,4 @@ class DefaultAgent(AgentBehaviour, agent_type=AgentType.Agent):
                 raise ValueError("Agent did not return a structured response.")
             return response
         finally:
-            hook = next(
-                (h for h in hooks if isinstance(h, AgentLoggingHook)),
-                None,
-            )
             self.record_usage(strands_agent, hook)

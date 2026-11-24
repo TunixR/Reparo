@@ -172,6 +172,7 @@ span. A `TextGuiAgent` reads its actions from the model's text, so its `gui.acti
 | `agent_graph.run` | `agent_graph.id`, `agent_graph.name`, `agent_graph.outcome` (`completed`, `max_node_executions`, `execution_timeout`, `node_cancelled`, `error`, `cancelled` when the robot aborts or goes away), `agent_graph.nodes_run` (completed node executions), `agent_graph.terminal_node.key` (the last completed node, if any); `ERROR` status for `node_cancelled` and `error` |
 | `agent_graph.node` | `agent_graph.node.key`, `agent.id`, `agent_graph.node.execution_index` (from 0 in run order); `gui.recovery_task.name` and `gui.task.*` when its agent is a GUI agent; an error that escapes the node sets `error.type` and `ERROR` status (the agent's own span records the exception) |
 | `invoke_agent` (Strands) | `agent.id`, `agent_trace.id` (joins the trace to the `AgentTrace` row) |
+| `execute_event_loop_cycle` (Strands) | span event `agent.context_compressed` when a summary replaced the agent's oldest messages before the cycle's model call, or before its retry after an overflow: `agent.context_compression.trigger` (`proactive` before a call past the compression threshold of the model's context window, `overflow` after the provider rejected a call), `agent.context_compression.messages_replaced`, `agent.context_compression.tokens_before` and `.tokens_after` (estimates, proactive only), and the summary call's `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` |
 | `execute_tool` (GUI agent) or `agent_graph.node` (GUI node) | `gui.recovery_task.name`, `gui.task.process_model`, `gui.task.ui_log_count`, `gui.task.has_errored_activity`, `gui.task.iterations`, `gui.task.outcome` (`done`, `model_stopped`, `max_actions_exceeded`, `client_disconnected`, `cancelled` when the robot aborts, `error`; a `TextGuiAgent` also `unparseable_response`, when its parser can't read too many replies in a row); errors carry a redacted exception |
 | `gui.action` | `gui.action.iteration`, `gui.action.type`, `gui.action.success`; failed actions carry a redacted exception without the action inputs. A failed action is handed back to the model (as a tool error to a `TooledGuiAgent`, in the next message to a `TextGuiAgent`), so it does not end the task |
 | `gui.screenshot` | `gui.screenshot.width`, `gui.screenshot.height`, `gui.screenshot.size` |
@@ -190,7 +191,8 @@ Log events:
 | `recovery.eval_invalid` | WARN | `error.type` |
 | `gui.action_retry` | WARN | `gui.action.iteration`, `error.type`, `exception.message` |
 | `gui.max_actions_exceeded` | WARN | `gui.task.max_actions` |
-| `agent.usage` | INFO | `agent.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `agent.cost` |
+| `agent.usage` | INFO | `agent.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `agent.cost`; the tokens include the summary calls |
+| `agent.context_compression_failed` | WARN | `agent.context_compression.trigger`, `error.type`, `exception.message` (bounded); the context was due for a summary but none replaced the old messages, because the summary call failed or because too few unpinned messages are old enough. The run goes on: with the full context, or after an overflow with its largest text blocks truncated. A summary error that ends the run is the run's own error instead |
 | `agent_graph.condition_error` | WARN | `agent_graph.id`, `agent_graph.edge.id`, `error.type`, `exception.message` (bounded); the edge isn't followed |
 | `agent_graph.failed` | WARN | `agent_graph.id`, `agent_graph.outcome`, `agent_graph.nodes_run`; for `node_cancelled` and `error` also `error.type` and `exception.message` (bounded). An unexpected error is also `recovery.turn_failed`, which carries the stack trace. A cancelled run is not a failure |
 | `agent_graph.node_cancelled` | WARN | `agent_graph.id`, `agent_graph.node.key`, `agent.id` of the cancelled node; an agent of the graph was disabled during the run, so the node doesn't run and the recovery ends with an internal error |
@@ -214,6 +216,8 @@ attributes and events:
 - `observability/instrumentation/gui_agent.py`: `GuiTaskTelemetry` for both GUI agent loops (`screenshot`,
   `action`, `retry`, `done`, `model_stopped`, `client_disconnected`, `failed`, `max_actions_exceeded`,
   `stopped`). `agent_tools.image.capture_screenshot` wraps a screenshot round trip in its span.
+- `observability/instrumentation/context_compression.py`: `context_compressed` and
+  `context_compression_failed`, reported by the conversation manager every agent shares.
 - `observability/instrumentation/genai.py`: the Strands tracer and `TracedOpenAIModel` described in
   [GenAI spans](#genai-spans).
 
