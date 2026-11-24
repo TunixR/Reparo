@@ -81,7 +81,7 @@ def _resolve_token(value: str | None) -> str:
         return value
     resolved = getattr(settings, value[1:], None)
     if not isinstance(resolved, str):
-        raise ValueError(f"[populate_routers] Unknown setting token '{value}'.")
+        raise ValueError(f"[populate_routers] Unknown setting token '{value}'.")  # noqa: TRY004
     return resolved
 
 

@@ -46,7 +46,7 @@ def image_to_base64(image_path: str) -> str:
             encoded_string = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
         return encoded_string
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return str(e)
 
 
@@ -88,8 +88,8 @@ async def take_screenshot(
         ]
     except WebSocketDisconnect as _:
         raise
-    except Exception as e:
-        raise Exception(f"Error taking screenshot: {str(e)}")
+    except Exception as e:  # noqa: BLE001
+        raise Exception(f"Error taking screenshot: {e!s}")  # noqa: TRY002
 
 
 async def compare_images(
@@ -133,7 +133,7 @@ async def compare_images(
 
     except WebSocketDisconnect as _:
         raise
-    except Exception as _:
+    except Exception as _:  # noqa: BLE001
         raise ValueError(
             "Error comparing images. Use the take_screenshot() tool and judge the outcome yourself"
         )
@@ -170,7 +170,7 @@ async def request_remote_screenshot(websocket: RobotIO, timeout: float = 15.0) -
         raise
     except TimeoutError:
         raise TimeoutError("Timed out waiting for screenshot from client")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise RuntimeError(f"Unable to interpret client response as image: {e}")
 
 

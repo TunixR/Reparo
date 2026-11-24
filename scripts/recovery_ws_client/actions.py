@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-
 from typing import Any
 
 import pyautogui
@@ -21,7 +20,7 @@ def _single_key(key: str) -> str:
 
 def _center_to_pixels(start_box: Any) -> tuple[int, int]:
     if not isinstance(start_box, list):
-        raise ValueError("start_box must be a list")
+        raise ValueError("start_box must be a list")  # noqa: TRY004
     if len(start_box) == 2:
         x1 = x2 = float(start_box[0])
         y1 = y2 = float(start_box[1])
@@ -57,7 +56,7 @@ def execute_action(action: dict[str, Any], dry_run: bool = False) -> ActionResul
 
     try:
         if not isinstance(action_inputs, dict):
-            raise ValueError("action_inputs must be an object")
+            raise ValueError("action_inputs must be an object")  # noqa: TRY004
 
         if dry_run:
             return ActionResult(success=True, action_type=action_type)
@@ -130,5 +129,5 @@ def execute_action(action: dict[str, Any], dry_run: bool = False) -> ActionResul
             raise ValueError(f"Unsupported action_type: {action_type}")
 
         return ActionResult(success=True, action_type=action_type)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return ActionResult(success=False, action_type=action_type, error=str(exc))

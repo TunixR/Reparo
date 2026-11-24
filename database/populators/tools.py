@@ -123,7 +123,7 @@ def populate_tools(engine: Engine) -> None:
                 )
                 session.add(tool_record)
                 created += 1
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 errors.append(f"{getattr(decorated, 'name', 'UNKNOWN')} -> {e}")
 
         session.commit()

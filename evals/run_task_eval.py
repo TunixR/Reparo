@@ -16,15 +16,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sys
 import logging
+import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).parent.parent))  # noqa: E402
+sys.path.append(str(Path(__file__).parent.parent))
 
 import json
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from strands_evals.types.evaluation import EvaluationData
@@ -202,7 +202,7 @@ def run_evaluation(
 
     full_results = {
         "experiment": "task_identification_eval",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "model_id": model_name or settings.PROVIDER_MODEL,
         "api_url": api_url or settings.PROVIDER_API_BASE,
         "config": {
@@ -260,9 +260,9 @@ def _merge_repetition_results(all_runs: list[dict[str, Any]]) -> dict[str, Any]:
             case_judge_votes.setdefault(cid, []).extend(cr.get("judge_votes", []))
 
     merged_case_results: list[dict[str, Any]] = []
-    for case_id in case_labels:
+    for case_id, labels in case_labels.items():
         last_entry = next(cr for cr in base["case_results"] if cr["case_id"] == case_id)
-        votes = [v for v in case_labels[case_id] if v is not None]
+        votes = [v for v in labels if v is not None]
         pass_votes = [v for v in case_passes[case_id] if v is not None]
 
         majority_label = Counter(votes).most_common(1)[0][0] if votes else "UNKNOWN"
@@ -277,7 +277,7 @@ def _merge_repetition_results(all_runs: list[dict[str, Any]]) -> dict[str, Any]:
             "label": majority_label,
             "reason": (f"Majority vote over {n_runs} runs: {dict(Counter(votes))}"),
         }
-        merged_entry["repetition_labels"] = case_labels[case_id]
+        merged_entry["repetition_labels"] = labels
         merged_entry["generated_tasks"] = case_tasks[case_id]
         merged_entry["judge_votes"] = case_judge_votes[case_id]
         merged_case_results.append(merged_entry)

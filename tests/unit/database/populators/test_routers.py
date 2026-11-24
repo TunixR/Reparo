@@ -10,8 +10,8 @@ import pytest
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
-import database.populators.routers as routers
 import settings
+from database.populators import routers
 from database.provider.models import Router
 
 SETTINGS = {

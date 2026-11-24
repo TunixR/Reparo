@@ -49,12 +49,11 @@ def test_a_cancelled_run_is_no_failure(
     exporter: InMemorySpanExporter,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    with pytest.raises(type(ending)):
-        with agent_graph_run(GRAPH_ID, "Graph") as run:
-            with run.node(0, "gateway", AGENT_ID):
-                pass
-            with run.node(1, "gui", AGENT_ID):
-                raise ending
+    with pytest.raises(type(ending)), agent_graph_run(GRAPH_ID, "Graph") as run:
+        with run.node(0, "gateway", AGENT_ID):
+            pass
+        with run.node(1, "gui", AGENT_ID):
+            raise ending
 
     graph_run = _span(exporter, "agent_graph.run")
     assert graph_run.attributes is not None
@@ -73,10 +72,12 @@ def test_a_cancelled_run_is_no_failure(
 def test_a_cancelled_node_fails_the_run_with_a_warning(
     exporter: InMemorySpanExporter, caplog: pytest.LogCaptureFixture
 ) -> None:
-    with pytest.raises(NodeCancelledError):
-        with agent_graph_run(GRAPH_ID, "Graph") as run:
-            with run.node(0, "gateway", AGENT_ID):
-                raise NodeCancelledError("an agent was disabled")
+    with (
+        pytest.raises(NodeCancelledError),
+        agent_graph_run(GRAPH_ID, "Graph") as run,
+        run.node(0, "gateway", AGENT_ID),
+    ):
+        raise NodeCancelledError("an agent was disabled")
 
     graph_run = _span(exporter, "agent_graph.run")
     assert graph_run.attributes is not None

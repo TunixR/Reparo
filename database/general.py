@@ -6,17 +6,17 @@ from alembic.config import Config as AlembicConfig
 from sqlalchemy import inspect
 from sqlmodel import SQLModel
 
-import database.populators as populators
+from database import populators
 from database.engine import SessionDep, general_engine, get_session, postgres_url
 
-from .agent_graphs.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in agent_graphs.models
-from .agents.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in agents.models
-from .auth.models import *  # noqa: F403 # Needed for SQLModel to recognize the models defined in auth.models
-from .keys.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in keys.models
-from .logging.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in logging.models
-from .logging.orm_events import *  # noqa: F403
-from .provider.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in provider
-from .tools.models import *  # noqa: F403 Needed for SQLModel to recognize the models defined in tools.models
+from .agent_graphs.models import *  # noqa: F403, RUF100 Needed for SQLModel to recognize the models defined in agent_graphs.models
+from .agents.models import *  # noqa: F403, RUF100 Needed for SQLModel to recognize the models defined in agents.models
+from .auth.models import *  # noqa: F403, RUF100 # Needed for SQLModel to recognize the models defined in auth.models
+from .keys.models import *  # noqa: F403, RUF100 Needed for SQLModel to recognize the models defined in keys.models
+from .logging.models import *  # noqa: F403, RUF100 Needed for SQLModel to recognize the models defined in logging.models
+from .logging.orm_events import *  # noqa: F403, RUF100
+from .provider.models import *  # noqa: F403, RUF100 Needed for SQLModel to recognize the models defined in provider
+from .tools.models import *  # noqa: F403, RUF100 Needed for SQLModel to recognize the models defined in tools.models
 
 __all__ = [
     "SessionDep",

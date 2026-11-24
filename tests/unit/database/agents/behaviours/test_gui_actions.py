@@ -6,10 +6,10 @@ from typing import Any
 
 import pytest
 
-from database.agents.behaviours import TextGuiAgent, TooledGuiAgent
-from database.agents.behaviours.gui.shared import DEFAULT_GUI_ACTIONS
 import database.agents.behaviours.gui.shared as gui_shared
+from database.agents.behaviours import TextGuiAgent, TooledGuiAgent
 from database.agents.behaviours.gui import GuiAgent
+from database.agents.behaviours.gui.shared import DEFAULT_GUI_ACTIONS
 from tests.unit.shared.gui_fakes import (
     GUI_KINDS,
     clicking_gui_agent,

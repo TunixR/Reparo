@@ -69,6 +69,8 @@ def test_only_the_ignored_fields_an_entry_sets_are_printed(
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == "[populate_agents] Created agent 'Clicker'."
     assert lines[1:] == [
-        "[populate_agents]   'Clicker' ignores output_model: a GUI agent always "
-        "reports a GuiRunReport."
+        (
+            "[populate_agents]   'Clicker' ignores output_model: a GUI agent always "
+            "reports a GuiRunReport."
+        )
     ]

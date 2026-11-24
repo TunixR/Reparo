@@ -15,8 +15,8 @@ from database.agents.models import Agent, AgentType
 from database.provider.models import Router
 from tests.unit.fixtures.agent_fixtures import node_state
 from tests.unit.shared.fake_websocket import FakeWebSocket, make_test_image_bytes
-from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 from tests.unit.shared.gui_fakes import GUI_TASK_INPUT, make_robot, patch_gui_io
+from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 pytestmark = pytest.mark.asyncio
 

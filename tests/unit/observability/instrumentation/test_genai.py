@@ -22,8 +22,8 @@ from observability.instrumentation.genai import (
     TracedOpenAIModel,
     install_genai_tracer,
 )
-from tests.unit.shared.scripted_model import ToolCall
 from tests.unit.shared.gui_fakes import drive, make_gui_agent, make_robot, patch_gui_io
+from tests.unit.shared.scripted_model import ToolCall
 
 
 @pytest.fixture

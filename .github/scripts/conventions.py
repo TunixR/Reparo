@@ -113,8 +113,10 @@ def check_header(header: str, valid_scopes: Sequence[str]) -> list[str]:
     match = HEADER_RE.match(header)
     if match is None:
         return [
-            f"{header!r} is not `<type>(<area>)!: <summary>` "
-            "(scope and `!` optional, one space after the colon)"
+            (
+                f"{header!r} is not `<type>(<area>)!: <summary>` "
+                "(scope and `!` optional, one space after the colon)"
+            )
         ]
     errors: list[str] = []
     kind, scope, subject = match["type"], match["scope"], match["subject"]
@@ -186,7 +188,9 @@ def pr_labels(
 def form_section(body: str, heading: str) -> str | None:
     """The text under `### <heading>` in an issue-form body, or None."""
     match = re.search(
-        rf"^###\s+{re.escape(heading)}\s*$(.*?)(?=^###\s|\Z)", body, re.M | re.S
+        rf"^###\s+{re.escape(heading)}\s*$(.*?)(?=^###\s|\Z)",
+        body,
+        re.MULTILINE | re.DOTALL,
     )
     if match is None:
         return None

@@ -30,9 +30,9 @@ from database.populators.agent_graphs import populate_agent_graphs
 from database.provider.models import Router
 from tests.unit.agent_tools._shared.process_models import SPENDING_APPROVAL_MODEL
 from tests.unit.shared.fake_websocket import make_test_image_bytes
+from tests.unit.shared.gui_fakes import patch_gui_io
 from tests.unit.shared.log_events import logged_events
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
-from tests.unit.shared.gui_fakes import patch_gui_io
 
 GATEWAY = "Gateway Orchestrator"
 INFERER = "Recovery Inferer"

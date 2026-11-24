@@ -10,7 +10,7 @@ This module defines:
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import Column
 from sqlmodel import Enum, Field, Relationship, SQLModel
@@ -72,11 +72,11 @@ class User(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the user was created.",
     )
     updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the user was last updated.",
     )
 
@@ -124,7 +124,7 @@ class UserSession(SQLModel, table=True):
         description="Expiration timestamp for the session.",
     )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the session was created.",
     )
 

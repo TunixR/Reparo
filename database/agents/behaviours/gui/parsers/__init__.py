@@ -76,7 +76,7 @@ def load_parser(path: str) -> ActionParser:
                 f"parser_path '{path}': the parser class can't be built without arguments ({exc})."
             ) from exc
     if not isinstance(target, ActionParser):
-        raise ValueError(
+        raise ValueError(  # noqa: TRY004
             f"parser_path '{path}' doesn't implement the parser interface "
             "(describe and parse)."
         )
