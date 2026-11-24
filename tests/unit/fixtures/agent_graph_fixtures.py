@@ -5,6 +5,7 @@ Agent graph fixtures for unit tests.
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -136,7 +137,7 @@ def make_agent_graph(session: Session) -> MakeAgentGraph:
         }
         graph.nodes = list(rows.values())
         if edges is None:
-            edges = [(a.key, b.key) for a, b in zip(nodes, nodes[1:], strict=False)]
+            edges = [(a.key, b.key) for a, b in pairwise(nodes)]
         normalized = [edge if isinstance(edge, Edge) else Edge(*edge) for edge in edges]
         graph.edges = [
             AgentGraphEdge.model_validate(

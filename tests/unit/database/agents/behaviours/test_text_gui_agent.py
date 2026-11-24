@@ -11,11 +11,11 @@ from database.agents.behaviours.gui.parsers.uitars import UITarsParser
 from database.agents.behaviours.gui.shared import DEFAULT_GUI_ACTIONS, GuiAction
 from database.agents.behaviours.gui.text import MAX_PARSE_RETRIES
 from tests.unit.shared.gui_fakes import (
+    UITARS_PARSER,
     drive,
     make_gui_agent,
     make_robot,
     patch_gui_io,
-    UITARS_PARSER,
     scripted_model,
 )
 from tests.unit.shared.scripted_model import Turn

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
 def utc_now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 @dataclass(slots=True)
@@ -23,7 +23,7 @@ class TranscriptEvent:
         direction: str,
         event_type: str,
         payload: dict[str, Any] | str | None = None,
-    ) -> "TranscriptEvent":
+    ) -> TranscriptEvent:
         return cls(
             ts=utc_now_iso(),
             direction=direction,

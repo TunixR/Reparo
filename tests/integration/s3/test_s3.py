@@ -37,13 +37,13 @@ async def s3_ready():
         async with S3Client._client() as s3c:  # pyright: ignore[reportGeneralTypeIssues,reportPrivateUsage]
             # Basic connectivity check
             await s3c.list_buckets()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         pytest.skip(f"S3 integration tests skipped (cannot connect to {S3_URL}): {e}")
 
     # If connectivity works, ensure the bucket is present
     try:
         await _ensure_bucket_exists()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         pytest.skip(
             f"S3 integration tests skipped (cannot ensure bucket {S3_BUCKET}): {e}"
         )
@@ -120,7 +120,7 @@ async def test_bulk_download_bytes_roundtrip_multiple_keys():
     keys: list[str] = []
     try:
         # Upload three objects
-        for _, data in payloads.items():
+        for data in payloads.values():
             key = await S3Client.upload_bytes(
                 data, content_type="application/octet-stream", bucket=S3_BUCKET
             )

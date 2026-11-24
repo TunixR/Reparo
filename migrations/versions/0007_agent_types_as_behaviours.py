@@ -204,8 +204,10 @@ def downgrade() -> None:
 def _delete_ui_step_executor() -> None:
     executor = "(SELECT id FROM agent WHERE name = :name)"
     for statement in (
-        f"DELETE FROM subagent WHERE parent_agent_id IN {executor}"
-        f" OR child_agent_id IN {executor}",
+        (
+            f"DELETE FROM subagent WHERE parent_agent_id IN {executor}"
+            f" OR child_agent_id IN {executor}"
+        ),
         f"DELETE FROM agenttool WHERE agent_id IN {executor}",
         # Its traces and graph nodes keep the row; it is disabled instead.
         f"""DELETE FROM agent WHERE id IN {executor}

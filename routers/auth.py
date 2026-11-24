@@ -12,7 +12,7 @@ User operations: Login, See self, Delete self, Edit self, Change own password, L
 """
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -124,7 +124,7 @@ def logout(
 def create_user(
     user_data: UserCreate,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> UserPublic:
     """
     Create a new user. Requires admin role.
@@ -162,7 +162,7 @@ def create_user(
 )
 def list_users(
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> Sequence[UserPublic]:
     """
     List all users. Requires admin role.
@@ -180,7 +180,7 @@ def search_users(
     session: SessionDep,
     username: str | None = None,
     enabled: bool | None = None,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> Sequence[UserPublic]:
     """
     Search users by username or enabled status. Requires admin role.
@@ -199,7 +199,7 @@ def search_users(
 
 @router.get("/users/me", response_model=UserPublic, summary="Get current user")
 def get_current_user_info(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),  # noqa: B008
 ) -> UserPublic:
     """
     Get information about the currently authenticated user.
@@ -215,7 +215,7 @@ def get_current_user_info(
 def get_user(
     user_id: UUID,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> UserPublic:
     """
     Get user by ID. Requires admin role.
@@ -233,7 +233,7 @@ def get_user(
 def update_current_user(
     user_data: UserUpdate,
     session: SessionDep,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),  # noqa: B008
 ) -> UserPublic:
     """
     Update current user's own information.
@@ -245,19 +245,18 @@ def update_current_user(
             detail="Cannot modify role or enabled status",
         )
 
-    if user_data.username:
-        # Check if new username already exists
-        if user_data.username != current_user.username:
-            statement = select(User).where(User.username == user_data.username)
-            existing_user = session.exec(statement).first()
-            if existing_user:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Username already exists",
-                )
-            current_user.username = user_data.username
+    # Check if new username already exists
+    if user_data.username and user_data.username != current_user.username:
+        statement = select(User).where(User.username == user_data.username)
+        existing_user = session.exec(statement).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username already exists",
+            )
+        current_user.username = user_data.username
 
-    current_user.updated_at = datetime.now(timezone.utc)
+    current_user.updated_at = datetime.now(UTC)
     session.add(current_user)
     session.commit()
     session.refresh(current_user)
@@ -274,7 +273,7 @@ def update_user(
     user_id: UUID,
     user_data: UserUpdate,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> UserPublic:
     """
     Update user information. Requires admin role.
@@ -304,7 +303,7 @@ def update_user(
     if user_data.role is not None:
         user.role = user_data.role
 
-    user.updated_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.now(UTC)
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -319,7 +318,7 @@ def update_user(
 )
 def delete_current_user(
     session: SessionDep,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),  # noqa: B008
 ) -> None:
     """
     Delete current user's own account.
@@ -342,7 +341,7 @@ def delete_current_user(
 def delete_user(
     user_id: UUID,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> None:
     """
     Delete a user. Requires admin role.
@@ -375,7 +374,7 @@ def delete_user(
 def change_own_password(
     password_data: UserPasswordChange,
     session: SessionDep,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),  # noqa: B008
 ) -> None:
     """
     Change current user's own password.
@@ -396,7 +395,7 @@ def change_own_password(
 
     # Hash new password and update
     current_user.password = hash_password(password_data.new_password)
-    current_user.updated_at = datetime.now(timezone.utc)
+    current_user.updated_at = datetime.now(UTC)
     session.add(current_user)
     session.commit()
 
@@ -410,7 +409,7 @@ def change_user_password(
     user_id: UUID,
     password_data: UserPasswordChange,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> None:
     """
     Change a user's password. Requires admin role.
@@ -425,7 +424,7 @@ def change_user_password(
 
     # Hash new password and update
     user.password = hash_password(password_data.new_password)
-    user.updated_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.now(UTC)
     session.add(user)
     session.commit()
 
@@ -441,7 +440,7 @@ def change_user_password(
 def enable_user(
     user_id: UUID,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> UserPublic:
     """
     Enable a user account. Requires admin role.
@@ -454,7 +453,7 @@ def enable_user(
         )
 
     user.enabled = True
-    user.updated_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.now(UTC)
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -470,7 +469,7 @@ def enable_user(
 def disable_user(
     user_id: UUID,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),
+    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> UserPublic:
     """
     Disable a user account. Requires admin role.
@@ -483,7 +482,7 @@ def disable_user(
         )
 
     user.enabled = False
-    user.updated_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.now(UTC)
     session.add(user)
     session.commit()
     session.refresh(user)

@@ -17,14 +17,14 @@ def load_payload_by_id(payload_file: Path, payload_id: int) -> dict[str, Any]:
     if isinstance(raw, dict):
         raw = [raw]
     if not isinstance(raw, list):
-        raise ValueError("Payload catalog must be a JSON array")
+        raise ValueError("Payload catalog must be a JSON array")  # noqa: TRY004
 
     seen_ids: set[int] = set()
     selected: dict[str, Any] | None = None
 
     for i, item in enumerate(raw):
         if not isinstance(item, dict):
-            raise ValueError("Each payload catalog entry must be an object")
+            raise ValueError("Each payload catalog entry must be an object")  # noqa: TRY004
         if "id" not in item or "payload" not in item:
             if not all(key in item for key in ("task_name", "ui_log", "errored_act")):
                 raise ValueError(
@@ -38,14 +38,14 @@ def load_payload_by_id(payload_file: Path, payload_id: int) -> dict[str, Any]:
 
         item_id = item["id"]
         if not isinstance(item_id, int):
-            raise ValueError("Payload entry 'id' must be an integer")
+            raise ValueError("Payload entry 'id' must be an integer")  # noqa: TRY004
         if item_id in seen_ids:
             raise ValueError(f"Duplicate payload id found: {item_id}")
         seen_ids.add(item_id)
 
         payload = item["payload"]
         if not isinstance(payload, dict):
-            raise ValueError("Payload entry 'payload' must be an object")
+            raise ValueError("Payload entry 'payload' must be an object")  # noqa: TRY004
 
         if item_id == payload_id:
             selected = payload

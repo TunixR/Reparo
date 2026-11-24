@@ -202,7 +202,7 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
         click_x = ""
         click_y = ""
         text = gui_trace.action_content.get("content", "")
-        screenshot = f"{gui_trace.screenshot_key}.jpeg" or "not found"
+        screenshot = f"{gui_trace.screenshot_key}.jpeg"
 
         screenshots.append(gui_trace.screenshot_key)
 

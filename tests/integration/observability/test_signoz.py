@@ -21,13 +21,13 @@ from database.logging.models import RobotException
 from templates.gateway import ResponseToRPA
 from tests.integration.observability.conftest import SECRET, Telemetry
 from tests.integration.observability.signoz import Row
-from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
 from tests.unit.shared.gui_fakes import (
     GUI_TASK_INPUT,
     make_gui_agent,
     make_robot,
     patch_gui_io,
 )
+from tests.unit.shared.scripted_model import ScriptedModel, ToolCall
 
 
 def _by_name(spans: list[Row]) -> dict[str, Row]:

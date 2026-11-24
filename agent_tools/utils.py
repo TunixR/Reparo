@@ -113,7 +113,7 @@ def set_continuation(
 
     model = state.get(PROCESS_MODEL_STATE_KEY)
     if not isinstance(model, str):
-        raise RuntimeError(
+        raise RuntimeError(  # noqa: TRY004
             "The process model must be provided in the invocation state."
         )
 

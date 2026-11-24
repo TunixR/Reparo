@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -165,8 +165,8 @@ async def test_register_gui_trace_saves_a_gui_entry():
         action_content={"x": 10, "y": 20},
         screenshot_bytes=b"\x89PNG",
         success=True,
-        started_at=datetime.now(timezone.utc),
-        finished_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
     )
 
     gui_traces = [o for o in _STORE.values() if isinstance(o, GUITrace)]

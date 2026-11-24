@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -153,7 +153,7 @@ def run_evaluation() -> dict[str, Any]:
 
     full_results = {
         "experiment": "error_filtering_eval",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "model_id": settings.PROVIDER_MODEL,
         "metrics": {
             "routing": {

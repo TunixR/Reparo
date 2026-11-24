@@ -1,7 +1,7 @@
 import enum
 import json
 from base64 import b64encode
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Optional, override
 from uuid import UUID, uuid4
 
@@ -68,7 +68,7 @@ class AgentTrace(SQLModel, table=True):
     cost: float = Field(default=0.0)
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the trace was created.",
     )
     finished_at: datetime = Field(
@@ -129,7 +129,7 @@ class AgentTrace(SQLModel, table=True):
                                 log_msg += f"{item}\n"
                     else:  # Unknown dict format
                         log_msg += f"{part}\n"
-                date = msg.get("timestamp", datetime.now(timezone.utc))
+                date = msg.get("timestamp", datetime.now(UTC))
                 if isinstance(date, str):
                     timestamped_logs.append(
                         (
@@ -260,7 +260,7 @@ class RobotException(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the trace was created.",
     )
     finished_at: datetime = Field(
@@ -450,7 +450,7 @@ class GUITrace(SQLModel, table=True):
     success: bool = Field(default=False)
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the gui interaction was started.",
     )
     finished_at: datetime = Field(
@@ -502,7 +502,7 @@ class ToolTrace(SQLModel, table=True):
     success: bool = Field(default=False)
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the trace was created.",
     )
     finished_at: datetime = Field(
@@ -533,7 +533,7 @@ class AgentGraphTrace(SQLModel, table=True):
         default=None, foreign_key="agentgraph.id", ondelete="SET NULL"
     )
     # A quoted ``X | None`` can't be resolved by SQLModel.
-    agent_graph: Optional["AgentGraph"] = Relationship()  # noqa: UP045
+    agent_graph: Optional["AgentGraph"] = Relationship()
     robot_exception_id: UUID = Field(
         foreign_key="robotexception.id", ondelete="CASCADE", index=True
     )
@@ -557,7 +557,7 @@ class AgentGraphTrace(SQLModel, table=True):
             "order_by": "AgentGraphNodeTrace.execution_index",
         },
     )
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = Field(default=None)
 
     async def get_markdown_log(self) -> str:
@@ -616,7 +616,7 @@ class AgentGraphNodeTrace(SQLModel, table=True):
     )
     status: AgentGraphNodeTraceStatus = Field(default=AgentGraphNodeTraceStatus.RUNNING)
     error: str | None = Field(default=None)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = Field(default=None)
 
     async def get_markdown_log(self) -> str:

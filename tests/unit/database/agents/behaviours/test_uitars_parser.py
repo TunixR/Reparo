@@ -25,13 +25,17 @@ PARSER = UITarsParser()
 # Replies as UI-TARS writes them: a Thought, then one or more calls after "Action:".
 REPLIES: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
     (
-        "Thought: The Submit button is at the bottom.\n"
-        "Action: click(point='<point>235 512</point>')",
+        (
+            "Thought: The Submit button is at the bottom.\n"
+            "Action: click(point='<point>235 512</point>')"
+        ),
         [("click", {"start_box": [235.0, 512.0]})],
     ),
     (
-        "Thought: Open the menu.\n"
-        "Action: click(start_box='<|box_start|>(235,512)<|box_end|>')",
+        (
+            "Thought: Open the menu.\n"
+            "Action: click(start_box='<|box_start|>(235,512)<|box_end|>')"
+        ),
         [("click", {"start_box": [235.0, 512.0]})],
     ),
     (
@@ -73,10 +77,12 @@ REPLIES: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
     ),
     # Several calls, one blank line apart.
     (
-        "Thought: Fill the field and submit.\n"
-        "Action: click(point='<point>1 2</point>')\n\n"
-        "type(content='42')\n\n"
-        "hotkey(key='enter')",
+        (
+            "Thought: Fill the field and submit.\n"
+            "Action: click(point='<point>1 2</point>')\n\n"
+            "type(content='42')\n\n"
+            "hotkey(key='enter')"
+        ),
         [
             ("click", {"start_box": [1.0, 2.0]}),
             ("type_text", {"content": "42"}),
@@ -90,8 +96,10 @@ REPLIES: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
     ),
     # Only the last "Action:" counts, so a Thought may quote one.
     (
-        "Thought: Earlier I wrote Action: wait(), but now I click.\n"
-        "Action: click(point='<point>7 8</point>')",
+        (
+            "Thought: Earlier I wrote Action: wait(), but now I click.\n"
+            "Action: click(point='<point>7 8</point>')"
+        ),
         [("click", {"start_box": [7.0, 8.0]})],
     ),
 ]

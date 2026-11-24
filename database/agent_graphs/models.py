@@ -10,8 +10,8 @@ from typing import Any, NoReturn
 
 from pydantic import BaseModel
 from sqlalchemy import Index, UniqueConstraint, func, text
-from sqlalchemy.orm import object_session, validates
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import object_session, validates
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
 from agent_tools.utils import SET_CONTINUATION_FN_MODULE
@@ -284,7 +284,7 @@ class AgentGraphNode(SQLModel, table=True):
         description="The node's identity in its graph, and the key of its output."
     )
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="RESTRICT")
-    agent: "Agent" = Relationship(  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
+    agent: "Agent" = Relationship(  # pyright: ignore[reportUndefinedVariable]
         back_populates="graph_nodes", sa_relationship_kwargs={"lazy": "joined"}
     )
     is_entry: bool = Field(default=False, description="Whether the run starts here.")
@@ -377,7 +377,7 @@ class AgentGraphEdge(SQLModel, table=True):
         try:
             condition = CONDITION.validate_python(self.condition)
             return condition.holds(output.model_dump(mode="json"))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log_event(
                 logger,
                 attrs.EVENT_AGENT_GRAPH_CONDITION_ERROR,

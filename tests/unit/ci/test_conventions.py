@@ -115,9 +115,7 @@ def test_issue_labels_from_form_and_paths() -> None:
 
 
 def test_issue_labels_cross_cutting_and_empty_form() -> None:
-    many = " ".join(
-        ["routers/recovery.py", "security/", "docker/README.md", "s3/utils.py"]
-    )
+    many = "routers/recovery.py security/ docker/README.md s3/utils.py"
     body = f"{many}\n\n### Area\n\n_No response_\n"
     assert conventions.issue_labels(body, [], AREAS) == set()
 

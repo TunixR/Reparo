@@ -4,13 +4,12 @@ import argparse
 import asyncio
 import json
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
 from scripts.recovery_ws_client import ClientConfig, RecoveryWsRunner
 from scripts.recovery_ws_client.payloads import load_payload_by_id
-
-import traceback
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -151,7 +150,7 @@ def main() -> int:
             )
 
         return status
-    except Exception as _:
+    except Exception as _:  # noqa: BLE001
         print(f"Error: {traceback.format_exc()}", file=sys.stderr)
         return 1
 

@@ -7,7 +7,7 @@ from typing import Any
 def parse_message(raw: str) -> dict[str, Any]:
     data = json.loads(raw)
     if not isinstance(data, dict):
-        raise ValueError("Websocket message must be a JSON object")
+        raise ValueError("Websocket message must be a JSON object")  # noqa: TRY004
     return data
 
 

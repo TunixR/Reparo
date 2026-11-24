@@ -1,5 +1,5 @@
 import uuid
-from functools import lru_cache
+from functools import cache
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -18,7 +18,7 @@ from security.utils import hash_password
 from tests.unit.shared.auth_helpers import make_auth_headers, make_user_session
 
 
-@lru_cache(maxsize=None)
+@cache
 def _hash_password_cached(password: str) -> str:
     return hash_password(password)
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -41,7 +41,7 @@ def make_agent_trace(
     created_at: datetime | None = None,
     finished_at: datetime | None = None,
 ) -> AgentTrace:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return AgentTrace(
         agent_id=agent.id,
         agent=agent,
@@ -93,8 +93,8 @@ def add_sub_trace(parent_trace, child_trace, monkeypatch):  # pyright: ignore[re
         parent_trace_id=parent_trace.id,
         child_trace_id=child_trace.id,
     )
-    setattr(sub, "parent_trace", parent_trace)
-    setattr(sub, "child_trace", child_trace)
+    sub.parent_trace = parent_trace
+    sub.child_trace = child_trace
 
     parent_trace.sub_agents_traces.append(sub)
     return sub
@@ -134,12 +134,12 @@ async def test_messages_are_rendered_in_log_after_bug_fix():
                 {"text": "Hello world"},
                 {"text": "How are you?"},
             ],
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": datetime.now(UTC),
         },
         {
             "role": "assistant",
             "content": [{"text": "Response from assistant"}],
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": datetime.now(UTC),
         },
     ]
     trace = make_agent_trace(agent, messages=msgs)
@@ -175,7 +175,7 @@ async def test_flags_control_presence_of_tool_and_sub_sections(
     agent = make_agent()
 
     # Construct timestamps to test ordering
-    base = datetime.now(timezone.utc)
+    base = datetime.now(UTC)
     t1 = base
     t2 = base + timedelta(seconds=1)
     t3 = base + timedelta(seconds=2)
