@@ -8,7 +8,11 @@ import pytest
 
 from database.agents.behaviours import TextGuiAgent, TooledGuiAgent
 from database.agents.behaviours.gui.shared import DEFAULT_GUI_ACTIONS
+import database.agents.behaviours.gui.shared as gui_shared
+from database.agents.behaviours.gui import GuiAgent
 from tests.unit.shared.gui_fakes import (
+    GUI_KINDS,
+    clicking_gui_agent,
     drive,
     fake_router,
     make_gui_agent,
@@ -149,3 +153,21 @@ async def test_an_invalid_action_is_answered_with_an_error_and_not_sent(
     assert robot.actions == []
     tool_result = scripted_model(gui_agent).requests[1][-1]["content"][0]["toolResult"]
     assert tool_result["status"] == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", GUI_KINDS)
+async def test_both_loops_stop_at_the_action_cap(
+    monkeypatch: pytest.MonkeyPatch, kind: type[GuiAgent]
+) -> None:
+    patch_gui_io(monkeypatch)
+    monkeypatch.setattr(gui_shared, "MAX_ACTIONS", 2)
+    robot = make_robot()
+
+    run = await drive(clicking_gui_agent(kind), robot)
+
+    assert len(robot.actions) == 2
+    assert run.telemetry.outcome == "max_actions_exceeded"
+    report = run.report()
+    assert not report.goal_reached
+    assert report.summary == "Stopped at the cap of 2 actions without calling finished."

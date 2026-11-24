@@ -2,7 +2,7 @@
 
 Each action is defined once, in `DEFAULT_GUI_ACTIONS`: its name, description,
 inputs, and how they reach the robot as an ``action`` message (coordinates
-converted through the router). `TooledGuiAgent` turns each one into a Strands
+mapped back to the screen). `TooledGuiAgent` turns each one into a Strands
 tool; `TextGuiAgent` describes them to its model and runs what its parser reads.
 Both run them through `GuiRun.perform`, which sends the action, records its GUI
 trace and ``gui.action`` span, and returns the next observation.
@@ -25,7 +25,6 @@ from strands.types.content import ContentBlock
 from agent_tools.hooks import AgentLoggingHook
 from agent_tools.image import capture_screenshot
 from database.agents.specs import FIELD_SPECS, FieldSpec
-from database.provider.models import Router
 from observability.instrumentation.gui_agent import GuiAction, GuiTaskTelemetry
 
 MAX_ACTIONS = 40
@@ -88,21 +87,30 @@ type Box = Annotated[list[float], AfterValidator(_check_box)]
 _BOX = "Point [x, y] or box [x1, y1, x2, y2] in the coordinate space given in the instructions."
 
 
+type OriginalCoords = Callable[[float, float, int, int], list[float]]
+"""Maps a model-space point to the screen, given the screen's width and height
+(`Router.original_coords`)."""
+
+type ToScreen = Callable[[Sequence[float]], list[float]]
+"""Maps a model point, or a model box's center, to a screen pixel."""
+
+
 @dataclass(frozen=True, slots=True)
 class Screen:
-    """The robot's screen as the model sees it, for mapping its coordinates back."""
+    """The size of the last screenshot, which a model's coordinates are relative to."""
 
-    router: Router
     width: int
     height: int
 
-    def point(self, box: Sequence[float]) -> list[float]:
+    def point(
+        self, box: Sequence[float], original_coords: OriginalCoords
+    ) -> list[float]:
         """The screen pixel of a model point, or of a model box's center."""
         if len(box) == 2:
             x, y = box
         else:
             x, y = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
-        return self.router.original_coords(x, y, self.width, self.height)
+        return original_coords(x, y, self.width, self.height)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +144,7 @@ class GuiActionSpec:
     name: str
     description: str
     inputs: type[BaseModel]
-    to_robot: Callable[[Any, Screen], RobotAction] | None = None
+    to_robot: Callable[[Any, ToScreen], RobotAction] | None = None
     run_locally: Callable[[GuiRun, Any], Awaitable[ActionOutcome]] | None = None
 
     def __post_init__(self) -> None:
@@ -219,9 +227,9 @@ class AlterVariableInputs(BaseModel):
     value: Any = Field(description="Its new value, of the variable's JSON type.")
 
 
-def _at_point(action_type: str) -> Callable[[PointInputs, Screen], RobotAction]:
-    def to_robot(inputs: PointInputs, screen: Screen) -> RobotAction:
-        return RobotAction(action_type, {"start_box": screen.point(inputs.start_box)})
+def _at_point(action_type: str) -> Callable[[PointInputs, ToScreen], RobotAction]:
+    def to_robot(inputs: PointInputs, to_screen: ToScreen) -> RobotAction:
+        return RobotAction(action_type, {"start_box": to_screen(inputs.start_box)})
 
     return to_robot
 
@@ -255,7 +263,7 @@ DEFAULT_GUI_ACTIONS = GuiActions(
         "type_text",
         "Type text into the currently focused input field.",
         TextInputs,
-        to_robot=lambda inputs, _screen: RobotAction(
+        to_robot=lambda inputs, _to_screen: RobotAction(
             "type", {"content": inputs.content}
         ),
     ),
@@ -266,29 +274,31 @@ DEFAULT_GUI_ACTIONS = GuiActions(
         "esc, tab, space, backspace, delete, up, down, left, right, pageup, pagedown, home, end, f1-f12, "
         "or the character itself (a, 1, -, +, =).",
         HotkeyInputs,
-        to_robot=lambda inputs, _screen: RobotAction("hotkey", {"hotkey": inputs.key}),
+        to_robot=lambda inputs, _to_screen: RobotAction(
+            "hotkey", {"hotkey": inputs.key}
+        ),
     ),
     GuiActionSpec(
         "key_down",
         "Press and hold a keyboard key.",
         KeyInputs,
-        to_robot=lambda inputs, _screen: RobotAction("keydown", {"key": inputs.key}),
+        to_robot=lambda inputs, _to_screen: RobotAction("keydown", {"key": inputs.key}),
     ),
     GuiActionSpec(
         "key_up",
         "Release a keyboard key that was held down.",
         KeyInputs,
-        to_robot=lambda inputs, _screen: RobotAction("keyup", {"key": inputs.key}),
+        to_robot=lambda inputs, _to_screen: RobotAction("keyup", {"key": inputs.key}),
     ),
     GuiActionSpec(
         "scroll",
         "Scroll in the given direction ('up', 'down', 'left', 'right') at a screen location.",
         ScrollInputs,
-        to_robot=lambda inputs, screen: RobotAction(
+        to_robot=lambda inputs, to_screen: RobotAction(
             "scroll",
             {
                 "direction": inputs.direction,
-                "start_box": screen.point(inputs.start_box),
+                "start_box": to_screen(inputs.start_box),
             },
         ),
     ),
@@ -296,11 +306,11 @@ DEFAULT_GUI_ACTIONS = GuiActions(
         "drag",
         "Click and drag from one screen location to another.",
         DragInputs,
-        to_robot=lambda inputs, screen: RobotAction(
+        to_robot=lambda inputs, to_screen: RobotAction(
             "drag",
             {
-                "start_box": screen.point(inputs.start_box),
-                "end_box": screen.point(inputs.end_box),
+                "start_box": to_screen(inputs.start_box),
+                "end_box": to_screen(inputs.end_box),
             },
         ),
     ),
@@ -308,7 +318,7 @@ DEFAULT_GUI_ACTIONS = GuiActions(
         "wait",
         "Wait for a specified number of seconds.",
         WaitInputs,
-        to_robot=lambda inputs, _screen: RobotAction(
+        to_robot=lambda inputs, _to_screen: RobotAction(
             "wait", {"seconds": inputs.seconds}
         ),
     ),
@@ -351,18 +361,6 @@ def coerce_to_held_type(held: Any, value: Any) -> Any:
     return value
 
 
-def observation(router: Router, image: bytes) -> list[ContentBlock]:
-    """The screenshot the model sees after an action.
-
-    Holo models get it between ``<observation>`` tags. See TECH_DEBT.md: the model
-    is told apart by its name.
-    """
-    block: ContentBlock = {"image": {"format": "jpeg", "source": {"bytes": image}}}
-    if "Holo" in router.model_name:
-        return [{"text": "<observation>\n"}, block, {"text": "\n<observation>"}]
-    return [block]
-
-
 # ---------------------------------------------------------------------------
 # A run
 # ---------------------------------------------------------------------------
@@ -376,10 +374,12 @@ class GuiRun:
     telemetry: GuiTaskTelemetry
     websocket: Any
     hook: AgentLoggingHook
-    router: Router
+    original_coords: OriginalCoords
+    observe: Callable[[bytes], list[ContentBlock]]
+    """What the model is shown of a screenshot taken after an action."""
     variables: dict[str, Any]
     image: bytes
-    image_size: tuple[int, int]
+    screen: Screen
     agent: StrandsAgent | None = None
     sent: int = 0
     cap_reached: bool = False
@@ -395,15 +395,8 @@ class GuiRun:
             self.summary is not None or self.cap_reached or self.disconnect is not None
         )
 
-    def screen(self) -> Screen:
-        width, height = self.image_size
-        return Screen(self.router, width, height)
-
-    def model_space(self) -> tuple[int, int]:
-        """The width and height of the coordinate space the model answers in."""
-        width, height = self.image_size
-        model_height, model_width = self.router.relative_dim(height, width)
-        return model_width, model_height
+    def to_screen(self, box: Sequence[float]) -> list[float]:
+        return self.screen.point(box, self.original_coords)
 
     async def perform(self, name: str, raw_inputs: Mapping[str, Any]) -> ActionOutcome:
         """Take the action called ``name`` and return what the model sees next.
@@ -424,7 +417,7 @@ class GuiRun:
         except ValidationError as exc:
             return ActionOutcome.failure(f"Invalid inputs for '{name}': {exc}")
         if spec.to_robot is not None:
-            return await self._send(spec.to_robot(inputs, self.screen()))
+            return await self._send(spec.to_robot(inputs, self.to_screen))
         if spec.run_locally is not None:
             return await spec.run_locally(self, inputs)
         raise TypeError(
@@ -489,10 +482,11 @@ class GuiRun:
                 )
 
         await asyncio.sleep(SETTLE_SECONDS)
-        self.image, self.image_size = await capture_screenshot(
+        self.image, (width, height) = await capture_screenshot(
             self.websocket, telemetry
         )
-        return ActionOutcome(content=observation(self.router, self.image))
+        self.screen = Screen(width, height)
+        return ActionOutcome(content=self.observe(self.image))
 
     async def finish(self, inputs: FinishedInputs) -> ActionOutcome:
         """End the run with the model's summary and record the final GUI trace."""

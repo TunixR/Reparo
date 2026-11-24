@@ -12,11 +12,11 @@ from strands.hooks import HookProvider, HookRegistry
 
 import database.agents.behaviours.base as behaviour_base
 import database.agents.behaviours.gui.shared as gui_shared
-from database.agents.behaviours.gui import GuiAgent, TooledGuiAgent
+from database.agents.behaviours.gui import GuiAgent, TextGuiAgent, TooledGuiAgent
 from database.agents.behaviours.gui.shared import GUI_ARGUMENTS, GuiRun
 from database.agents.models import Agent
 from tests.unit.shared.fake_websocket import FakeWebSocket, make_test_image_bytes
-from tests.unit.shared.scripted_model import ScriptedModel, Turn
+from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 
 class FakeHook(HookProvider):
@@ -125,6 +125,22 @@ def scripted_model(gui_agent: GuiAgent) -> ScriptedModel:
     return gui_agent.agent.get_model()  # pyright: ignore[reportReturnType]
 
 
+def clicking_gui_agent(kind: type[GuiAgent]) -> GuiAgent:
+    """A GUI agent of ``kind`` whose model clicks, in its own way, on every turn."""
+    if kind is TextGuiAgent:
+        return make_gui_agent(
+            "Action: click(point='<point>1 1</point>')",
+            kind=TextGuiAgent,
+            prompt="{actions}\n{instruction}",
+            parser_path=UITARS_PARSER,
+        )
+    return make_gui_agent(ToolCall("click", {"start_box": [1, 1]}), kind=kind)
+
+
+GUI_KINDS = [TooledGuiAgent, TextGuiAgent]
+"""Both GUI loops, for behaviour they must share."""
+
+
 GUI_TASK_INPUT: dict[str, Any] = {
     "task": "Fill the invoice",
     "variables": {},
@@ -142,8 +158,6 @@ async def drive(
     **inputs: Any,
 ) -> GuiRun:
     """Run ``gui_agent`` standalone on `GUI_TASK_INPUT` with ``inputs`` over it."""
-    return await gui_agent.drive(
-        {"websocket": robot, **(state or {})},
-        GUI_TASK_INPUT | inputs,
-        contain_errors=True,
-    )
+    invocation_state = {"websocket": robot, **(state or {})}
+    bound = gui_agent.bind_inputs(invocation_state, GUI_TASK_INPUT | inputs)
+    return await gui_agent.drive(invocation_state, bound, contain_errors=True)

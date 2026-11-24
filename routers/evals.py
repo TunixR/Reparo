@@ -175,7 +175,7 @@ async def _run_standalone_recovery(
     gui_agent = behaviour_of(agent)
     if not isinstance(gui_agent, GuiAgent):
         raise TypeError(f"The eval agent '{agent.name}' is not a GUI agent.")
-    run = await gui_agent.drive(
+    inputs = gui_agent.bind_inputs(
         gui_state,
         {
             "task": recovery_task,
@@ -184,8 +184,8 @@ async def _run_standalone_recovery(
             "errored_act": errored_act,
             "model": model,
         },
-        contain_errors=True,
     )
+    run = await gui_agent.drive(gui_state, inputs, contain_errors=True)
     trace_text = run.error if run.error is not None else str(run.transcript())
 
     agent_model = TracedOpenAIModel(

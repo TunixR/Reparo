@@ -10,6 +10,7 @@ ended into an outcome. See OBSERVABILITY.md.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any, ClassVar, override
@@ -17,7 +18,7 @@ from typing import Any, ClassVar, override
 from fastapi import WebSocketDisconnect
 from strands import Agent as StrandsAgent
 from strands.tools.decorator import DecoratedFunctionTool
-from strands.types.content import Messages
+from strands.types.content import ContentBlock, Messages
 
 from agent_tools.hooks import MaxGuiImagesHook
 from agent_tools.image import capture_screenshot
@@ -28,6 +29,7 @@ from database.agents.behaviours.gui.shared import (
     GuiActions,
     GuiRun,
     GuiRunReport,
+    Screen,
 )
 from database.agents.models import Agent, IgnoredField, ModelClass
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
@@ -83,7 +85,7 @@ class GuiAgent(AgentBehaviour, ABC):
         Every error propagates, so a robot disconnect or a model failure ends a graph
         node instead of a report.
         """
-        run = await self._session(invocation_state, inputs, contain_errors=False)
+        run = await self.drive(invocation_state, inputs, contain_errors=False)
         return run.report()
 
     @override
@@ -97,7 +99,8 @@ class GuiAgent(AgentBehaviour, ABC):
         extraction stores what it obtained in them, and the messages, to judge the
         outcome from what the agent did and saw.
         """
-        run = await self.drive(invocation_state, inputs, contain_errors=True)
+        bound = self.bind_inputs(invocation_state, inputs)
+        run = await self.drive(invocation_state, bound, contain_errors=True)
         if run.error is not None:
             return run.error
         return run.report().model_dump() | {
@@ -107,28 +110,16 @@ class GuiAgent(AgentBehaviour, ABC):
 
     async def drive(
         self,
-        invocation_state: dict[str, Any],
-        inputs: Mapping[str, Any],
-        *,
-        contain_errors: bool,
-    ) -> GuiRun:
-        """Bind ``inputs`` and run until the agent finishes, stops or hits the cap."""
-        bound = self.bind_inputs(invocation_state, inputs)
-        return await self._session(
-            invocation_state, bound, contain_errors=contain_errors
-        )
-
-    async def _session(
-        self,
         state: dict[str, Any],
         inputs: Mapping[str, Any],
         *,
         contain_errors: bool,
     ) -> GuiRun:
-        """The loop skeleton around `_drive`.
+        """Run on bound inputs until the agent finishes, stops or hits the cap.
 
-        A robot disconnect and a ``RuntimeError`` always propagate. Any other error
-        propagates too, unless ``contain_errors``: then the run returns it as ``error``.
+        The loop skeleton around `_drive`, for both loops. A robot disconnect, an
+        abort and a ``RuntimeError`` always propagate. Any other error propagates
+        too, unless ``contain_errors``: then the run returns it as ``error``.
         """
         if "websocket" not in state:
             raise ValueError("WebSocket must be provided in tool context")
@@ -149,17 +140,18 @@ class GuiAgent(AgentBehaviour, ABC):
             ui_log=inputs["ui_log"],
             errored_act=inputs["errored_act"],
         )
-        image, image_size = await capture_screenshot(websocket, telemetry)
+        image, (width, height) = await capture_screenshot(websocket, telemetry)
         hook = self.logging_hook(state)
         run = GuiRun(
             actions=self.actions,
             telemetry=telemetry,
             websocket=websocket,
             hook=hook,
-            router=self.agent.router,
+            original_coords=self.agent.router.original_coords,
+            observe=self._observation,
             variables=variables,
             image=image,
-            image_size=image_size,
+            screen=Screen(width, height),
         )
         agent = StrandsAgent(  # type: ignore
             model=self.agent.get_model(),
@@ -187,6 +179,10 @@ class GuiAgent(AgentBehaviour, ABC):
         except WebSocketDisconnect:
             telemetry.client_disconnected(telemetry.actions)
             raise
+        except asyncio.CancelledError:
+            # The robot aborted, which cancels the recovery.
+            telemetry.cancelled(telemetry.actions)
+            raise
         except RuntimeError as e:
             telemetry.failed(telemetry.actions, e, escaped=True)
             raise
@@ -203,7 +199,9 @@ class GuiAgent(AgentBehaviour, ABC):
         self, run: GuiRun, inputs: Mapping[str, Any], variables: dict[str, Any]
     ) -> str:
         # Actions map coordinates back from this space (Router.original_coords).
-        model_width, model_height = run.model_space()
+        model_height, model_width = self.agent.router.relative_dim(
+            run.screen.height, run.screen.width
+        )
         return f"""
     Task: {inputs["task"]}
     UI Log: {inputs["ui_log"]}
@@ -213,6 +211,17 @@ class GuiAgent(AgentBehaviour, ABC):
 
     IMPORTANT: Give coordinates in a {model_width}x{model_height} space: x from 0 to {model_width} (left to right), y from 0 to {model_height} (top to bottom).
     """
+
+    def _observation(self, image: bytes) -> list[ContentBlock]:
+        """The screenshot the model sees after an action.
+
+        Holo models get it between ``<observation>`` tags. See TECH_DEBT.md: the model
+        is told apart by its name.
+        """
+        block: ContentBlock = {"image": {"format": "jpeg", "source": {"bytes": image}}}
+        if "Holo" in self.agent.router.model_name:
+            return [{"text": "<observation>\n"}, block, {"text": "\n<observation>"}]
+        return [block]
 
     def _prompt(self, instruction: str) -> str:
         """The first message's text: the agent's prompt with its ``{instruction}``."""

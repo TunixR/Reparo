@@ -99,7 +99,7 @@ knowingly leave one behind, add it here.
 
 ## 10. Holo models are told apart by their name
 
-- **Where:** `observation` in `database/agents/behaviours/gui/shared.py`.
+- **Where:** `GuiAgent._observation` in `database/agents/behaviours/gui/base.py`.
 - **Why it's debt:** a Holo model gets each screenshot after an action between `<observation>`
   tags, and the code finds one by looking for "Holo" in the router's `model_name`. Another name
   for the same model, or another model that needs the tags, gets the wrong framing silently.

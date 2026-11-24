@@ -56,6 +56,12 @@ class _FakeGuiAgent(TooledGuiAgent):
     """Stands in for a GUI agent's run: it changes one variable, like `alter_variable`."""
 
     @override
+    def bind_inputs(
+        self, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return dict(inputs)
+
+    @override
     async def drive(
         self,
         invocation_state: dict[str, Any],
