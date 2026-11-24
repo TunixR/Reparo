@@ -102,7 +102,7 @@ def test_pr_labels_breaking_footer_deps_and_invalid_title() -> None:
 def test_issue_labels_from_form_and_paths() -> None:
     body = (
         "### Where\n\n`routers/recovery.py:120` and "
-        "https://github.com/TunixR/Reparo/blob/develop/database/agents/uitars.py#L10\n\n"
+        "https://github.com/TunixR/Reparo/blob/develop/database/agents/behaviours/gui/parsers/uitars.py#L10\n\n"
         "### Area\n\nauth, deps, nonsense\n"
     )
     added = conventions.issue_labels(body, ["area: auth"], AREAS)
@@ -115,9 +115,7 @@ def test_issue_labels_from_form_and_paths() -> None:
 
 
 def test_issue_labels_cross_cutting_and_empty_form() -> None:
-    many = " ".join(
-        ["routers/recovery.py", "security/", "docker/README.md", "s3/utils.py"]
-    )
+    many = "routers/recovery.py security/ docker/README.md s3/utils.py"
     body = f"{many}\n\n### Area\n\n_No response_\n"
     assert conventions.issue_labels(body, [], AREAS) == set()
 

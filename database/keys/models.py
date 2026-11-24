@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from sqlmodel import Field, SQLModel
@@ -21,7 +21,7 @@ class RobotKey(SQLModel, table=True):
     key_last4: str = Field(min_length=4, max_length=4, description="Last 4 chars")
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the key was created.",
     )
 

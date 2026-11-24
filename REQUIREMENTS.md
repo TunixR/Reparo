@@ -38,7 +38,7 @@ The platform addresses critical business continuity needs by minimizing automati
 
 #### 1.1.2 Recovery Agents
 - [x] **REQ-F-008**: Each recovery module SHALL declare its input requirements, output capabilities, available tools, and supported error types (Inputs via the agent's `arguments` and outputs via its `output_model`, both defined as data (`database/agents/specs.py`); tools via `AgentTool`/`SubAgent`; error-type via agent description)
-- [x] **REQ-F-009**: Recovery Agents SHALL implement a standardized interface for communication with the gateway (Implemented via a uniform agent invocation interface `database/agents/models.py:Agent.__call__`, the graph node entry point `Agent.run_node` and tool exposure `Agent.as_tool()`.)
+- [x] **REQ-F-009**: Recovery Agents SHALL implement a standardized interface for communication with the gateway (Implemented via the agent behaviour classes in `database/agents/behaviours/`: every agent type runs through the same interface, standalone (`AgentBehaviour.__call__`), as a graph node (`run_node`) and as a tool (`as_tool()`).)
 - [x] **REQ-F-010**: Agents SHALL be capable of generating high-level execution plans for error resolution
 - [x] **REQ-F-011**: Agents SHALL execute plans step-by-step with iterative decision-making after each step (Especialized agents like GUIAgent's custom flow)
 - [x] **REQ-F-012**: Agents SHALL evaluate step completion status and determine next actions (continue, replan, escalate, or complete)
@@ -192,8 +192,8 @@ The platform addresses critical business continuity needs by minimizing automati
 - [x] **REQ-F-117**: The system SHALL let the robot report the final outcome of a recovery after the fact, authenticated by its RobotKey (Implemented: `POST /recovery/report_result/{recovery_id}` in `routers/recovery.py`.)
 
 #### 1.6.8 GUI Recovery Agents
-- [x] **REQ-F-118**: The system SHALL drive the robot's desktop during recovery by requesting screenshots and sending UI actions over the recovery WebSocket (Implemented: `agent_tools/image.py`, `database/agents/tooled_gui_agent.py`; robot side in `scripts/recovery_ws_client/`.)
-- [x] **REQ-F-119**: The system SHALL support interchangeable GUI agent strategies selected by configuration (Partial: tool-based grounding agent in `database/agents/tooled_gui_agent.py`, used by every GUI agent; the standalone UI-TARS loop in `database/agents/uitars.py` and its text-based prompt (`database/populators/default_prompts/gui_agent_text.md`, seeded disabled) are kept but not wired in.)
+- [x] **REQ-F-118**: The system SHALL drive the robot's desktop during recovery by requesting screenshots and sending UI actions over the recovery WebSocket (Implemented: `agent_tools/image.py`, `database/agents/behaviours/gui/`; robot side in `scripts/recovery_ws_client/`.)
+- [x] **REQ-F-119**: The system SHALL support interchangeable GUI agent strategies selected by configuration (Implemented: an agent's type selects its loop, `TooledGuiAgent` with one tool per action or `TextGuiAgent` with actions read from text by the parser its `parser_path` names, in `database/agents/behaviours/gui/`; the UI-TARS parser backs a seeded, disabled TextGuiAgent.)
 - [x] **REQ-F-120**: The system SHALL bound the number of screenshots kept in a GUI agent's conversation (Implemented: `agent_tools/hooks.py:MaxGuiImagesHook`, `MAX_GUI_IMAGES`.)
 
 #### 1.6.9 Evaluation

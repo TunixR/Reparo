@@ -6,8 +6,8 @@ knowingly leave one behind, add it here.
 
 ## 1. GUI agents always report `GuiRunReport`
 
-- **Where:** `Agent.output_class` in `database/agents/models.py`; `GuiRunReport` in
-  `database/agents/tooled_gui_agent.py`.
+- **Where:** `GuiAgent.output_class` in `database/agents/behaviours/gui/base.py`; `GuiRunReport`
+  in `database/agents/behaviours/gui/shared.py`.
 - **Why it's debt:** every other agent's output model is data, but a GUI agent reports a class
   built in code, whatever its `output_model` says. Graph conditions and bindings over a GUI node
   can only use `GuiRunReport`'s fields, and changing them needs a deploy.
@@ -15,18 +15,21 @@ knowingly leave one behind, add it here.
   asking the grounding model for a structured report at the end of its run), and fall back to
   `GuiRunReport` only when none is defined.
 
-## 2. `tooled_guiagent` has a fixed signature
+## 2. GUI agents take fixed inputs
 
-- **Where:** `TooledGuiAgent.tooled_guiagent` in `database/agents/tooled_gui_agent.py`.
-- **Why it's debt:** the tool takes `task`, `variables`, `ui_log`, `errored_act` and `model` as
-  Python parameters. A GUI agent's `arguments` only document those inputs: adding, renaming or
-  retyping one changes nothing at runtime, or breaks the call.
-- **What fixing it means:** build the GUI tool's input from the agent's `arguments`, as other
-  agents do, and read the values the loop needs from the validated inputs.
+- **Where:** `GUI_ARGUMENTS` in `database/agents/behaviours/gui/shared.py`, which `GuiAgent.validate`
+  writes over a GUI agent's `arguments`.
+- **Why it's debt:** every GUI agent takes `task`, `variables`, `ui_log`, `errored_act` and `model`,
+  because the loop and its instruction read those five by name. Arguments given on create, update
+  or seed are replaced (and listed in `ignored_fields`), so a GUI agent can't take another input,
+  and a graph must bind all five to a GUI node.
+- **What fixing it means:** let the loop need only what it uses (`task`, and `variables` for
+  `alter_variable`), and build the rest of the instruction from the agent's own arguments, with
+  prompt templating (#3).
 
 ## 3. No prompt templating
 
-- **Where:** the instruction built in `Agent._execute` (`database/agents/models.py`).
+- **Where:** the instruction built in `DefaultAgent.run` (`database/agents/behaviours/default.py`).
 - **Why it's debt:** an agent's inputs reach the LLM as `name: value` lines after the system
   prompt. A prompt can't place an input where it reads best, format it, or leave one out.
 - **What fixing it means:** a template on the agent that names its arguments, validated against
@@ -34,7 +37,8 @@ knowingly leave one behind, add it here.
 
 ## 4. Seed argument types are too loose, and `errored_act` can't be null
 
-- **Where:** the `arguments` of the seeded agents in `database/populators/agents.json`.
+- **Where:** the `arguments` of the seeded agents in `database/populators/agents.json`. GUI agents
+  are not affected: they take `GUI_ARGUMENTS` (#2), where `errored_act` is `dict | None`.
 - **Why it's debt:** the seeds kept the old, bare `dict` and `list` types. They accept any shape,
   so a malformed input is only caught when the LLM misreads it. `errored_act` is null when the
   robot didn't name the failed activity (`RecoveryInputs`), but its seeded type doesn't allow
@@ -92,3 +96,12 @@ knowingly leave one behind, add it here.
 - **What fixing it means:** drop `EVAL_VALIDATION_ERROR`, so the eval connection sends
   `INVALID_RECOVERY_PAYLOAD`, as part of the next `contract_version` bump, through the Contract changes checklist in ReparoHome's
   `docs/agents/issue-tracker.md`, and update the eval line in `ARCHITECTURE.md` "Robot protocol".
+
+## 10. Holo models are told apart by their name
+
+- **Where:** `GuiAgent._observation` in `database/agents/behaviours/gui/base.py`.
+- **Why it's debt:** a Holo model gets each screenshot after an action between `<observation>`
+  tags, and the code finds one by looking for "Holo" in the router's `model_name`. Another name
+  for the same model, or another model that needs the tags, gets the wrong framing silently.
+- **What fixing it means:** a property of the router (like its `vision_backbone`), set when it is
+  configured, that says how the model wants observations framed.

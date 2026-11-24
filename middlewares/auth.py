@@ -76,7 +76,7 @@ def get_current_user(
     return user
 
 
-def require_admin(current_user: User = Depends(get_current_user)) -> User:
+def require_admin(current_user: User = Depends(get_current_user)) -> User:  # noqa: B008
     """Require admin role for the current user."""
     if current_user.role != UserRole.ADMINISTRATOR:
         raise HTTPException(

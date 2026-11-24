@@ -1,5 +1,6 @@
+from datetime import UTC, datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timedelta, timezone
 
 from security.utils import is_session_valid
 
@@ -14,8 +15,8 @@ def test_is_session_valid_rejects_naive_datetime():
 
 
 def test_is_session_valid_with_aware_utc_datetime():
-    future_valid_until = datetime.now(timezone.utc) + timedelta(minutes=5)
-    past_valid_until = datetime.now(timezone.utc) - timedelta(minutes=5)
+    future_valid_until = datetime.now(UTC) + timedelta(minutes=5)
+    past_valid_until = datetime.now(UTC) - timedelta(minutes=5)
 
     assert is_session_valid(future_valid_until) is True
     assert is_session_valid(past_valid_until) is False

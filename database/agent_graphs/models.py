@@ -10,8 +10,8 @@ from typing import Any, NoReturn
 
 from pydantic import BaseModel
 from sqlalchemy import Index, UniqueConstraint, func, text
-from sqlalchemy.orm import object_session, validates
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import object_session, validates
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
 from agent_tools.utils import SET_CONTINUATION_FN_MODULE
@@ -23,7 +23,8 @@ from database.agent_graphs.runner import (
     NodeCancelledError,
     clean_state,
 )
-from database.agents.models import Agent, AgentType
+from database.agents.behaviours import behaviour_of, is_gui_agent
+from database.agents.models import Agent
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
 from observability.instrumentation.agent_graph import (
@@ -43,7 +44,7 @@ class AgentGraphFlag(str, enum.Enum):
 
 def _reports_success(node: "AgentGraphNode") -> bool:
     """Whether the node's output model has a boolean ``success``."""
-    model = node.agent.output_class()
+    model = behaviour_of(node.agent).output_class()
     success = None if model is None else model.model_fields.get("success")
     return success is not None and success.annotation is bool
 
@@ -146,7 +147,7 @@ class AgentGraph(SQLModel, table=True):
     def recovery_gaps(self) -> list[str]:
         """Why recoveries can't run the graph; empty when they can."""
         gaps: list[str] = []
-        if not any(node.agent.type == AgentType.GuiAgent for node in self.nodes):
+        if not any(is_gui_agent(node.agent) for node in self.nodes):
             gaps.append(
                 "no node runs a GUI agent, so nothing acts on the robot's desktop; "
                 "add one"
@@ -231,7 +232,7 @@ class AgentGraph(SQLModel, table=True):
                 if not self.can_run:
                     self._cancel(node)
                 async with asyncio.timeout(self.node_timeout_s):
-                    run = await node.agent.run_node(state, node.input_map)
+                    run = await behaviour_of(node.agent).run_node(state, node.input_map)
             context.record(node.key, run.output)
             terminal_node, output = node.key, run.output
             nodes_run += 1
@@ -283,7 +284,7 @@ class AgentGraphNode(SQLModel, table=True):
         description="The node's identity in its graph, and the key of its output."
     )
     agent_id: uuid.UUID = Field(foreign_key="agent.id", ondelete="RESTRICT")
-    agent: "Agent" = Relationship(  # noqa: F821 # pyright: ignore[reportUndefinedVariable]
+    agent: "Agent" = Relationship(  # pyright: ignore[reportUndefinedVariable]
         back_populates="graph_nodes", sa_relationship_kwargs={"lazy": "joined"}
     )
     is_entry: bool = Field(default=False, description="Whether the run starts here.")
@@ -376,7 +377,7 @@ class AgentGraphEdge(SQLModel, table=True):
         try:
             condition = CONDITION.validate_python(self.condition)
             return condition.holds(output.model_dump(mode="json"))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log_event(
                 logger,
                 attrs.EVENT_AGENT_GRAPH_CONDITION_ERROR,

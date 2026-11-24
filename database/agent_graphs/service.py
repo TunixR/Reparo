@@ -44,7 +44,8 @@ from database.agent_graphs.models import (
     AgentGraphUpdate,
 )
 from database.agent_graphs.runner import RECOVERY_INPUTS_SOURCE
-from database.agents.models import Agent, AgentUpdate
+from database.agents.behaviours import behaviour_of, validate_agent
+from database.agents.models import Agent, AgentUpdate, IgnoredField
 from database.agents.specs import dump_fields
 from database.provider.models import Router
 from templates.recovery_payload import RecoveryInputs
@@ -192,13 +193,14 @@ def remove_edge(session: Session, graph: AgentGraph, edge: AgentGraphEdge) -> No
 
 def update_agent(
     session: Session, agent: Agent, payload: AgentUpdate, router: Router
-) -> Agent:
-    """Apply ``payload`` to ``agent`` unless that breaks a graph using the agent.
+) -> list[IgnoredField]:
+    """Apply ``payload`` to ``agent`` unless that breaks a graph using the agent, and
+    return the fields the agent's type ignores.
 
     Disabling is rejected while an enabled graph uses the agent; enabling is always
     allowed. A change to the agent's arguments, output model or type is rejected
     if it breaks a structural rule of an enabled graph using the agent. Raises
-    `ValueError` for an update the agent itself rejects.
+    `ValueError` for an update the agent or its type rejects.
     """
     was_enabled = agent.enabled
     contract = _contract(agent)
@@ -206,6 +208,7 @@ def update_agent(
         graphs = _graphs_using(session, agent, enabled_only=True)
         before = {graph.id: _structure_violations(graph) for graph in graphs}
         agent.apply_update(payload, router)
+        ignored = validate_agent(agent)
         if was_enabled and not agent.enabled and graphs:
             raise _in_use(
                 f"The agent '{agent.name}' runs in enabled agent graphs; disable "
@@ -215,7 +218,7 @@ def update_agent(
             )
         if _contract(agent) != contract:
             _ensure_nothing_breaks(agent, graphs, before)
-    return agent
+    return ignored
 
 
 def delete_agent(session: Session, agent: Agent) -> None:
@@ -338,7 +341,7 @@ type OutputModels = dict[str, type[BaseModel] | None]
 
 def _output_models(graph: AgentGraph) -> OutputModels:
     """Each node's output class by key."""
-    return {node.key: node.agent.output_class() for node in graph.nodes}
+    return {node.key: behaviour_of(node.agent).output_class() for node in graph.nodes}
 
 
 def _condition_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]:

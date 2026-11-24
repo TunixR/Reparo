@@ -15,6 +15,7 @@ import routers.recovery as recovery_module
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agent_graphs.models import AgentGraph, AgentGraphNode
 from database.agent_graphs.runner import NodeRun
+from database.agents.behaviours import AgentBehaviour
 from database.agents.models import Agent
 from observability.attributes import OTEL_EVENT_NAME, RECOVERY_PAYLOAD_INVALID_FIELDS
 from templates.gateway import ResponseToRPA
@@ -79,7 +80,9 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def _fake_run_node(
-        _self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+        _self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        inputs: Mapping[str, Any],
     ) -> NodeRun:
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
@@ -88,7 +91,7 @@ def test_recovery_turn_is_traced_without_lifecycle_logs(
         )
         return NodeRun(output=ResponseToRPA(success=True))
 
-    monkeypatch.setattr(Agent, "run_node", _fake_run_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _fake_run_node)
     caplog.set_level(logging.INFO)
 
     headers = {"X-ROBOT-KEY": robot_key_raw}
@@ -175,11 +178,13 @@ def test_turn_failure_logs_and_records_redacted_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def _failing_run_node(
-        _self: Agent, invocation_state: dict[str, Any], inputs: Mapping[str, Any]
+        _self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        inputs: Mapping[str, Any],
     ) -> NodeRun:
         raise RuntimeError(f"model call failed password={PASSWORD}")
 
-    monkeypatch.setattr(Agent, "run_node", _failing_run_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _failing_run_node)
     caplog.set_level(logging.INFO)
 
     headers = {"X-ROBOT-KEY": robot_key_raw}

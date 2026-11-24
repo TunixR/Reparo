@@ -56,7 +56,7 @@ class RecoveryUiLogEntry(TemplateModel):
     @classmethod
     def validate_timestamp_iso8601(cls, value: str) -> str:
         try:
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
+            datetime.fromisoformat(value)
         except ValueError as exc:
             raise ValueError(
                 "timestamp must be a valid ISO-8601 datetime string"

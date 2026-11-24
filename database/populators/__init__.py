@@ -5,9 +5,9 @@ from database.populators.tools import populate_tools
 from database.populators.users import populate_users
 
 __all__ = [
+    "populate_agent_graphs",
+    "populate_agents",
     "populate_routers",
     "populate_tools",
-    "populate_agents",
-    "populate_agent_graphs",
     "populate_users",
 ]

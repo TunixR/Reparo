@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from httpx import Headers
+from sqlmodel import Session
 
 from database.agent_graphs.models import AgentGraph
 from database.agents.models import Agent, AgentType
+from database.provider.models import Router
 from tests.unit.fixtures.agent_graph_fixtures import (
     GRAPH_REPORT,
     Edge,
@@ -221,23 +224,35 @@ def test_re_sending_the_same_definitions_in_another_spelling_is_no_conflict(
 def test_a_type_change_that_breaks_a_condition_is_a_conflict(
     client: TestClient,
     admin_headers: Headers,
+    session: Session,
     graph_agents: dict[str, Agent],
     routed_by_alpha: MakeAgentGraph,
+    make_router: Callable[..., Router],
 ):
     _ = routed_by_alpha(name="Routed")
     alpha = graph_agents["Alpha"]
+    # A GUI agent works from screenshots, so only a vision router passes validation.
+    alpha.router = make_router(
+        capabilities=[Router.Capability.TEXT, Router.Capability.VISION]
+    )
+    session.add(alpha)
+    session.commit()
 
     response = client.patch(
         f"/agents/{alpha.id}",
-        json={"type": AgentType.GuiAgent.value},
+        json={"type": AgentType.TooledGuiAgent.value},
         headers=admin_headers,
     )
 
     assert response.status_code == status.HTTP_409_CONFLICT, response.text
     detail = response.json()["detail"]
     assert _listed(detail["graphs"]) == ["Routed"]
-    [violation] = detail["violations"]
-    assert violation.startswith("Routed: The condition on the edge 'alpha' → 'beta'")
+    # The GUI type also brings its fixed arguments, so 'task' has no value either.
+    condition, argument = detail["violations"]
+    assert condition.startswith("Routed: The condition on the edge 'alpha' → 'beta'")
+    assert argument.startswith(
+        "Routed: Node 'alpha' can start without its argument 'task'"
+    )
 
 
 def test_changes_that_keep_enabled_graphs_valid_still_succeed(

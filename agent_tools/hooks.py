@@ -263,7 +263,6 @@ class AgentLoggingHook(HookProvider):
         agent_id: UUID,
         invocation_state: dict[str, Any],
         parent_trace_id: UUID | None = None,
-        is_gui_agent: bool = False,
     ):
         """Initializes the AgentLoggingHook.
 
@@ -271,12 +270,10 @@ class AgentLoggingHook(HookProvider):
             agent_id: The UUID of the agent.
             invocation_state: The state of the agent invocation.
             parent_agent_id: The UUID of the parent agent, if any.
-            is_gui_agent: Whether the agent is a GUI agent.
         """
         self.parent_trace_id = parent_trace_id
         self.agent_id = agent_id
         self.invocation_state = invocation_state
-        self.is_gui_agent = is_gui_agent
         # We generate here the id for the agent trace so we can reference it outside
         self.agent_trace_id = uuid4()
         self.created = False
@@ -408,9 +405,6 @@ class AgentLoggingHook(HookProvider):
         finished_at: datetime,
         success: bool = True,
     ):
-        if not self.is_gui_agent:
-            raise RuntimeError("Cannot register GUI trace for non-GUI agent.")
-
         from database.engine import general_engine
         from database.logging.models import GUITrace
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from httpx import Headers
 from sqlmodel import Session
@@ -13,7 +13,7 @@ def make_user_session(
 ) -> UserSession:
     return UserSession(
         user_id=user.id,
-        valid_until=datetime.now(timezone.utc) + valid_duration,
+        valid_until=datetime.now(UTC) + valid_duration,
     )
 
 

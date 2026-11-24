@@ -1,7 +1,8 @@
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from importlib import import_module
-from typing import Any, Callable
+from typing import Any
 
 from sqlmodel import Field, Relationship, SQLModel
 from strands.tools.decorator import DecoratedFunctionTool
@@ -29,11 +30,11 @@ class Tool(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the tool was created.",
     )
     updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp of when the tool was last updated.",
     )
 
@@ -42,17 +43,17 @@ class Tool(SQLModel, table=True):
         module_path, function_name = self.fn_module.rsplit(".", 1)
         try:
             module = import_module(module_path)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             raise ImportError(f"Could not import module '{module_path}': {e}")
         try:
             fn: Callable = getattr(module, function_name)  # pyright: ignore[reportMissingTypeArgument]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             raise ImportError(
                 f"Could not find function '{function_name}' in module '{module_path}': {e}"
             )
         # Check it has the @tool decorator by looking for the 'name' attribute
         if not isinstance(fn, DecoratedFunctionTool):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 f"The function '{self.fn_module}' is not a valid tool. Make sure it is decorated with @tool."
             )
         return fn

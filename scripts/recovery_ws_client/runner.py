@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pyautogui
@@ -27,7 +27,7 @@ class RecoveryWsRunner:
         self.transcript = RunTranscript()
         self.action_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self.stop_event = asyncio.Event()
-        self.next_action_at = datetime.now(tz=timezone.utc)
+        self.next_action_at = datetime.now(tz=UTC)
         self.actions_executed = 0
         self.eval_result: dict[str, Any] | None = None
         self.terminal_content: Any = None
@@ -39,7 +39,7 @@ class RecoveryWsRunner:
             except TimeoutError:
                 continue
 
-            now = datetime.now(tz=timezone.utc)
+            now = datetime.now(tz=UTC)
             remaining = (self.next_action_at - now).total_seconds()
             if remaining > 0:
                 await asyncio.sleep(remaining)
@@ -76,7 +76,7 @@ class RecoveryWsRunner:
                 )
             )
 
-            self.next_action_at = datetime.now(tz=timezone.utc) + timedelta(
+            self.next_action_at = datetime.now(tz=UTC) + timedelta(
                 seconds=self.config.action_delay_seconds
             )
 
@@ -234,7 +234,7 @@ class RecoveryWsRunner:
             if self.config.log_json is not None:
                 write_transcript(self.config.log_json, self.transcript)
             return 2
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.transcript.summary.terminal_type = "exception"
             self.transcript.add(
                 TranscriptEvent.create(

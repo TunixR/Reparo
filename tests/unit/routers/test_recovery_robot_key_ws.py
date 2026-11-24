@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -9,16 +10,20 @@ from security.utils import robot_key_hash
 
 
 def test_recovery_ws_requires_robot_key_header(client: TestClient):
-    with pytest.raises(Exception):
-        with client.websocket_connect("/recovery/robot_exception/ws"):
-            pass
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect("/recovery/robot_exception/ws"),
+    ):
+        pass
 
 
 def test_recovery_ws_rejects_invalid_robot_key(client: TestClient):
-    headers = [("X-ROBOT-KEY", "not-a-real-key")]
-    with pytest.raises(Exception):
-        with client.websocket_connect("/recovery/robot_exception/ws", headers=headers):
-            pass
+    headers = {"X-ROBOT-KEY": "not-a-real-key"}
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect("/recovery/robot_exception/ws", headers=headers),
+    ):
+        pass
 
 
 def test_recovery_ws_rejects_disabled_robot_key(session: Session, client: TestClient):
@@ -33,9 +38,9 @@ def test_recovery_ws_rejects_disabled_robot_key(session: Session, client: TestCl
     session.add(key)
     session.commit()
 
-    headers = [("X-ROBOT-KEY", key_raw)]
-    with pytest.raises(Exception):
-        with client.websocket_connect(
-            "/recovery/robot_exception/ws", headers=headers
-        ) as ws:
-            ws.send_json({"foo": "bar"})
+    headers = {"X-ROBOT-KEY": key_raw}
+    with (
+        pytest.raises(WebSocketDisconnect),
+        client.websocket_connect("/recovery/robot_exception/ws", headers=headers) as ws,
+    ):
+        ws.send_json({"foo": "bar"})

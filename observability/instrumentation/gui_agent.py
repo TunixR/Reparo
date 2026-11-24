@@ -152,6 +152,10 @@ class GuiTaskTelemetry:
     def client_disconnected(self, iterations: int) -> None:
         self._finish(iterations, "client_disconnected")
 
+    def cancelled(self, iterations: int) -> None:
+        """The run was cancelled, as when the robot aborts the recovery."""
+        self._finish(iterations, "cancelled")
+
     def failed(
         self, iterations: int, exc: BaseException, *, escaped: bool = False
     ) -> None:

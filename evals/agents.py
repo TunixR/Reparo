@@ -10,11 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import regex
 import time
 from pathlib import Path
 from typing import Any, Literal
 
+import regex
 from strands import Agent as StrandsAgent
 from strands.models.openai import OpenAIModel
 from strands.types.content import ContentBlock

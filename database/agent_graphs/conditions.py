@@ -36,8 +36,8 @@ _OPERATORS: dict[str, Callable[[Any, Any], bool]] = {
     "eq": _equal,
     "ne": lambda actual, expected: not _equal(actual, expected),
     "in": lambda actual, expected: any(_equal(actual, item) for item in expected),
-    "not_in": lambda actual, expected: not any(
-        _equal(actual, item) for item in expected
+    "not_in": lambda actual, expected: (
+        not any(_equal(actual, item) for item in expected)
     ),
     "lt": operator.lt,
     "le": operator.le,

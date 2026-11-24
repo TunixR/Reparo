@@ -24,7 +24,7 @@ def eval_gui_agent(
         name="GUI",
         description="GUI agent",
         prompt="prompt",
-        type=AgentType.GuiAgent,
+        type=AgentType.TooledGuiAgent,
     )
     # The agent lookup isn't under test (it passes the raw header to a UUID column).
     monkeypatch.setattr(evals_module, "_get_valid_agent", lambda *_: agent)

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import settings
-
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
+import settings
 from database.auth.models import User, UserRole
 from security.utils import hash_password, verify_password
 

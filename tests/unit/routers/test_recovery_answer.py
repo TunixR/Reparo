@@ -24,6 +24,7 @@ import routers.recovery as recovery_module
 from agent_tools.hooks import MAX_REQUIRED_TOOL_REMINDERS
 from agent_tools.utils import CONTINUATION_STATE_KEY, Continuation
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, NodeRun
+from database.agents.behaviours import AgentBehaviour, DefaultAgent
 from database.agents.models import (
     Agent,
     AgentTool,
@@ -201,7 +202,7 @@ def script(
         }
         monkeypatch.setattr(Agent, "get_model", lambda self: models[self.name])  # pyright: ignore[reportUnknownLambdaType,reportUnknownMemberType]
         # Agent traces are written through the production engine; not under test.
-        monkeypatch.setattr(Agent, "get_logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(DefaultAgent, "logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
         monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
         monkeypatch.setattr(Agent, "validate_input", lambda self, **k: k)  # pyright: ignore[reportUnknownLambdaType]
         return models
@@ -562,7 +563,9 @@ def test_a_last_output_without_success_is_not_a_success(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def _fake_run_node(
-        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
+        _self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        _input_map: Mapping[str, str],
     ) -> NodeRun:
         invocation_state[CONTINUATION_STATE_KEY] = Continuation(
             process_finished=False,
@@ -571,7 +574,7 @@ def test_a_last_output_without_success_is_not_a_success(
         )
         return NodeRun(output=_NoSuccessReport(note="Looks recovered."))
 
-    monkeypatch.setattr(Agent, "run_node", _fake_run_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _fake_run_node)
 
     message = _recover(client, robot_key_raw, valid_recovery_payload)
 
@@ -589,7 +592,9 @@ def test_variables_come_from_code_not_from_the_llm(
     monkeypatch: pytest.MonkeyPatch,
 ):
     async def _fake_run_node(
-        _self: Agent, invocation_state: dict[str, Any], _input_map: Mapping[str, str]
+        _self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        _input_map: Mapping[str, str],
     ) -> NodeRun:
         inputs = invocation_state[AGENT_GRAPH_CONTEXT_KEY].recovery_inputs
         invocation_state["variables"]["retry"] = 2
@@ -598,7 +603,7 @@ def test_variables_come_from_code_not_from_the_llm(
             output=ResponseToRPA(success=False, variables={"invented": True})
         )
 
-    monkeypatch.setattr(Agent, "run_node", _fake_run_node)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _fake_run_node)
 
     message = _recover(client, robot_key_raw, valid_recovery_payload)
 

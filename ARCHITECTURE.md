@@ -199,18 +199,26 @@ inputs, runs it, and asks for a structured response in its output model.
   live in that one module, so the API and the row check a definition the same way. GUI agents
   always report `GuiRunReport`.
 
-- **Types.** `AgentType` distinguishes generic agents from GUI agents, the only type that runs
-  differently. An agent's role in a recovery (gateway, inferer…) comes from its place in the graph,
-  not from its type.
+- **Types.** The row says what an agent is; its type says how it runs. Each `AgentType` has a
+  behaviour class (`database/agents/behaviours/`), found through a registry, so the row module has
+  no run code and nothing outside that package branches on the type. A class runs its agent as a
+  graph node, standalone or as its parent's tool, and holds its type's rules: `validate_agent`
+  runs them on create, update and seed, and may replace fields the type fixes, which the API lists
+  as `ignored_fields`. `Agent` runs a Strands agent over the row. `TooledGuiAgent` and
+  `TextGuiAgent` are GUI agents. An agent's role in a recovery (gateway, inferer…) comes from its
+  place in the graph, not from its type.
 - **Composition.** Sub-agents are exposed to their parent as tools, so delegation is just a tool
   call. Each tool or sub-agent link can carry a call limit, enforced by a hook
   (`agent_tools/hooks.py`). Disabled agents are left out.
-- **GUI agents.** GUI agents work from screenshots and emit UI actions. Every GUI agent runs through
-  the tool-based loop (`database/agents/tooled_gui_agent.py`), which gives a grounding model one
-  tool per action and is exposed to its parent as `tooled_guiagent`. A standalone UI-TARS loop
-  (`database/agents/uitars.py`), which parses actions from the model's text output, is kept for a
-  future rework; its text-based prompt is seeded with a disabled agent. A hook caps how many
-  screenshots stay in the conversation.
+- **GUI agents.** GUI agents work from screenshots and emit UI actions. They share one skeleton
+  (`GuiAgent`): fixed inputs, the same set of actions, the robot messages each action sends, the
+  first screenshot, the telemetry and the report. Only the loop differs. A `TooledGuiAgent` gives
+  its model one tool per action. A `TextGuiAgent` lets its model write actions as text, which a
+  parser reads: the row's `parser_path` names a parser in
+  `database/agents/behaviours/gui/parsers/`, which describes the actions in its model's syntax and
+  reads them back (the UI-TARS parser, used by a disabled seeded agent). Like any agent, a GUI
+  agent is exposed to its parent as a tool named after its row. A hook caps how many screenshots
+  stay in the conversation.
 - **Prompts.** An agent's prompt is part of its row; the robot's payload and result models live in
   `templates/`. A prompt names only the tools the agent is given and leaves the response layout to
   the output model. Prompts used only by the evals live in `evals/`.

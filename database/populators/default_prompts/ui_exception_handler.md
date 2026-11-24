@@ -55,7 +55,7 @@ Before you call the GUI agent, check your draft and rewrite it until every answe
 ## 3. Run the recovery
 Call `tooled_guiagent` once, with your recovery task as `task` and `variables`, `ui_log`, `errored_act` and `model` exactly as you received them. Don't carry out the recovery yourself.
 
-It returns the GUI agent's messages and the variables as it left them. The GUI agent ends with a summary that says whether the goal was reached and describes the final screen. Judge the outcome from what the GUI agent did and saw, not from its claim alone.
+It returns its report (`goal_reached`, `summary` and the `actions` sent to the robot), its messages and the variables as it left them. The GUI agent ends with a summary that says whether the goal was reached and describes the final screen. Judge the outcome from what the GUI agent did and saw, not from its claim alone.
 
 ## 4. Tell the robot the outcome
 Always finish by calling `set_continuation`, whether the recovery succeeded or not. Its first argument, `recovered`, says whether the process was repaired:

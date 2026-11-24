@@ -24,14 +24,15 @@ import observability.instrumentation.gui_agent as gui_agent_telemetry
 import routers.recovery as recovery_module
 from database.agent_graphs.models import AgentGraph
 from database.agent_graphs.runner import NodeRun
+from database.agents.behaviours import AgentBehaviour, DefaultAgent
 from database.agents.models import Agent
 from database.populators.agent_graphs import populate_agent_graphs
 from database.provider.models import Router
 from tests.unit.agent_tools._shared.process_models import SPENDING_APPROVAL_MODEL
 from tests.unit.shared.fake_websocket import make_test_image_bytes
+from tests.unit.shared.gui_fakes import patch_gui_io
 from tests.unit.shared.log_events import logged_events
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
-from tests.unit.shared.tooled_gui_fakes import patch_gui_io
 
 GATEWAY = "Gateway Orchestrator"
 INFERER = "Recovery Inferer"
@@ -68,7 +69,7 @@ def script(
             for name in (GATEWAY, INFERER, GUI, CONTINUATION)
         }
         monkeypatch.setattr(Agent, "get_model", lambda self: models[self.name])  # pyright: ignore[reportUnknownLambdaType,reportUnknownMemberType]
-        monkeypatch.setattr(Agent, "get_logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(DefaultAgent, "logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
         monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
         patch_gui_io(monkeypatch)
         return models
@@ -80,15 +81,17 @@ def script(
 def node_runs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """The agent of each node run, in order."""
     runs: list[str] = []
-    original = Agent.run_node
+    original = AgentBehaviour.run_node
 
     async def _spy(
-        self: Agent, invocation_state: dict[str, Any], input_map: Mapping[str, str]
+        self: AgentBehaviour,
+        invocation_state: dict[str, Any],
+        input_map: Mapping[str, str],
     ) -> NodeRun:
-        runs.append(self.name)
+        runs.append(self.agent.name)
         return await original(self, invocation_state, input_map)
 
-    monkeypatch.setattr(Agent, "run_node", _spy)
+    monkeypatch.setattr(AgentBehaviour, "run_node", _spy)
     return runs
 
 

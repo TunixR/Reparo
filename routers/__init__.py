@@ -8,10 +8,10 @@ from .tools import router as tools_router
 
 __all__ = [
     "agents_router",
-    "tools_router",
-    "provider_router",
     "auth_router",
-    "logging_router",
     "keys_router",
+    "logging_router",
+    "provider_router",
     "recovery_router",
+    "tools_router",
 ]
