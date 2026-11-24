@@ -130,3 +130,15 @@ knowingly leave one behind, add it here.
   `tests/unit/agent_tools/test_context_compression.py` fail if it does.
 - **What fixing it means:** drop the hooks and overrides once Strands awaits the summary call and
   exposes a hook for the summarized messages and for a failed summary.
+
+## 13. The GUI state block isn't in the agent trace
+
+- **Where:** the `ContextInjector` that `GuiAgent.drive` in `database/agents/behaviours/gui/base.py`
+  registers, which renders `GuiRun.context_block()` into the latest user message before each model
+  call.
+- **Why it's debt:** `AgentLoggingHook` logs a message when it is added, and the block is written
+  into the message afterwards, so the trace shows what the agent was sent but not the task, budget
+  and notes it read with it. Telling from the trace why a model finished early or ignored a warning
+  means rebuilding the block from the GUI steps.
+- **What fixing it means:** log the rendered block with the model call it went to, for example as
+  its own entry in `AgentTrace.messages`, as the compression marker is.

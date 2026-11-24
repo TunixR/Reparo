@@ -218,7 +218,10 @@ inputs, runs it, and asks for a structured response in its output model.
   `database/agents/behaviours/gui/parsers/`, which describes the actions in its model's syntax and
   reads them back (the UI-TARS parser, used by a disabled seeded agent). Like any agent, a GUI
   agent is exposed to its parent as a tool named after its row. A hook caps how many screenshots
-  stay in the conversation.
+  stay in the conversation. Before each model call, in both loops, a state block keeps the goal in
+  view: the task, the actions used out of the cap, the last action's result, and the latest
+  progress notes the agent took with `note_progress`, an action that doesn't count against the cap.
+  Near the cap it tells the model to finish. The run's report carries every note.
 - **Context compression.** Every agent type shares one conversation manager
   (`agent_tools/context_compression.py`), built by its behaviour class. When an agent's context
   nears its model's window, which its router stores, the oldest messages are replaced by a

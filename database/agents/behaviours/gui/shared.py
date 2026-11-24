@@ -11,9 +11,10 @@ trace and ``gui.action`` span, and returns the next observation.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
@@ -29,6 +30,18 @@ from observability.instrumentation.gui_agent import GuiAction, GuiTaskTelemetry
 
 MAX_ACTIONS = 40
 """How many actions one run may send to the robot."""
+
+BUDGET_WARNING_RATIO = 0.75
+"""From this share of ``MAX_ACTIONS`` on, the context block tells the model to wrap up."""
+
+MAX_NOTE_CHARS = 300
+"""Characters a progress note keeps; a longer one is cut."""
+
+MAX_NOTES = 20
+"""Progress notes a run keeps; it refuses more."""
+
+NOTES_SHOWN = 5
+"""The latest progress notes the context block lists; the report keeps them all."""
 
 SETTLE_SECONDS = 1.0
 """The pause after an action, so the UI can settle before the next screenshot."""
@@ -69,6 +82,9 @@ class GuiRunReport(BaseModel):
     )
     summary: str = Field(description="The agent's finished summary, or why it stopped.")
     actions: list[GuiAction] = Field(description="Actions sent to the robot, in order.")
+    notes: list[str] = Field(
+        description="The agent's progress notes (note_progress), oldest first."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +154,7 @@ class GuiActionSpec:
     """One action a GUI agent can take.
 
     An action either goes to the robot (``to_robot``) or acts on the run itself
-    (``run_locally``, for finishing and altering variables).
+    (``run_locally``, for finishing, taking notes and altering variables).
     """
 
     name: str
@@ -219,6 +235,12 @@ class FinishedInputs(BaseModel):
     success: bool = Field(
         default=True,
         description="Whether the recovery goal was reached; false when it cannot be.",
+    )
+
+
+class NoteInputs(BaseModel):
+    note: str = Field(
+        description="One short sentence, e.g. 'Invoice 42 found, total 17.50'."
     )
 
 
@@ -330,6 +352,13 @@ DEFAULT_GUI_ACTIONS = GuiActions(
         run_locally=lambda run, inputs: run.finish(inputs),
     ),
     GuiActionSpec(
+        "note_progress",
+        "Keep a short progress note for the rest of the run. Your latest notes are "
+        "shown to you on every step. It doesn't count against the action cap.",
+        NoteInputs,
+        run_locally=lambda run, inputs: run.note_progress(inputs),
+    ),
+    GuiActionSpec(
         "alter_variable",
         "Alter the value of a given variable. The value must be JSON serializable "
         "and keep the variable's JSON type.",
@@ -380,8 +409,13 @@ class GuiRun:
     variables: dict[str, Any]
     image: bytes
     screen: Screen
+    task: str
     agent: StrandsAgent | None = None
     sent: int = 0
+    last_action: tuple[str, bool] | None = None
+    """The name of the last action sent to the robot, and whether it succeeded."""
+    notes: list[str] = field(default_factory=list)
+    """The model's progress notes, oldest first."""
     cap_reached: bool = False
     summary: str | None = None
     success: bool = False
@@ -417,14 +451,14 @@ class GuiRun:
         except ValidationError as exc:
             return ActionOutcome.failure(f"Invalid inputs for '{name}': {exc}")
         if spec.to_robot is not None:
-            return await self._send(spec.to_robot(inputs, self.to_screen))
+            return await self._send(name, spec.to_robot(inputs, self.to_screen))
         if spec.run_locally is not None:
             return await spec.run_locally(self, inputs)
         raise TypeError(
             f"The action '{name}' neither goes to the robot nor runs locally."
         )
 
-    async def _send(self, action: RobotAction) -> ActionOutcome:
+    async def _send(self, name: str, action: RobotAction) -> ActionOutcome:
         if self.sent >= MAX_ACTIONS:
             if not self.cap_reached:
                 self.cap_reached = True
@@ -433,11 +467,14 @@ class GuiRun:
                 f"Action limit of {MAX_ACTIONS} reached: no more actions are sent and the run ends."
             )
         self.sent += 1
+        self.last_action = (name, False)
         try:
-            return await self._dispatch(action)
+            outcome = await self._dispatch(action)
         except WebSocketDisconnect as exc:
             self.disconnect = exc
             raise
+        self.last_action = (name, outcome.error is None)
+        return outcome
 
     async def _dispatch(self, action: RobotAction) -> ActionOutcome:
         """Send one action, record its GUI trace, and return a fresh screenshot."""
@@ -500,6 +537,28 @@ class GuiRun:
         )
         return ActionOutcome(content=[{"text": f"Task completed: {inputs.content}"}])
 
+    async def note_progress(self, inputs: NoteInputs) -> ActionOutcome:
+        """Keep a note for the state block and the report, on one line and cut to
+        `MAX_NOTE_CHARS`."""
+        note = " ".join(inputs.note.split())
+        if not note:
+            return ActionOutcome.failure("The note is empty; nothing was noted.")
+        if len(self.notes) >= MAX_NOTES:
+            return ActionOutcome.failure(
+                f"The run keeps at most {MAX_NOTES} notes; nothing was noted."
+            )
+        if len(note) <= MAX_NOTE_CHARS:
+            self.notes.append(note)
+            return ActionOutcome(content=[{"text": "Noted."}])
+        self.notes.append(note[: MAX_NOTE_CHARS - 1] + "…")
+        return ActionOutcome(
+            content=[
+                {
+                    "text": f"Noted, cut to {MAX_NOTE_CHARS} characters; keep notes short."
+                }
+            ]
+        )
+
     async def alter_variable(self, inputs: AlterVariableInputs) -> ActionOutcome:
         """Set a Variable the robot continues with, keeping its JSON type."""
         if inputs.name not in self.variables:
@@ -517,6 +576,46 @@ class GuiRun:
             ]
         )
 
+    def context_block(self) -> str:
+        """The run's state, as the model reads it before each call.
+
+        The task and the notes are escaped, so neither can close a tag of the block.
+        """
+        lines = [
+            "<recovery_state>",
+            f"<task>{html.escape(self.task, quote=False)}</task>",
+            f"Actions used: {self.sent} of {MAX_ACTIONS}",
+        ]
+        if self.last_action is not None:
+            name, succeeded = self.last_action
+            lines.append(
+                f"Last action: {name}, {'succeeded' if succeeded else 'failed'}."
+            )
+        if self.notes:
+            shown = self.notes[-NOTES_SHOWN:]
+            which = (
+                f" the last {len(shown)} of {len(self.notes)},"
+                if len(self.notes) > len(shown)
+                else ""
+            )
+            lines.append(f"Progress notes,{which} oldest first:")
+            lines.extend(
+                f"<note>{html.escape(note, quote=False)}</note>" for note in shown
+            )
+        left = MAX_ACTIONS - self.sent
+        if left <= 0:
+            lines.append(
+                "Actions left: 0. Call finished now, with success=false"
+                " if the goal is not reached."
+            )
+        elif self.sent >= BUDGET_WARNING_RATIO * MAX_ACTIONS:
+            lines.append(
+                f"Actions left: {left}. Finish the task, or call finished with"
+                " success=false if the goal can't be reached."
+            )
+        lines.append("</recovery_state>")
+        return "\n".join(lines)
+
     def report(self) -> GuiRunReport:
         if self.summary is not None:
             summary = self.summary
@@ -530,6 +629,7 @@ class GuiRun:
             goal_reached=self.success and not self.cap_reached,
             summary=summary,
             actions=list(self.telemetry.action_log),
+            notes=list(self.notes),
         )
 
     def transcript(self) -> list[list[ContentBlock]]:

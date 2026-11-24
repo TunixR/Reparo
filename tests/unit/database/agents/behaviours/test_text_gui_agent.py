@@ -41,7 +41,12 @@ def _text_agent(*turns: Turn) -> TextGuiAgent:
 
 
 def _texts(message: dict[str, Any]) -> list[str]:
-    return [block["text"] for block in message["content"] if "text" in block]
+    """The text blocks of a message, without the state block."""
+    return [
+        block["text"]
+        for block in message["content"]
+        if "text" in block and "<recovery_state>" not in block["text"]
+    ]
 
 
 async def test_runs_the_actions_it_reads_until_finished() -> None:

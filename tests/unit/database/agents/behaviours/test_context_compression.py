@@ -219,3 +219,10 @@ async def test_a_gui_loop_keeps_its_task_message_through_a_summary(
     assert isinstance(run.hook, FakeHook)
     assert len(run.hook.compressions) == len(model.summary_requests) > 0
     assert [{"text": "Earlier steps, summarized."}] in run.transcript()
+    # Each call reads only its latest state block; the summarizer reads none.
+    assert all(
+        str(request).count("<recovery_state>") == 1
+        and "<recovery_state>" in str(request[-1])
+        for request in model.requests
+    )
+    assert "<recovery_state>" not in str(model.summary_requests)

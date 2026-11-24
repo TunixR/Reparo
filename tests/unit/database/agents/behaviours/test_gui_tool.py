@@ -74,6 +74,7 @@ async def test_two_gui_sub_agents_are_two_tools_that_report_to_the_parent(
         "goal_reached": True,
         "summary": "Stored the total",
         "actions": [],
+        "notes": [],
         "messages": [
             [
                 {
