@@ -76,6 +76,7 @@ def test_a_fresh_database_recovers_through_the_enabled_ui_recovery_graph(
                 {
                     "gui_summary": "tooled_guiagent.summary",
                     "goal_reached": "tooled_guiagent.goal_reached",
+                    "gui_notes": "tooled_guiagent.notes",
                 },
             ),
             ("gateway", "Gateway Orchestrator", True, {}),

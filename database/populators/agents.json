@@ -285,6 +285,12 @@
           "description": "Whether the GUI agent reported reaching the goal within its action cap."
         },
         {
+          "name": "gui_notes",
+          "type": "list[str]",
+          "description": "The progress notes the GUI agent kept during the run, oldest first.",
+          "default": []
+        },
+        {
           "name": "errored_act",
           "type": "dict",
           "description": "Structured information about the action that failed."

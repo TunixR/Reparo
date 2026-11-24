@@ -135,16 +135,24 @@ def scripted_model(gui_agent: GuiAgent) -> ScriptedModel:
     return gui_agent.agent.get_model()  # pyright: ignore[reportReturnType]
 
 
-def clicking_gui_agent(kind: type[GuiAgent]) -> GuiAgent:
-    """A GUI agent of ``kind`` whose model clicks, in its own way, on every turn."""
+def make_gui_agent_of(kind: type[GuiAgent], *turns: Turn, **options: Any) -> GuiAgent:
+    """`make_gui_agent` for ``kind``; a TextGuiAgent gets the UI-TARS parser."""
     if kind is TextGuiAgent:
         return make_gui_agent(
-            "Action: click(point='<point>1 1</point>')",
+            *turns,
             kind=TextGuiAgent,
             prompt="{actions}\n{instruction}",
             parser_path=UITARS_PARSER,
+            **options,
         )
-    return make_gui_agent(ToolCall("click", {"start_box": [1, 1]}), kind=kind)
+    return make_gui_agent(*turns, kind=kind, **options)
+
+
+def clicking_gui_agent(kind: type[GuiAgent]) -> GuiAgent:
+    """A GUI agent of ``kind`` whose model clicks, in its own way, on every turn."""
+    if kind is TextGuiAgent:
+        return make_gui_agent_of(kind, "Action: click(point='<point>1 1</point>')")
+    return make_gui_agent_of(kind, ToolCall("click", {"start_box": [1, 1]}))
 
 
 GUI_KINDS = [TooledGuiAgent, TextGuiAgent]

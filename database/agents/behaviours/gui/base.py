@@ -19,6 +19,7 @@ from fastapi import WebSocketDisconnect
 from strands import Agent as StrandsAgent
 from strands.tools.decorator import DecoratedFunctionTool
 from strands.types.content import ContentBlock, Messages
+from strands.vended_plugins.context_injector import ContextInjector
 
 from agent_tools.hooks import MaxGuiImagesHook
 from agent_tools.image import capture_screenshot
@@ -160,12 +161,16 @@ class GuiAgent(AgentBehaviour, ABC):
             variables=variables,
             image=image,
             screen=Screen(width, height),
+            task=inputs["task"],
         )
         agent = StrandsAgent(  # type: ignore
             model=self.agent.get_model(),
             tools=self._tools(run),
             hooks=[hook, MaxGuiImagesHook()],
             conversation_manager=self.conversation_manager(hook),
+            plugins=[
+                ContextInjector(lambda _: run.context_block(), trigger="everyTurn")
+            ],
         )
         run.agent = agent
         messages: Messages = [

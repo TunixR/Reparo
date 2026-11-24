@@ -35,6 +35,7 @@ ACTION_NAMES = [
     "drag",
     "wait",
     "finished",
+    "note_progress",
     "alter_variable",
 ]
 

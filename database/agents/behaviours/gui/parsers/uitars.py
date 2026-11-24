@@ -32,6 +32,7 @@ _ACTION_NAMES: dict[str, str] = {
     "scroll": "scroll",
     "wait": "wait",
     "finished": "finished",
+    "note_progress": "note_progress",
     "alter_variable": "alter_variable",
 }
 """UI-TARS action names, and the GUI action each one is."""
@@ -48,7 +49,10 @@ _KEY_NAMES = {
 
 _CALL_SEPARATOR = re.compile(r"\)\s*\n\s*\n")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
-_CONTENT_CALL = re.compile(r"(\w+)\(content='(.*)'\)", re.DOTALL)
+_TEXT_CALL = re.compile(
+    r"(\w+)\((content|note)='(.*)'(?:,\s*success=((?i:true|false)))?\)", re.DOTALL
+)
+_BOOLEANS = {"true": True, "false": False}
 
 WAIT_SECONDS = 5.0
 """How long ``wait()`` waits; UI-TARS gives no duration."""
@@ -67,7 +71,8 @@ class UITarsParser:
         "scroll": "scroll(point='<point>x1 y1</point>', direction='down or up or right or left')",
         "drag": "drag(start_point='<point>x1 y1</point>', end_point='<point>x2 y2</point>')",
         "wait": f"wait() # Sleeps for {WAIT_SECONDS:g}s.",
-        "finished": "finished(content='xxx')",
+        "finished": "finished(content='xxx', success=True) # success=False if the goal can't be reached.",
+        "note_progress": "note_progress(note='xxx')",
         "alter_variable": "alter_variable(name='xxx', value='xxx')",
     }
     """Each GUI action as UI-TARS writes it."""
@@ -130,14 +135,25 @@ def _read_call(call: str) -> tuple[str, dict[str, Any]]:
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.args:
         arguments: dict[str, Any] = {}
         for keyword in node.keywords:
-            if keyword.arg is None or not isinstance(keyword.value, ast.Constant):
+            value = keyword.value
+            if keyword.arg is not None and isinstance(value, ast.Constant):
+                arguments[keyword.arg] = value.value
+            elif (
+                keyword.arg is not None
+                and isinstance(value, ast.Name)
+                and value.id in _BOOLEANS
+            ):
+                arguments[keyword.arg] = _BOOLEANS[value.id]
+            else:
                 raise ActionParseError(f"Can't read the arguments of: {call}")
-            arguments[keyword.arg] = keyword.value.value
         return node.func.id, arguments
     # Text with unescaped quotes, as UI-TARS often types it.
-    if match := _CONTENT_CALL.fullmatch(call):
-        content = match[2].replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n")
-        return match[1], {"content": content}
+    if match := _TEXT_CALL.fullmatch(call):
+        text = match[3].replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n")
+        arguments: dict[str, Any] = {match[2]: text}
+        if match[4] is not None:
+            arguments["success"] = _BOOLEANS[match[4].lower()]
+        return match[1], arguments
     raise ActionParseError(f"Can't read the action: {call}")
 
 

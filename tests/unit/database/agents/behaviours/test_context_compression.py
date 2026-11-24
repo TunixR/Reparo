@@ -29,7 +29,7 @@ from tests.unit.shared.gui_fakes import (
     UITARS_PARSER,
     FakeHook,
     drive,
-    make_gui_agent,
+    make_gui_agent_of,
     make_robot,
     patch_gui_io,
     scripted_model,
@@ -197,11 +197,9 @@ async def test_a_gui_loop_keeps_its_task_message_through_a_summary(
     monkeypatch: pytest.MonkeyPatch, kind: type[GuiAgent]
 ) -> None:
     patch_gui_io(monkeypatch)
-    gui_agent = make_gui_agent(
+    gui_agent = make_gui_agent_of(
+        kind,
         *_gui_turns(kind),
-        kind=kind,
-        prompt="{actions}\n{instruction}" if kind is TextGuiAgent else "{instruction}",
-        parser_path=UITARS_PARSER if kind is TextGuiAgent else None,
         usage=FULL,
         context_window_limit=WINDOW,
     )
@@ -219,3 +217,9 @@ async def test_a_gui_loop_keeps_its_task_message_through_a_summary(
     assert isinstance(run.hook, FakeHook)
     assert len(run.hook.compressions) == len(model.summary_requests) > 0
     assert [{"text": "Earlier steps, summarized."}] in run.transcript()
+    assert all(
+        str(request).count("<recovery_state>") == 1
+        and "<recovery_state>" in str(request[-1])
+        for request in model.requests
+    )
+    assert "<recovery_state>" not in str(model.summary_requests)

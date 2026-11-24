@@ -72,6 +72,27 @@ REPLIES: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
         [("finished", {"content": "Saved the form."})],
     ),
     (
+        "Action: finished(content='The form is gone.', success=False)",
+        [("finished", {"content": "The form is gone.", "success": False})],
+    ),
+    # Lowercase booleans.
+    (
+        "Action: finished(content='Gone', success=false)",
+        [("finished", {"content": "Gone", "success": False})],
+    ),
+    (
+        "Action: finished(content='It's gone', success=false)",
+        [("finished", {"content": "It's gone", "success": False})],
+    ),
+    (
+        "Action: note_progress(note='Invoice 42 is open')",
+        [("note_progress", {"note": "Invoice 42 is open"})],
+    ),
+    (
+        "Action: note_progress(note='Opened \"Invoices\", it's slow')",
+        [("note_progress", {"note": 'Opened "Invoices", it\'s slow'})],
+    ),
+    (
         "Action: alter_variable(name='budget', value='700')",
         [("alter_variable", {"name": "budget", "value": "700"})],
     ),
@@ -154,6 +175,23 @@ def test_describe_lists_each_action_in_ui_tars_syntax() -> None:
     )
     assert len(lines) == len(DEFAULT_GUI_ACTIONS.names()) + 1
     assert "escape characters" in lines[-1]
+
+
+def test_describe_writes_the_notes_and_the_finished_outcome() -> None:
+    lines = PARSER.describe(DEFAULT_GUI_ACTIONS).splitlines()
+
+    assert (
+        "note_progress(note='xxx') # Keep a short progress note for the rest of the run."
+        " Your latest notes are shown to you on every step. It doesn't count against"
+        " the action cap."
+    ) in lines
+    assert any(
+        line.startswith(
+            "finished(content='xxx', success=True) # success=False if the goal can't"
+            " be reached."
+        )
+        for line in lines
+    )
 
 
 def test_describe_rejects_an_action_it_has_no_syntax_for() -> None:
