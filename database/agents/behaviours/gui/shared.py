@@ -467,7 +467,6 @@ class GuiRun:
                 f"Action limit of {MAX_ACTIONS} reached: no more actions are sent and the run ends."
             )
         self.sent += 1
-        self.last_action = (name, False)
         try:
             outcome = await self._dispatch(action)
         except WebSocketDisconnect as exc:
@@ -538,8 +537,7 @@ class GuiRun:
         return ActionOutcome(content=[{"text": f"Task completed: {inputs.content}"}])
 
     async def note_progress(self, inputs: NoteInputs) -> ActionOutcome:
-        """Keep a note for the state block and the report, on one line and cut to
-        `MAX_NOTE_CHARS`."""
+        """Keep a note on one line, cut to `MAX_NOTE_CHARS`."""
         note = " ".join(inputs.note.split())
         if not note:
             return ActionOutcome.failure("The note is empty; nothing was noted.")
@@ -547,17 +545,12 @@ class GuiRun:
             return ActionOutcome.failure(
                 f"The run keeps at most {MAX_NOTES} notes; nothing was noted."
             )
-        if len(note) <= MAX_NOTE_CHARS:
-            self.notes.append(note)
-            return ActionOutcome(content=[{"text": "Noted."}])
-        self.notes.append(note[: MAX_NOTE_CHARS - 1] + "…")
-        return ActionOutcome(
-            content=[
-                {
-                    "text": f"Noted, cut to {MAX_NOTE_CHARS} characters; keep notes short."
-                }
-            ]
-        )
+        reply = "Noted."
+        if len(note) > MAX_NOTE_CHARS:
+            note = note[: MAX_NOTE_CHARS - 1] + "…"
+            reply = f"Noted, cut to {MAX_NOTE_CHARS} characters; keep notes short."
+        self.notes.append(note)
+        return ActionOutcome(content=[{"text": reply}])
 
     async def alter_variable(self, inputs: AlterVariableInputs) -> ActionOutcome:
         """Set a Variable the robot continues with, keeping its JSON type."""
@@ -577,13 +570,11 @@ class GuiRun:
         )
 
     def context_block(self) -> str:
-        """The run's state, as the model reads it before each call.
-
-        The task and the notes are escaped, so neither can close a tag of the block.
-        """
+        """The run's state, as the model reads it before each call."""
+        task = " ".join(self.task.split())
         lines = [
             "<recovery_state>",
-            f"<task>{html.escape(self.task, quote=False)}</task>",
+            f"<task>{html.escape(task, quote=False)}</task>",
             f"Actions used: {self.sent} of {MAX_ACTIONS}",
         ]
         if self.last_action is not None:
@@ -593,12 +584,12 @@ class GuiRun:
             )
         if self.notes:
             shown = self.notes[-NOTES_SHOWN:]
-            which = (
+            shown_of_total = (
                 f" the last {len(shown)} of {len(self.notes)},"
                 if len(self.notes) > len(shown)
                 else ""
             )
-            lines.append(f"Progress notes,{which} oldest first:")
+            lines.append(f"Progress notes,{shown_of_total} oldest first:")
             lines.extend(
                 f"<note>{html.escape(note, quote=False)}</note>" for note in shown
             )

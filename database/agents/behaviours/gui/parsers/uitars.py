@@ -50,11 +50,9 @@ _KEY_NAMES = {
 _CALL_SEPARATOR = re.compile(r"\)\s*\n\s*\n")
 _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _TEXT_CALL = re.compile(
-    r"(\w+)\((content|note)='(.*)'(?:,\s*success=(True|False|true|false))?\)",
-    re.DOTALL,
+    r"(\w+)\((content|note)='(.*)'(?:,\s*success=((?i:true|false)))?\)", re.DOTALL
 )
 _BOOLEANS = {"true": True, "false": False}
-"""Lowercase booleans, as JSON and the state block write them."""
 
 WAIT_SECONDS = 5.0
 """How long ``wait()`` waits; UI-TARS gives no duration."""
@@ -138,11 +136,13 @@ def _read_call(call: str) -> tuple[str, dict[str, Any]]:
         arguments: dict[str, Any] = {}
         for keyword in node.keywords:
             value = keyword.value
-            if keyword.arg is None:
-                raise ActionParseError(f"Can't read the arguments of: {call}")
-            if isinstance(value, ast.Constant):
+            if keyword.arg is not None and isinstance(value, ast.Constant):
                 arguments[keyword.arg] = value.value
-            elif isinstance(value, ast.Name) and value.id in _BOOLEANS:
+            elif (
+                keyword.arg is not None
+                and isinstance(value, ast.Name)
+                and value.id in _BOOLEANS
+            ):
                 arguments[keyword.arg] = _BOOLEANS[value.id]
             else:
                 raise ActionParseError(f"Can't read the arguments of: {call}")
@@ -152,7 +152,7 @@ def _read_call(call: str) -> tuple[str, dict[str, Any]]:
         text = match[3].replace("\\'", "'").replace('\\"', '"').replace("\\n", "\n")
         arguments: dict[str, Any] = {match[2]: text}
         if match[4] is not None:
-            arguments["success"] = match[4].lower() == "true"
+            arguments["success"] = _BOOLEANS[match[4].lower()]
         return match[1], arguments
     raise ActionParseError(f"Can't read the action: {call}")
 

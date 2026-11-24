@@ -148,7 +148,7 @@ def _add_gui_notes_argument(bind: Connection, now: datetime) -> None:
     agent = _agent(bind, CONTINUATION_INFERER)
     if agent is None:
         return
-    arguments: list[dict[str, Any]] = list(agent.arguments or [])
+    arguments: list[dict[str, Any]] = list(agent.arguments)
     names = [argument["name"] for argument in arguments]
     if GUI_NOTES in names:
         return
@@ -164,7 +164,7 @@ def _drop_gui_notes_argument(bind: Connection, now: datetime) -> None:
     agent = _agent(bind, CONTINUATION_INFERER)
     if agent is None:
         return
-    arguments: list[dict[str, Any]] = list(agent.arguments or [])
+    arguments: list[dict[str, Any]] = list(agent.arguments)
     kept = [argument for argument in arguments if argument != GUI_NOTES_ARGUMENT]
     if len(kept) != len(arguments):
         _set_arguments(bind, agent.id, kept, now)
@@ -197,7 +197,7 @@ def _map_gui_notes(bind: Connection) -> None:
     node = _continuation_node(bind)
     if node is None:
         return
-    input_map: dict[str, str] = dict(node.input_map or {})
+    input_map: dict[str, str] = dict(node.input_map)
     source, _, field = input_map.get("gui_summary", "").rpartition(".")
     if GUI_NOTES in input_map or not source or field != "summary":
         return
@@ -210,7 +210,7 @@ def _unmap_gui_notes(bind: Connection) -> None:
     node = _continuation_node(bind)
     if node is None:
         return
-    input_map: dict[str, str] = dict(node.input_map or {})
+    input_map: dict[str, str] = dict(node.input_map)
     if not input_map.get(GUI_NOTES, "").endswith(".notes"):
         return
     del input_map[GUI_NOTES]
@@ -231,7 +231,7 @@ def _edit_prompt(
     bind: Connection, name: str, now: datetime, edit: Callable[[str], str]
 ) -> None:
     agent = _agent(bind, name)
-    if agent is None or agent.prompt is None:
+    if agent is None:
         return
     prompt = edit(agent.prompt)
     if prompt == agent.prompt:

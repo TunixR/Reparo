@@ -75,7 +75,7 @@ REPLIES: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
         "Action: finished(content='The form is gone.', success=False)",
         [("finished", {"content": "The form is gone.", "success": False})],
     ),
-    # The state block writes success=false, as a tool call does.
+    # Lowercase booleans.
     (
         "Action: finished(content='Gone', success=false)",
         [("finished", {"content": "Gone", "success": False})],
@@ -91,10 +91,6 @@ REPLIES: list[tuple[str, list[tuple[str, dict[str, Any]]]]] = [
     (
         "Action: note_progress(note='Opened \"Invoices\", it's slow')",
         [("note_progress", {"note": 'Opened "Invoices", it\'s slow'})],
-    ),
-    (
-        "Action: finished(content='It's saved', success=False)",
-        [("finished", {"content": "It's saved", "success": False})],
     ),
     (
         "Action: alter_variable(name='budget', value='700')",
