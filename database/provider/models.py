@@ -4,12 +4,15 @@ from datetime import UTC, datetime
 from typing import Any, override
 
 import requests
+from sqlalchemy import Integer
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Field, Relationship, SQLModel
 from strands.models import Model
 
 from database.provider.scripts.image import Qwen2_5ImageResizer
 from observability.instrumentation.genai import TracedOpenAIModel
+
+DEFAULT_CONTEXT_WINDOW_LIMIT = 250_000
 
 
 class Router(SQLModel, table=True):
@@ -56,6 +59,16 @@ class Router(SQLModel, table=True):
         description=(
             "Vision backbone used by the model. Defaults to OTHER for "
             "vision-capable routers and stays unset otherwise."
+        ),
+    )
+    context_window_limit: int | None = Field(
+        default=DEFAULT_CONTEXT_WINDOW_LIMIT,
+        gt=0,
+        sa_column=Column(Integer, nullable=True),
+        description=(
+            f"Context window of the model in tokens, {DEFAULT_CONTEXT_WINDOW_LIMIT} by default. Null lets "
+            "Strands look the model id up, falling back to its default window for "
+            "unknown ids."
         ),
     )
 
@@ -145,7 +158,7 @@ class Router(SQLModel, table=True):
             or self.provider_type == self.Provider.VLLM
             or self.provider_type == self.Provider.OPENROUTER
         ):
-            return TracedOpenAIModel(
+            model = TracedOpenAIModel(
                 client_args={
                     "api_key": self.api_key or "api-key",
                     "base_url": self.api_endpoint,
@@ -154,6 +167,9 @@ class Router(SQLModel, table=True):
                 model_id=self.model_name,
                 params=params,
             )
+            if self.context_window_limit is not None:
+                model.update_config(context_window_limit=self.context_window_limit)
+            return model
 
         raise NotImplementedError(
             f"Router provider {self.provider_type} not yet implemented."
@@ -200,6 +216,7 @@ class RouterPublic(SQLModel):
     provider_type: Router.Provider
     capabilities: list[Router.Capability]
     vision_backbone: Router.VisionBackbone | None
+    context_window_limit: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -223,6 +240,15 @@ class RouterCreate(SQLModel):
         description=(
             "Vision backbone used by the model. Defaults to OTHER for "
             "vision-capable routers and stays unset otherwise."
+        ),
+    )
+    context_window_limit: int | None = Field(
+        default=DEFAULT_CONTEXT_WINDOW_LIMIT,
+        gt=0,
+        description=(
+            f"Context window of the model in tokens, {DEFAULT_CONTEXT_WINDOW_LIMIT} by default. Null lets "
+            "Strands look the model id up, falling back to its default window for "
+            "unknown ids."
         ),
     )
 
@@ -249,4 +275,9 @@ class RouterUpdate(SQLModel):
     vision_backbone: Router.VisionBackbone | None = Field(
         default=None,
         description="Vision backbone used by the model behind this router.",
+    )
+    context_window_limit: int | None = Field(
+        default=None,
+        gt=0,
+        description="Context window of the model in tokens; null unsets it.",
     )

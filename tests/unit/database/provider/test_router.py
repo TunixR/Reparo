@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 import pytest
 from sqlmodel import Session
+from strands.models.openai import OpenAIModel
 
 from database.provider.models import Router
 
@@ -152,3 +153,30 @@ def test_router_get_model_forwards_params(make_router: Callable[..., Router]):
         "reasoning_effort": "low",
         "temperature": 0.2,
     }
+
+
+def test_router_defaults_the_context_window_to_250k(session: Session):
+    router = Router(
+        api_key="test-api-key",
+        model_name="qwen3.5-unknown-id",
+        api_endpoint="https://example.test/v1",
+    )
+    session.add(router)
+    session.commit()
+    session.refresh(router)
+
+    assert router.context_window_limit == 250_000
+    assert router.get_model().context_window_limit == 250_000
+
+
+def test_router_get_model_leaves_an_unset_context_window_to_strands(
+    make_router: Callable[..., Router],
+):
+    router = make_router(model_name="gpt-4o", context_window_limit=None)
+    known = OpenAIModel(client_args={"api_key": "-"}, model_id="gpt-4o")
+    assert known.context_window_limit is not None
+
+    model = router.get_model()
+
+    assert router.context_window_limit is None
+    assert model.context_window_limit == known.context_window_limit
