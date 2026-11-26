@@ -1,5 +1,7 @@
 import pytest
 
+import agent_tools.image as image_module
+
 # Import the functions under test
 from agent_tools.image import (
     request_remote_screenshot,
@@ -22,7 +24,7 @@ class StubToolContext:
 
 
 # ---------------------------------------------------------------------------
-# Tests: request_remote_screenshot
+# Tests for request_remote_screenshot
 # ---------------------------------------------------------------------------
 
 
@@ -31,7 +33,7 @@ async def test_request_remote_screenshot_success():
     img_bytes = make_test_image_bytes()
     ws = FakeWebSocket([img_bytes])
 
-    received = await request_remote_screenshot(ws, timeout=0.5)  # pyright: ignore[reportArgumentType]
+    received = await request_remote_screenshot(ws)  # pyright: ignore[reportArgumentType]
 
     # Validate bytes integrity
     assert received == img_bytes
@@ -45,13 +47,14 @@ async def test_request_remote_screenshot_success():
 
 
 @pytest.mark.asyncio
-async def test_request_remote_screenshot_timeout():
+async def test_request_remote_screenshot_timeout(monkeypatch: pytest.MonkeyPatch):
     # Provide a delayed response longer than timeout to trigger TimeoutError
     img_bytes = make_test_image_bytes()
     ws = FakeWebSocket([img_bytes], delay=0.2)  # delay > timeout below
+    monkeypatch.setattr(image_module, "SCREENSHOT_TIMEOUT_SECONDS", 0.05)
 
     with pytest.raises(TimeoutError) as e:
-        _ = await request_remote_screenshot(ws, timeout=0.05)  # pyright: ignore[reportArgumentType]
+        _ = await request_remote_screenshot(ws)  # pyright: ignore[reportArgumentType]
     assert "Timed out" in str(e.value)
 
 
@@ -66,13 +69,12 @@ async def test_request_remote_screenshot_unexpected_format():
     # The underlying implementation catches generic exceptions and raises RuntimeError.
     # We assert that a RuntimeError surfaces (not TimeoutError).
     with pytest.raises(RuntimeError) as e:
-        # Use a generous timeout so underlying error is raised immediately
-        _ = await request_remote_screenshot(ws, timeout=0.2)  # pyright: ignore[reportArgumentType]
+        _ = await request_remote_screenshot(ws)  # pyright: ignore[reportArgumentType]
     assert "Unable to interpret client response" in str(e.value)
 
 
 # ---------------------------------------------------------------------------
-# Tests: take_screenshot (wrapper around screenshot_bytes/request_remote_screenshot)
+# Tests for take_screenshot (wrapper around screenshot_bytes/request_remote_screenshot)
 # ---------------------------------------------------------------------------
 
 

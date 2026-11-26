@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -40,10 +41,6 @@ def create_tracer_provider(
     settings: ObservabilitySettings, exporter: SpanExporter | None = None
 ) -> TracerProvider:
     if exporter is None:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter,
-        )
-
         exporter = OTLPSpanExporter(endpoint=settings.otlp_endpoint("traces"))
 
     provider = TracerProvider(

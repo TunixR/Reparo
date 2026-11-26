@@ -38,6 +38,7 @@ from database.agent_graphs.models import (
     AgentGraphEdge,
     AgentGraphEdgeCreate,
     AgentGraphEdgeUpdate,
+    AgentGraphLimits,
     AgentGraphNode,
     AgentGraphNodeCreate,
     AgentGraphNodeUpdate,
@@ -90,9 +91,7 @@ def update_graph(
     session: Session, graph: AgentGraph, payload: AgentGraphUpdate
 ) -> AgentGraph:
     data = payload.model_dump(exclude_unset=True)
-    data = _drop_nulls(
-        data, keep={"max_node_executions", "execution_timeout_s", "node_timeout_s"}
-    )
+    data = _drop_nulls(data, keep=set(AgentGraphLimits.model_fields))
     make_default = data.pop("is_default_recovery", None)
     enabling = not graph.enabled and data.get("enabled") is True
     with session.no_autoflush:
@@ -442,6 +441,7 @@ def _binding_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]:
     if entry is None:
         return []
     keys = {node.id: node.key for node in graph.nodes}
+    node_keys = set(keys.values())
     dominators = _dominators(graph, entry.id)
     found: list[str] = []
     for node in graph.nodes:
@@ -451,38 +451,59 @@ def _binding_violations(graph: AgentGraph, outputs: OutputModels) -> list[str]:
         for argument in node.agent.arguments:
             path = node.input_map.get(argument.name)
             if path is not None:
-                source = path.partition(".")[0]
-                from_node = source != RECOVERY_INPUTS_SOURCE and source in keys.values()
-                if from_node and source not in before:
-                    found.append(
-                        f"Node '{node.key}' maps '{argument.name}' to '{path}', but "
-                        f"node '{source}' doesn't run before it on every path; map "
-                        "it from a node that does, or from the recovery inputs."
-                    )
-                continue
-            if argument.name in RecoveryInputs.model_fields:
-                continue
-            outputting = {
-                key
-                for key, model in outputs.items()
-                if model is not None and argument.name in model.model_fields
-            }
-            if outputting & before:
-                continue
-            elsewhere = sorted(outputting - before)
-            hint = (
-                f" Only {', '.join(f'node {k!r}' for k in elsewhere)} outputs it, "
-                "which doesn't run before it on every path."
-                if elsewhere
-                else ""
-            )
-            found.append(
-                f"Node '{node.key}' can start without its argument "
-                f"'{argument.name}': it isn't a recovery input, and no node that "
-                f"runs before it on every path outputs it.{hint} Map it in the "
-                "node's input_map."
-            )
+                error = _mapped_binding_error(
+                    node, argument.name, path, before, node_keys
+                )
+            else:
+                error = _unmapped_binding_error(node, argument.name, before, outputs)
+            if error is not None:
+                found.append(error)
     return found
+
+
+def _mapped_binding_error(
+    node: AgentGraphNode, name: str, path: str, before: set[str], node_keys: set[str]
+) -> str | None:
+    """Why argument ``name``, mapped to ``path``, can be unbound: the node it maps
+    from may not have run yet."""
+    source = path.partition(".")[0]
+    from_node = source != RECOVERY_INPUTS_SOURCE and source in node_keys
+    if not from_node or source in before:
+        return None
+    return (
+        f"Node '{node.key}' maps '{name}' to '{path}', but "
+        f"node '{source}' doesn't run before it on every path; map "
+        "it from a node that does, or from the recovery inputs."
+    )
+
+
+def _unmapped_binding_error(
+    node: AgentGraphNode, name: str, before: set[str], outputs: OutputModels
+) -> str | None:
+    """Why argument ``name``, bound by name, can be unbound: it isn't a recovery
+    input and no node that runs before on every path outputs it."""
+    if name in RecoveryInputs.model_fields:
+        return None
+    outputting = {
+        key
+        for key, model in outputs.items()
+        if model is not None and name in model.model_fields
+    }
+    if outputting & before:
+        return None
+    elsewhere = sorted(outputting - before)
+    hint = (
+        f" Only {', '.join(f'node {k!r}' for k in elsewhere)} outputs it, "
+        "which doesn't run before it on every path."
+        if elsewhere
+        else ""
+    )
+    return (
+        f"Node '{node.key}' can start without its argument "
+        f"'{name}': it isn't a recovery input, and no node that "
+        f"runs before it on every path outputs it.{hint} Map it in the "
+        "node's input_map."
+    )
 
 
 def _dominators(graph: AgentGraph, entry: uuid.UUID) -> dict[uuid.UUID, set[uuid.UUID]]:

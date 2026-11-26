@@ -5,8 +5,8 @@ from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import select
+from fastapi import APIRouter, Depends, status
+from sqlmodel import Session, select
 
 from database.auth.models import User
 from database.engine import commit_or_500
@@ -18,6 +18,7 @@ from database.keys.models import (
     RobotKeyPublic,
 )
 from middlewares.auth import get_current_user, require_admin
+from routers.common import get_or_404
 from security.utils import robot_key_hash
 
 router = APIRouter(
@@ -25,34 +26,12 @@ router = APIRouter(
 )
 
 
-@router.get("", response_model=Sequence[RobotKeyPublic], summary="List RobotKeys")
-def list_robot_keys(
-    session: SessionDep,
-) -> Sequence[RobotKeyPublic]:
-    keys = session.exec(select(RobotKey)).all()
-    return [
-        RobotKeyPublic(
-            id=k.id,
-            name=k.name,
-            description=k.description,
-            enabled=k.enabled,
-            key=f"****{k.key_last4}",
-            created_at=k.created_at,
-        )
-        for k in keys
-    ]
+def _key(session: Session, key_id: UUID) -> RobotKey:
+    return get_or_404(session, RobotKey, key_id, "Key not found")
 
 
-@router.get("/{key_id}", response_model=RobotKeyPublic, summary="Get RobotKey by ID")
-def get_robot_key(
-    key_id: UUID,
-    session: SessionDep,
-) -> RobotKeyPublic:
-    key = session.get(RobotKey, key_id)
-    if not key:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
-        )
+def _public(key: RobotKey) -> RobotKeyPublic:
+    """The key as listed: its plaintext is never shown again, only its last 4."""
     return RobotKeyPublic(
         id=key.id,
         name=key.name,
@@ -61,6 +40,22 @@ def get_robot_key(
         key=f"****{key.key_last4}",
         created_at=key.created_at,
     )
+
+
+@router.get("", response_model=Sequence[RobotKeyPublic], summary="List RobotKeys")
+def list_robot_keys(
+    session: SessionDep,
+) -> Sequence[RobotKeyPublic]:
+    keys = session.exec(select(RobotKey)).all()
+    return [_public(k) for k in keys]
+
+
+@router.get("/{key_id}", response_model=RobotKeyPublic, summary="Get RobotKey by ID")
+def get_robot_key(
+    key_id: UUID,
+    session: SessionDep,
+) -> RobotKeyPublic:
+    return _public(_key(session, key_id))
 
 
 @router.post(
@@ -107,12 +102,7 @@ def delete_robot_key(
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
 ) -> None:
-    key = session.get(RobotKey, key_id)
-    if not key:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
-        )
-    session.delete(key)
+    session.delete(_key(session, key_id))
     commit_or_500(session, "delete key")
 
 
@@ -126,22 +116,11 @@ def toggle_robot_key(
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
 ) -> RobotKeyPublic:
-    key = session.get(RobotKey, key_id)
-    if not key:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Key not found"
-        )
+    key = _key(session, key_id)
 
     key.enabled = not key.enabled
     session.add(key)
     commit_or_500(session, "toggle key")
     session.refresh(key)
 
-    return RobotKeyPublic(
-        id=key.id,
-        name=key.name,
-        description=key.description,
-        enabled=key.enabled,
-        key=f"****{key.key_last4}",
-        created_at=key.created_at,
-    )
+    return _public(key)

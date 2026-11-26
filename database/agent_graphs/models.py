@@ -392,16 +392,14 @@ class AgentGraphEdge(SQLModel, table=True):
             return False
 
 
-class AgentGraphCreate(SQLModel):
-    """Schema for creating an agent graph; it starts as a draft unless enabled."""
+_TAKES_OVER_DEFAULT_RECOVERY = (
+    "Whether recoveries run this graph; it takes over from the previous one."
+)
 
-    name: str = Field(description="Name of the agent graph.")
-    description: str = Field(description="What the agent graph does.")
-    enabled: bool = Field(default=False, description="Whether the graph may run.")
-    is_default_recovery: bool = Field(
-        default=False,
-        description="Whether recoveries run this graph; it takes over from the previous one.",
-    )
+
+class AgentGraphLimits(SQLModel):
+    """The run limits a graph is created or updated with."""
+
     max_node_executions: int | None = Field(
         default=None,
         gt=0,
@@ -417,7 +415,19 @@ class AgentGraphCreate(SQLModel):
     )
 
 
-class AgentGraphUpdate(SQLModel):
+class AgentGraphCreate(AgentGraphLimits):
+    """Schema for creating an agent graph; it starts as a draft unless enabled."""
+
+    name: str = Field(description="Name of the agent graph.")
+    description: str = Field(description="What the agent graph does.")
+    enabled: bool = Field(default=False, description="Whether the graph may run.")
+    is_default_recovery: bool = Field(
+        default=False,
+        description=_TAKES_OVER_DEFAULT_RECOVERY,
+    )
+
+
+class AgentGraphUpdate(AgentGraphLimits):
     """Schema for updating an agent graph; a null limit turns that limit off."""
 
     name: str | None = Field(default=None, description="Name of the agent graph.")
@@ -427,20 +437,7 @@ class AgentGraphUpdate(SQLModel):
     enabled: bool | None = Field(default=None, description="Whether the graph may run.")
     is_default_recovery: bool | None = Field(
         default=None,
-        description="Whether recoveries run this graph; it takes over from the previous one.",
-    )
-    max_node_executions: int | None = Field(
-        default=None,
-        gt=0,
-        description="Cap on node executions per run; required when the graph has a cycle.",
-    )
-    execution_timeout_s: float | None = Field(
-        default=None, gt=0, description="Soft run deadline in seconds; null is off."
-    )
-    node_timeout_s: float | None = Field(
-        default=None,
-        gt=0,
-        description="Hard deadline for one node in seconds; null is off.",
+        description=_TAKES_OVER_DEFAULT_RECOVERY,
     )
 
 

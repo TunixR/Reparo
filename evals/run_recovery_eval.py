@@ -5,6 +5,8 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import numpy
@@ -83,9 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def wait_for_server(host: str, port: int, _timeout: float) -> bool:
-    import urllib.error
-    import urllib.request
-
     url = f"http://{host}:{port}/scalar"
     while time.monotonic() < numpy.inf:  # Sorry
         try:
@@ -145,8 +144,6 @@ def main() -> int:
         cwd=str(Path(__file__).resolve().parent.parent),
         # Its own process group, so Ctrl+Break reaches uvicorn and not this script.
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        # stdout=subprocess.PIPE,
-        # stderr=subprocess.PIPE,
     )
 
     try:
@@ -191,8 +188,6 @@ def main() -> int:
             client_cmd,
             cwd=str(Path(__file__).resolve().parent.parent),
             check=True,
-            # capture_output=True,
-            # text=True,
         )
 
         if result.stdout:

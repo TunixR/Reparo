@@ -76,8 +76,9 @@ def _compute_fn_module(fn: DecoratedFunctionTool) -> str:  # pyright: ignore[rep
     Returns:
         String like 'package.subpackage.module.function_name'
     """
-    module_name = getattr(fn._tool_func, "__module__", None)  # pyright: ignore[reportPrivateUsage]
-    qualname = getattr(fn._tool_func, "__name__", None)  # pyright: ignore[reportPrivateUsage]
+    # @tool copies the decorated function's __module__ and __name__ onto the tool.
+    module_name = getattr(fn, "__module__", None)
+    qualname = getattr(fn, "__name__", None)
     if not module_name or not qualname:
         raise ValueError(f"Cannot compute module path for tool: {fn}")
     return f"{module_name}.{qualname}"
@@ -105,8 +106,8 @@ def populate_tools(engine: Engine) -> None:
     with Session(engine) as session:
         for decorated in tool_functions:
             try:
-                name = decorated._tool_name  # pyright: ignore[reportPrivateUsage]
-                description = decorated._tool_spec.get(  # pyright: ignore[reportPrivateUsage]
+                name = decorated.tool_name
+                description = decorated.tool_spec.get(
                     "description", "No description provided."
                 )
                 fn_module = _compute_fn_module(decorated)

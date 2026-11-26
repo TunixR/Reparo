@@ -108,13 +108,14 @@ knowingly leave one behind, add it here.
 
 ## 11. Code the static analysis tools already complain about
 
-- **Where:** the debt lists in `pyproject.toml` (ruff's per-file ignores, the import contracts'
-  `ignore_imports`, the deptry and vulture entries marked as debt). complexipy and jscpd have no
-  list: `uv run complexipy` and `uv run jscpd` name the functions over the complexity limit and
-  the copied code.
-- **Why it's debt:** the tools were turned on without changing the code. The lists name what failed
-  that day (lint findings, imports against the package layers, import cycles in `database`, unused
-  code) and exempt it. Nothing exempts the tangled functions and the copied code, so the complexipy
-  and jscpd hooks fail until those are fixed.
-- **What fixing it means:** fix what an entry names and delete the entry, until the lists are empty;
-  untangle the functions and share the copied code until both hooks pass. Then this entry goes too.
+- **Where:** the debt lists in `pyproject.toml`: the import contracts' `ignore_imports` (the upward
+  imports from `agent_tools` and `observability` into `database`, and the imports that close the
+  cycles inside `database`), and ruff's per-file ignore for migration 0008's `print` calls.
+- **Why it's debt:** the tools were turned on without changing the code, and these findings need
+  more than a local fix. The upward imports and the cycles are what make `database` and the
+  hook/telemetry packages depend on each other. The migration reports what it changed with `print`;
+  logging instead must still reach whoever runs the upgrade (`alembic` or `populate.py`).
+- **What fixing it means:** move what `agent_tools.hooks` and the telemetry modules need from
+  `database` behind an interface they own (or move the code down a layer), break the cycles in
+  `database.agent_graphs.runner`, report migration 0008's changes through logging, and delete each
+  line as its finding goes. Then this entry goes too.

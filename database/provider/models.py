@@ -127,11 +127,11 @@ class Router(SQLModel, table=True):
                 x * width / model_width,
                 y * height / model_height,
             ]
-        else:  # Coords in range [0.0, 1.0]
-            return [
-                x * width,
-                y * height,
-            ]
+        # Otherwise the coords are fractions of the image size.
+        return [
+            x * width,
+            y * height,
+        ]
 
     def get_model(self, **params: Any) -> Model:
         """Return the model instance for the router.
@@ -140,11 +140,11 @@ class Router(SQLModel, table=True):
             **params: Request parameters sent with every model call (e.g.
                 ``reasoning_effort``), as chosen by the agent using the model.
         """
-        if (
-            self.provider_type == self.Provider.OPENAI
-            or self.provider_type == self.Provider.VLLM
-            or self.provider_type == self.Provider.OPENROUTER
-        ):
+        if self.provider_type in {
+            self.Provider.OPENAI,
+            self.Provider.VLLM,
+            self.Provider.OPENROUTER,
+        }:
             return TracedOpenAIModel(
                 client_args={
                     "api_key": self.api_key or "api-key",
@@ -189,8 +189,7 @@ class Router(SQLModel, table=True):
         if prompt_rate < 0 or completion_rate < 0:
             return -1.0  # Unknown cost
 
-        total_cost = (input_tokens * prompt_rate) + (output_tokens * completion_rate)
-        return total_cost
+        return (input_tokens * prompt_rate) + (output_tokens * completion_rate)
 
 
 class RouterPublic(SQLModel):

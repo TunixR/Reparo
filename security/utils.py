@@ -82,8 +82,7 @@ def generate_session_token(
     else:
         expire = datetime.now(UTC) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def get_session_expiry(hours: int = 24) -> datetime:
@@ -121,8 +120,3 @@ def robot_key_hash(key: str) -> str:
     """Compute an HMAC-SHA256 hash of a robot key for storage/lookup."""
     mac = hmac.new(SECRET_KEY.encode("utf-8"), key.encode("utf-8"), hashlib.sha256)
     return mac.hexdigest()
-
-
-def constant_time_equals(a: str, b: str) -> bool:
-    """Constant-time string comparison."""
-    return hmac.compare_digest(a, b)

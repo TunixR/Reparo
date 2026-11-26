@@ -117,38 +117,8 @@ def set_continuation(
             "The process model must be provided in the invocation state."
         )
 
-    if model_event_id is None or not model_event_id.strip():
-        raise _invalid(
-            "model_event_id",
-            model_event_id,
-            "model_event_id is required unless process_finished is true.",
-        )
-    try:
-        check_model_event(model, model_event_id)
-    except ModelEventError as exc:
-        raise _invalid("model_event_id", model_event_id, str(exc)) from exc
-
-    if any(p < 0 for p in loop_iteration):
-        raise _invalid(
-            "loop_iteration",
-            loop_iteration,
-            f"loop passes are 0-based and can't be negative, got {loop_iteration}.",
-        )
-
-    loops = enclosing_loops(model, model_event_id)
-    if loops is not None and len(loops) != len(loop_iteration):
-        if loops:
-            expected = (
-                f"{model_event_id} is inside {len(loops)} "
-                f"loop{'s' if len(loops) > 1 else ''} ({_describe_loops(loops)}, "
-                f"outermost first), so loop_iteration needs {len(loops)} "
-                f"pass{'es' if len(loops) > 1 else ''}"
-            )
-        else:
-            expected = f"{model_event_id} is in no loop, so loop_iteration must be []"
-        raise _invalid(
-            "loop_iteration", loop_iteration, f"{expected}, got {loop_iteration}."
-        )
+    model_event_id = _checked_model_event_id(model, model_event_id)
+    loops = _check_loop_iteration(model, model_event_id, loop_iteration)
 
     state[CONTINUATION_STATE_KEY] = Continuation(
         continue_from_model_event_id=model_event_id, loop_iteration=loop_iteration
@@ -160,19 +130,79 @@ def set_continuation(
     target = (
         f"{model_event_id} ({event.name})" if event and event.name else model_event_id
     )
+    return (
+        f"ok: the robot continues from {target}, "
+        f"{_describe_position(loops, loop_iteration)}."
+    )
+
+
+def _checked_model_event_id(model: str, model_event_id: str | None) -> str:
+    """`model_event_id`, checked to name a task of `model`.
+
+    Raises:
+        ValidationError: The id is missing or not a task of the model.
+    """
+    if model_event_id is None or not model_event_id.strip():
+        raise _invalid(
+            "model_event_id",
+            model_event_id,
+            "model_event_id is required unless process_finished is true.",
+        )
+    try:
+        check_model_event(model, model_event_id)
+    except ModelEventError as exc:
+        raise _invalid("model_event_id", model_event_id, str(exc)) from exc
+    return model_event_id
+
+
+def _check_loop_iteration(
+    model: str, model_event_id: str, loop_iteration: list[int]
+) -> list[Loop] | None:
+    """Check that `loop_iteration` has one 0-based pass per loop enclosing the task.
+
+    Returns:
+        The enclosing loops, or `None` when their depth can't be read from `model`.
+
+    Raises:
+        ValidationError: A pass is negative, or the number of passes is wrong.
+    """
+    if any(p < 0 for p in loop_iteration):
+        raise _invalid(
+            "loop_iteration",
+            loop_iteration,
+            f"loop passes are 0-based and can't be negative, got {loop_iteration}.",
+        )
+
+    loops = enclosing_loops(model, model_event_id)
+    if loops is None or len(loops) == len(loop_iteration):
+        return loops
+    if loops:
+        expected = (
+            f"{model_event_id} is inside {len(loops)} "
+            f"loop{'s' if len(loops) > 1 else ''} ({_describe_loops(loops)}, "
+            f"outermost first), so loop_iteration needs {len(loops)} "
+            f"pass{'es' if len(loops) > 1 else ''}"
+        )
+    else:
+        expected = f"{model_event_id} is in no loop, so loop_iteration must be []"
+    raise _invalid(
+        "loop_iteration", loop_iteration, f"{expected}, got {loop_iteration}."
+    )
+
+
+def _describe_position(loops: list[Loop] | None, loop_iteration: list[int]) -> str:
+    """Where in its enclosing loops the robot continues, for the tool's answer."""
     if loops is None:
-        where = (
+        return (
             f"with loop_iteration {loop_iteration} as given (the loop depth can't be "
             "read from this model)"
         )
-    elif loops:
-        passes = ", ".join(
-            f"{loop.id} pass {p}" for loop, p in zip(loops, loop_iteration, strict=True)
-        )
-        where = f"inside {_describe_loops(loops)}: {passes}"
-    else:
-        where = "in no loop"
-    return f"ok: the robot continues from {target}, {where}."
+    if not loops:
+        return "in no loop"
+    passes = ", ".join(
+        f"{loop.id} pass {p}" for loop, p in zip(loops, loop_iteration, strict=True)
+    )
+    return f"inside {_describe_loops(loops)}: {passes}"
 
 
 SET_CONTINUATION_FN_MODULE = f"{__name__}.set_continuation"

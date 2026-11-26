@@ -11,6 +11,7 @@ trace and ``gui.action`` span, and returns the next observation.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -350,10 +351,8 @@ def coerce_to_held_type(held: Any, value: Any) -> Any:
     if held is None or isinstance(held, str):
         return value
     if isinstance(value, str):
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             value = json.loads(value)
-        except json.JSONDecodeError:
-            pass
     if isinstance(held, float) and type(value) is int:
         value = float(value)
     if type(value) is not type(held):

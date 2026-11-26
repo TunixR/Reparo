@@ -27,6 +27,7 @@ from database.auth.models import User
 from database.engine import commit_or_500
 from database.general import SessionDep
 from middlewares.auth import get_current_user, require_admin
+from routers.common import find_or_404, get_or_404
 
 router = APIRouter(
     prefix="/agent_graphs",
@@ -76,30 +77,15 @@ def _write[T](session: Session, action: str, write: Callable[[], T]) -> T:
 
 
 def _graph(session: Session, graph_id: UUID) -> AgentGraph:
-    graph = session.get(AgentGraph, graph_id)
-    if graph is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Agent graph not found"
-        )
-    return graph
+    return get_or_404(session, AgentGraph, graph_id, "Agent graph not found")
 
 
 def _node(graph: AgentGraph, node_id: UUID) -> AgentGraphNode:
-    node = next((n for n in graph.nodes if n.id == node_id), None)
-    if node is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Agent graph node not found"
-        )
-    return node
+    return find_or_404(graph.nodes, node_id, "Agent graph node not found")
 
 
 def _edge(graph: AgentGraph, edge_id: UUID) -> AgentGraphEdge:
-    edge = next((e for e in graph.edges if e.id == edge_id), None)
-    if edge is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Agent graph edge not found"
-        )
-    return edge
+    return find_or_404(graph.edges, edge_id, "Agent graph edge not found")
 
 
 def _detail(graph: AgentGraph) -> AgentGraphDetail:

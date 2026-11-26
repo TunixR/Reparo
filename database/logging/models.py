@@ -22,6 +22,58 @@ if TYPE_CHECKING:
     from database.agent_graphs.models import AgentGraph
 
 
+# A log section with the time it happened, to interleave sections chronologically.
+type _TimestampedLog = tuple[datetime, str]
+
+# Image uuid a logged message carries until its screenshot finishes uploading to S3.
+PENDING_IMAGE_UUID = "<uuid_pending>"
+
+
+async def _image_markdown(image: dict[str, Any]) -> str:
+    image_uuid: str = image.get("uuid", "")
+    if image_uuid == PENDING_IMAGE_UUID:
+        return "_Image upload pending..._\n"
+    image_b = await S3Client.download_bytes(image_uuid)
+    if not image_b:
+        return "_Image no longer available_\n"
+    return f"![Image](data:image/jpeg;base64,{b64encode(image_b).decode()})\n"
+
+
+async def _tool_result_markdown(tool_result: dict[str, Any]) -> str:
+    log = ""
+    for item in tool_result.get("content", []):
+        if item.get("image", None):
+            log += await _image_markdown(item["image"])
+        else:
+            log += f"{item}\n"
+    return log
+
+
+async def _content_part_markdown(part: dict[str, Any]) -> str:
+    if "text" in part:
+        return f"{part['text']}\n"
+    if "image" in part:
+        return await _image_markdown(part["image"])
+    if "toolResult" in part:
+        return await _tool_result_markdown(part["toolResult"])
+    return f"{part}\n"  # Unknown dict format
+
+
+def _message_timestamp(msg: dict[str, Any]) -> datetime:
+    date = msg.get("timestamp", datetime.now(UTC))
+    if isinstance(date, str):
+        return datetime.strptime(date.replace(" ", "T"), "%Y-%m-%dT%H:%M:%S.%f%z")
+    return date
+
+
+async def _message_log(index: int, msg: dict[str, Any]) -> _TimestampedLog:
+    log_msg = f"\n### Message {index}:\n"
+    log_msg += f"- **{msg.get('role', '').capitalize()}:** "
+    for part in msg.get("content", []):
+        log_msg += await _content_part_markdown(part)
+    return _message_timestamp(msg), log_msg
+
+
 class AgentTrace(SQLModel, table=True):
     id: UUID = Field(
         default_factory=uuid4,
@@ -80,102 +132,55 @@ class AgentTrace(SQLModel, table=True):
     async def get_makdown_log(
         self, include_subtraces: bool = True, include_tool_traces: bool = True
     ) -> str:
+        log = self._markdown_header()
+        if not self.messages:
+            return log + "_No messages recorded._\n"
+
+        timestamped_logs = [
+            *[await _message_log(i, msg) for i, msg in enumerate(self.messages)],
+            *self._tool_trace_logs(include_tool_traces),
+            *await self._sub_trace_logs(include_subtraces, include_tool_traces),
+        ]
+        timestamped_logs.sort(key=lambda x: x[0])
+        return log + "".join(log_msg for _, log_msg in timestamped_logs)
+
+    def _markdown_header(self) -> str:
         log = f"# Agent Trace: {self.id}\n"
         log += f"**Agent:** {self.agent.name} ({self.agent.id})\n\n"
         log += f"**Created At:** {self.created_at}\n\n"
         log += f"**Finished At:** {self.finished_at}\n\n"
         log += f"**Cost:** ${self.cost:.6f}\n\n"
         log += f"**Inputs:**\n```\n{json.dumps(self.inputs)}\n```\n\n"
-        log += "## Messages:\n"
+        return log + "## Messages:\n"
 
-        timestamped_logs: list[
-            tuple[datetime, str]
-        ] = []  # We will use this to later sort messages by timestamp
-        # Sorry. Dict moment
-        if self.messages:
-            for i, msg in enumerate(self.messages):
-                log_msg = f"\n### Message {i}:\n"
-                log_msg += f"- **{msg.get('role', '').capitalize()}:** "
-                content = msg.get("content", [])
-                for part in content:
-                    if "text" in part:
-                        log_msg += f"{part['text']}\n"
-                    elif "image" in part:
-                        image_uuid: str = part["image"].get("uuid", "")
-                        if image_uuid == "<uuid_pending>":
-                            log_msg += "_Image upload pending..._\n"
-                        else:
-                            image_b = await S3Client.download_bytes(image_uuid)
-                            if image_b:
-                                image_url = f"data:image/jpeg;base64,{b64encode(image_b).decode()}"
-                                log_msg += f"![Image]({image_url})\n"
-                            else:
-                                log_msg += "_Image no longer available_\n"
-                    elif "toolResult" in part:
-                        content = part["toolResult"].get("content", [])
-                        for item in content:
-                            if item.get("image", None):
-                                image_uuid: str = item["image"].get("uuid", "")
-                                if image_uuid == "<uuid_pending>":
-                                    log_msg += "_Image upload pending..._\n"
-                                else:
-                                    image_b = await S3Client.download_bytes(image_uuid)
-                                    if image_b:
-                                        image_url = f"data:image/jpeg;base64,{b64encode(image_b).decode()}"
-                                        log_msg += f"![Image]({image_url})\n"
-                                    else:
-                                        log_msg += "_Image no longer available_\n"
-                            else:
-                                log_msg += f"{item}\n"
-                    else:  # Unknown dict format
-                        log_msg += f"{part}\n"
-                date = msg.get("timestamp", datetime.now(UTC))
-                if isinstance(date, str):
-                    timestamped_logs.append(
-                        (
-                            datetime.strptime(
-                                date.replace(" ", "T"),
-                                "%Y-%m-%dT%H:%M:%S.%f%z",
-                            ),
-                            log_msg,
-                        )
-                    )
-                else:
-                    timestamped_logs.append(
-                        (
-                            date,
-                            log_msg,
-                        )
-                    )
-        else:
-            log += "_No messages recorded._\n"
-            return log
-
+    def _tool_trace_logs(self, include_details: bool) -> list[_TimestampedLog]:
+        logs: list[_TimestampedLog] = []
         for i, tool_trace in enumerate(self.tool_traces):
             log_msg = f"\n### Tool Trace {i}:\n"
-            if include_tool_traces and self.tool_traces:
+            if include_details:
                 log_msg += f"- Tool: {tool_trace.tool.name} ({tool_trace.tool.id})\n"
                 log_msg += f"  - Input: {tool_trace.input}\n"
                 log_msg += f"  - Output: {tool_trace.output}\n"
                 log_msg += f"  - Success: {tool_trace.success}\n"
-            timestamped_logs.append((tool_trace.created_at, log_msg))
+            logs.append((tool_trace.created_at, log_msg))
+        return logs
 
-        for i, sub_trace in enumerate(self.sub_agents_traces):
-            log_msg = f"\n### Sub-Agent Trace: {sub_trace.child_trace.agent.name}:\n"
-            if include_subtraces and self.sub_agents_traces:
+    async def _sub_trace_logs(
+        self, include_subtraces: bool, include_tool_traces: bool
+    ) -> list[_TimestampedLog]:
+        logs: list[_TimestampedLog] = []
+        for sub_trace in self.sub_agents_traces:
+            child = sub_trace.child_trace
+            log_msg = f"\n### Sub-Agent Trace: {child.agent.name}:\n"
+            if include_subtraces:
                 log_msg += "BEGIN Sub-Agent Trace:\n"
-                log_msg += await sub_trace.child_trace.get_makdown_log(
+                log_msg += await child.get_makdown_log(
                     include_subtraces=include_subtraces,
                     include_tool_traces=include_tool_traces,
                 )
                 log_msg += "END Sub-Agent Trace:\n"
-            timestamped_logs.append((sub_trace.child_trace.created_at, log_msg))
-
-        timestamped_logs.sort(key=lambda x: x[0])
-        for _, log_msg in timestamped_logs:
-            log += log_msg
-
-        return log
+            logs.append((child.created_at, log_msg))
+        return logs
 
 
 class SubAgentTrace(SQLModel, table=True):
@@ -270,7 +275,21 @@ class RobotException(SQLModel, table=True):
     )
 
 
-class RecoveryUiLogEntry(SQLModel, table=True):
+class RecoveryActivityFields(SQLModel):
+    """The activity fields a UI log entry shares with the errored activity."""
+
+    case_id: str = Field(default="")
+    activity_id: str | None = Field(default=None)
+    event_id: str = Field(default="")
+    event_name: str | None = Field(default=None)
+    model_event_id: str | None = Field(default=None)
+    activity_name: str | None = Field(default=None)
+    action_type: str = Field(default="")
+    application: str | None = Field(default=None)
+    input: str | None = Field(default=None)
+
+
+class RecoveryUiLogEntry(RecoveryActivityFields, table=True):
     id: UUID = Field(
         default_factory=uuid4,
         description="Unique identifier",
@@ -283,15 +302,6 @@ class RecoveryUiLogEntry(SQLModel, table=True):
     recovery_context: "RecoveryContext" = Relationship(back_populates="ui_log_entries")
 
     position: int = Field(default=0)
-    case_id: str = Field(default="")
-    activity_id: str | None = Field(default=None)
-    event_id: str = Field(default="")
-    event_name: str | None = Field(default=None)
-    model_event_id: str | None = Field(default=None)
-    activity_name: str | None = Field(default=None)
-    action_type: str = Field(default="")
-    application: str | None = Field(default=None)
-    input: str | None = Field(default=None)
     ui_element_target: str | None = Field(default=None)
     ui_group: str | None = Field(default=None)
     timestamp: str = Field(default="")
@@ -299,7 +309,7 @@ class RecoveryUiLogEntry(SQLModel, table=True):
     current_state: str | None = Field(default=None)
 
 
-class RecoveryErroredActivity(SQLModel, table=True):
+class RecoveryErroredActivity(RecoveryActivityFields, table=True):
     id: UUID = Field(
         default_factory=uuid4,
         description="Unique identifier",
@@ -318,15 +328,6 @@ class RecoveryErroredActivity(SQLModel, table=True):
         },
     )
 
-    case_id: str = Field(default="")
-    activity_id: str | None = Field(default=None)
-    event_id: str = Field(default="")
-    event_name: str | None = Field(default=None)
-    model_event_id: str | None = Field(default=None)
-    activity_name: str | None = Field(default=None)
-    action_type: str = Field(default="")
-    application: str | None = Field(default=None)
-    input: str | None = Field(default=None)
     error_code: str = Field(default="")
     error_description: str = Field(default="")
 

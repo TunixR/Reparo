@@ -19,18 +19,20 @@ from uuid import UUID
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from database.auth.models import (
     User,
     UserCreate,
     UserPasswordChange,
     UserPublic,
+    UserRole,
     UserSession,
     UserUpdate,
 )
 from database.general import SessionDep
 from middlewares.auth import get_current_user, require_admin
+from routers.common import get_or_404
 from security.token import Token, TokenData, oauth2_scheme
 from security.utils import (
     generate_session_token,
@@ -41,6 +43,61 @@ from security.utils import (
 from settings import ALGORITHM, SECRET_KEY
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+AdminDep = Annotated[User, Depends(require_admin)]
+CurrentUserDep = Annotated[User, Depends(get_current_user)]
+
+
+def _ensure_username_free(session: Session, username: str) -> None:
+    """Refuse a username another user already has."""
+    if session.exec(select(User).where(User.username == username)).first():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already exists",
+        )
+
+
+def _rename(session: Session, user: User, username: str | None) -> None:
+    """Give ``user`` a new username, if one is given and it is free."""
+    if username and username != user.username:
+        _ensure_username_free(session, username)
+        user.username = username
+
+
+def _save(
+    session: Session,
+    user: User,
+    *,
+    enabled: bool | None = None,
+    role: UserRole | None = None,
+) -> UserPublic:
+    """Set what is given, stamp the update, commit and answer the user."""
+    if enabled is not None:
+        user.enabled = enabled
+    if role is not None:
+        user.role = role
+    user.updated_at = datetime.now(UTC)
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return UserPublic.model_validate(user)
+
+
+def _set_password(session: Session, user: User, password: str) -> None:
+    """Store the hash of ``user``'s new password."""
+    user.password = hash_password(password)
+    user.updated_at = datetime.now(UTC)
+    session.add(user)
+    session.commit()
+
+
+def _delete_user(session: Session, user: User) -> None:
+    """Delete ``user`` and, first, their sessions."""
+    statement = select(UserSession).where(UserSession.user_id == user.id)
+    for user_session in session.exec(statement).unique().all():
+        session.delete(user_session)
+    session.delete(user)
+    session.commit()
 
 
 @router.post("/login", response_model=Token, summary="User login")
@@ -124,20 +181,13 @@ def logout(
 def create_user(
     user_data: UserCreate,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
+    _current_user: AdminDep,
 ) -> UserPublic:
     """
     Create a new user. Requires admin role.
     Password will be hashed before storage.
     """
-    # Check if username already exists
-    statement = select(User).where(User.username == user_data.username)
-    existing_user = session.exec(statement).first()
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Username already exists",
-        )
+    _ensure_username_free(session, user_data.username)
 
     # Hash password and create user
     hashed_password = hash_password(user_data.password)
@@ -162,7 +212,7 @@ def create_user(
 )
 def list_users(
     session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
+    _current_user: AdminDep,
 ) -> Sequence[UserPublic]:
     """
     List all users. Requires admin role.
@@ -178,9 +228,9 @@ def list_users(
 )
 def search_users(
     session: SessionDep,
+    _current_user: AdminDep,
     username: str | None = None,
     enabled: bool | None = None,
-    _current_user: User = Depends(require_admin),  # noqa: B008
 ) -> Sequence[UserPublic]:
     """
     Search users by username or enabled status. Requires admin role.
@@ -199,7 +249,7 @@ def search_users(
 
 @router.get("/users/me", response_model=UserPublic, summary="Get current user")
 def get_current_user_info(
-    current_user: User = Depends(get_current_user),  # noqa: B008
+    current_user: CurrentUserDep,
 ) -> UserPublic:
     """
     Get information about the currently authenticated user.
@@ -215,25 +265,19 @@ def get_current_user_info(
 def get_user(
     user_id: UUID,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
+    _current_user: AdminDep,
 ) -> UserPublic:
     """
     Get user by ID. Requires admin role.
     """
-    user = session.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-    return UserPublic.model_validate(user)
+    return UserPublic.model_validate(get_or_404(session, User, user_id))
 
 
 @router.patch("/users/me", response_model=UserPublic, summary="Update current user")
 def update_current_user(
     user_data: UserUpdate,
     session: SessionDep,
-    current_user: User = Depends(get_current_user),  # noqa: B008
+    current_user: CurrentUserDep,
 ) -> UserPublic:
     """
     Update current user's own information.
@@ -245,23 +289,9 @@ def update_current_user(
             detail="Cannot modify role or enabled status",
         )
 
-    # Check if new username already exists
-    if user_data.username and user_data.username != current_user.username:
-        statement = select(User).where(User.username == user_data.username)
-        existing_user = session.exec(statement).first()
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Username already exists",
-            )
-        current_user.username = user_data.username
+    _rename(session, current_user, user_data.username)
 
-    current_user.updated_at = datetime.now(UTC)
-    session.add(current_user)
-    session.commit()
-    session.refresh(current_user)
-
-    return UserPublic.model_validate(current_user)
+    return _save(session, current_user)
 
 
 @router.patch(
@@ -273,42 +303,17 @@ def update_user(
     user_id: UUID,
     user_data: UserUpdate,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
+    _current_user: AdminDep,
 ) -> UserPublic:
     """
     Update user information. Requires admin role.
     Can update username, enabled status, and role.
     """
-    user = session.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
+    user = get_or_404(session, User, user_id)
 
-    # Check if new username already exists
-    if user_data.username and user_data.username != user.username:
-        statement = select(User).where(User.username == user_data.username)
-        existing_user = session.exec(statement).first()
-        if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Username already exists",
-            )
-        user.username = user_data.username
+    _rename(session, user, user_data.username)
 
-    if user_data.enabled is not None:
-        user.enabled = user_data.enabled
-
-    if user_data.role is not None:
-        user.role = user_data.role
-
-    user.updated_at = datetime.now(UTC)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    return UserPublic.model_validate(user)
+    return _save(session, user, enabled=user_data.enabled, role=user_data.role)
 
 
 @router.delete(
@@ -318,19 +323,12 @@ def update_user(
 )
 def delete_current_user(
     session: SessionDep,
-    current_user: User = Depends(get_current_user),  # noqa: B008
+    current_user: CurrentUserDep,
 ) -> None:
     """
     Delete current user's own account.
     """
-    # Delete user's sessions first
-    statement = select(UserSession).where(UserSession.user_id == current_user.id)
-    sessions = session.exec(statement).unique().all()
-    for user_session in sessions:
-        session.delete(user_session)
-
-    session.delete(current_user)
-    session.commit()
+    _delete_user(session, current_user)
 
 
 @router.delete(
@@ -341,26 +339,14 @@ def delete_current_user(
 def delete_user(
     user_id: UUID,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
+    _current_user: AdminDep,
 ) -> None:
     """
     Delete a user. Requires admin role.
     """
-    user = session.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
+    user = get_or_404(session, User, user_id)
 
-    # Delete user's sessions first
-    statement = select(UserSession).where(UserSession.user_id == user_id)
-    sessions = session.exec(statement).unique().all()
-    for user_session in sessions:
-        session.delete(user_session)
-
-    session.delete(user)
-    session.commit()
+    _delete_user(session, user)
 
 
 # Password management endpoints
@@ -374,7 +360,7 @@ def delete_user(
 def change_own_password(
     password_data: UserPasswordChange,
     session: SessionDep,
-    current_user: User = Depends(get_current_user),  # noqa: B008
+    current_user: CurrentUserDep,
 ) -> None:
     """
     Change current user's own password.
@@ -393,11 +379,7 @@ def change_own_password(
             detail="Current password is incorrect",
         )
 
-    # Hash new password and update
-    current_user.password = hash_password(password_data.new_password)
-    current_user.updated_at = datetime.now(UTC)
-    session.add(current_user)
-    session.commit()
+    _set_password(session, current_user, password_data.new_password)
 
 
 @router.post(
@@ -409,24 +391,15 @@ def change_user_password(
     user_id: UUID,
     password_data: UserPasswordChange,
     session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
+    _current_user: AdminDep,
 ) -> None:
     """
     Change a user's password. Requires admin role.
     Admin does not need to provide current password.
     """
-    user = session.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
+    user = get_or_404(session, User, user_id)
 
-    # Hash new password and update
-    user.password = hash_password(password_data.new_password)
-    user.updated_at = datetime.now(UTC)
-    session.add(user)
-    session.commit()
+    _set_password(session, user, password_data.new_password)
 
 
 # User enable/disable endpoints
@@ -437,28 +410,11 @@ def change_user_password(
     response_model=UserPublic,
     summary="Enable user (Admin only)",
 )
-def enable_user(
-    user_id: UUID,
-    session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
-) -> UserPublic:
+def enable_user(user_id: UUID, session: SessionDep, _admin: AdminDep) -> UserPublic:
     """
     Enable a user account. Requires admin role.
     """
-    user = session.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    user.enabled = True
-    user.updated_at = datetime.now(UTC)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    return UserPublic.model_validate(user)
+    return _save(session, get_or_404(session, User, user_id), enabled=True)
 
 
 @router.post(
@@ -466,25 +422,8 @@ def enable_user(
     response_model=UserPublic,
     summary="Disable user (Admin only)",
 )
-def disable_user(
-    user_id: UUID,
-    session: SessionDep,
-    _current_user: User = Depends(require_admin),  # noqa: B008
-) -> UserPublic:
+def disable_user(user_id: UUID, session: SessionDep, _admin: AdminDep) -> UserPublic:
     """
     Disable a user account. Requires admin role.
     """
-    user = session.get(User, user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    user.enabled = False
-    user.updated_at = datetime.now(UTC)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    return UserPublic.model_validate(user)
+    return _save(session, get_or_404(session, User, user_id), enabled=False)

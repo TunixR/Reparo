@@ -10,34 +10,26 @@ Usage:
 from __future__ import annotations
 
 import json
+from collections import Counter
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from strands_evals import Case
 from strands_evals.evaluators import OutputEvaluator
-from strands_evals.types.evaluation import EvaluationData
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
 
 import settings
 from evals.agents import build_model, gateway_task
 from evals.dataset import load_cases
-from evals.evaluators import RoutingEvaluator
+from evals.evaluators import RoutingEvaluator, evaluation_summary
 from evals.mocks import GatewayMocks
 
 OUTPUT_DIR = Path("experiment_files")
 
 
-def run_evaluation() -> dict[str, Any]:
-    """Run the error filtering evaluation and return full results."""
-    cases = load_cases("error_filtering")
-    print(f"Loaded {len(cases)} test cases for error filtering evaluation.\n")
-
-    judge_model = build_model()
-    mocks = GatewayMocks()
-    routing_eval = RoutingEvaluator()
-    rubric_eval = OutputEvaluator(
-        model=judge_model,
-        rubric="""
+RUBRIC = """
         Evaluate whether the Gateway Orchestrator correctly classified this error.
 
         Score 1.0 if:
@@ -53,132 +45,133 @@ def run_evaluation() -> dict[str, Any]:
         - The agent could not make a routing decision
 
         Consider the error message, activity context, and application involved.
-        """,
+        """
+
+
+def _first(results: list[EvaluationOutput]) -> EvaluationOutput | None:
+    return results[0] if results else None
+
+
+def _run_case(
+    case: Case[str, str],
+    mocks: GatewayMocks,
+    routing_eval: RoutingEvaluator,
+    rubric_eval: OutputEvaluator[str, str],
+) -> dict[str, Any]:
+    """Run the gateway on one case, evaluate it, print its verdict and return its result entry."""
+    # Run task function to get model response
+    task_output = gateway_task(case, mocks)
+
+    eval_data = EvaluationData[str, str](
+        input=case.input,
+        actual_output=json.dumps(task_output),
+        expected_output=case.expected_output,
+        name=case.name,
+        metadata=case.metadata,
+    )
+    routing_result = _first(routing_eval.evaluate(eval_data))
+    rubric_result = _first(rubric_eval.evaluate(eval_data))
+
+    gt = json.loads(case.expected_output or "{}")
+
+    status = "PASS" if (routing_result and routing_result.test_pass) else "FAIL"
+    print(
+        f"  [{status}] routing={task_output.get('is_ui_error')}, expected={gt.get('is_ui_error')}"
+    )
+
+    return {
+        "case_id": case.name,
+        "task": (case.metadata or {}).get("task", ""),
+        "ground_truth": gt,
+        "agent_output": {
+            "is_ui_error": task_output.get("is_ui_error"),
+            "tool_calls": deepcopy(
+                task_output.get("tool_calls", {})
+            ),  # Deepcopy to avoid mutation issues
+            "raw_instruction": task_output.get("raw_instruction", ""),
+            "model_messages": task_output.get("model_messages", []),
+        },
+        "evaluations": {
+            "routing": evaluation_summary(routing_result),
+            "rubric": evaluation_summary(rubric_result, with_label=False),
+        },
+    }
+
+
+def _avg_score(case_results: list[dict[str, Any]], evaluation: str) -> float:
+    """The mean score ``evaluation`` gave, over the cases it scored."""
+    scores = [
+        r["evaluations"][evaluation]["score"]
+        for r in case_results
+        if r["evaluations"][evaluation]["score"] is not None
+    ]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def _ratio(numerator: float, denominator: float) -> float:
+    return numerator / denominator if denominator > 0 else 0.0
+
+
+def _routing_metrics(case_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Accuracy, precision, recall, F1 and the confusion matrix of the routing decisions."""
+    confusion = Counter(
+        (
+            bool(r["ground_truth"].get("is_ui_error", False)),
+            r["evaluations"]["routing"]["pass"] is True,
+        )
+        for r in case_results
+    )
+    # Keyed by (is a UI error, routed correctly): a non-UI error routed wrongly is a false positive.
+    tp = confusion[True, True]
+    fn = confusion[True, False]
+    tn = confusion[False, True]
+    fp = confusion[False, False]
+
+    total = tp + fp + tn + fn
+    precision = _ratio(tp, tp + fp)
+    recall = _ratio(tp, tp + fn)
+    return {
+        "accuracy": _ratio(tp + tn, total),
+        "precision": precision,
+        "recall": recall,
+        "f1": _ratio(2 * precision * recall, precision + recall),
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "avg_score": _avg_score(case_results, "routing"),
+    }
+
+
+def run_evaluation() -> dict[str, Any]:
+    """Run the error filtering evaluation and return full results."""
+    cases = load_cases("error_filtering")
+    print(f"Loaded {len(cases)} test cases for error filtering evaluation.\n")
+
+    judge_model = build_model()
+    mocks = GatewayMocks()
+    routing_eval = RoutingEvaluator()
+    rubric_eval = OutputEvaluator(
+        model=judge_model,
+        rubric=RUBRIC,
         include_inputs=True,
     )
 
     case_results: list[dict[str, Any]] = []
-
     for i, case in enumerate(cases):
         print(f"[{i + 1}/{len(cases)}] Running {case.name}...")
+        case_results.append(_run_case(case, mocks, routing_eval, rubric_eval))
 
-        # Run task function to get model response
-        task_output = gateway_task(case, mocks)
-
-        # Build EvaluationData for each evaluator
-        eval_data = EvaluationData[str, str](
-            input=case.input,
-            actual_output=json.dumps(task_output),
-            expected_output=case.expected_output,
-            name=case.name,
-            metadata=case.metadata,
-        )
-
-        # Run evaluators
-        routing_results = routing_eval.evaluate(eval_data)
-        rubric_results = rubric_eval.evaluate(eval_data)
-
-        routing_result = routing_results[0] if routing_results else None
-        rubric_result = rubric_results[0] if rubric_results else None
-
-        # Parse ground truth
-        gt = json.loads(case.expected_output or "{}")
-
-        result_entry = {
-            "case_id": case.name,
-            "task": (case.metadata or {}).get("task", ""),
-            "ground_truth": gt,
-            "agent_output": {
-                "is_ui_error": task_output.get("is_ui_error"),
-                "tool_calls": deepcopy(
-                    task_output.get("tool_calls", {})
-                ),  # Deepcopy to avoid mutation issues
-                "raw_instruction": task_output.get("raw_instruction", ""),
-                "model_messages": task_output.get("model_messages", []),
-            },
-            "evaluations": {
-                "routing": {
-                    "score": routing_result.score if routing_result else None,
-                    "pass": routing_result.test_pass if routing_result else None,
-                    "label": routing_result.label if routing_result else None,
-                    "reason": routing_result.reason if routing_result else None,
-                },
-                "rubric": {
-                    "score": rubric_result.score if rubric_result else None,
-                    "pass": rubric_result.test_pass if rubric_result else None,
-                    "reason": rubric_result.reason if rubric_result else None,
-                },
-            },
-        }
-        case_results.append(result_entry)
-
-        status = "PASS" if (routing_result and routing_result.test_pass) else "FAIL"
-        print(
-            f"  [{status}] routing={task_output.get('is_ui_error')}, expected={gt.get('is_ui_error')}"
-        )
-
-    # Compute aggregate metrics
-    routing_scores = [
-        r["evaluations"]["routing"]["score"]
-        for r in case_results
-        if r["evaluations"]["routing"]["score"] is not None
-    ]
-    rubric_scores = [
-        r["evaluations"]["rubric"]["score"]
-        for r in case_results
-        if r["evaluations"]["rubric"]["score"] is not None
-    ]
-
-    tp = fp = tn = fn = 0
-    for r in case_results:
-        gt_ui = r["ground_truth"].get("is_ui_error", False)
-        correct = r["evaluations"]["routing"]["pass"] is True
-        if gt_ui and correct:
-            tp += 1
-        elif gt_ui and not correct:
-            fn += 1
-        elif not gt_ui and correct:
-            tn += 1
-        else:
-            fp += 1
-
-    total = tp + fp + tn + fn
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = (
-        2 * precision * recall / (precision + recall)
-        if (precision + recall) > 0
-        else 0.0
-    )
-
-    full_results = {
+    return {
         "experiment": "error_filtering_eval",
         "timestamp": datetime.now(UTC).isoformat(),
         "model_id": settings.PROVIDER_MODEL,
         "metrics": {
-            "routing": {
-                "accuracy": (tp + tn) / total if total > 0 else 0.0,
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "tp": tp,
-                "fp": fp,
-                "tn": tn,
-                "fn": fn,
-                "avg_score": sum(routing_scores) / len(routing_scores)
-                if routing_scores
-                else 0.0,
-            },
-            "rubric": {
-                "avg_score": sum(rubric_scores) / len(rubric_scores)
-                if rubric_scores
-                else 0.0,
-            },
+            "routing": _routing_metrics(case_results),
+            "rubric": {"avg_score": _avg_score(case_results, "rubric")},
         },
         "case_results": case_results,
     }
-
-    return full_results
 
 
 def main() -> None:

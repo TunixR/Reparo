@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from copy import deepcopy
 from datetime import UTC, datetime
 from threading import Lock
@@ -21,13 +21,27 @@ from strands.hooks import (
 from strands.types.content import ContentBlock, Message
 from strands.types.tools import ToolResultContent
 
+from database import engine as db_engine
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
+from database.logging.models import (
+    PENDING_IMAGE_UUID,
+    AgentGraphNodeTrace,
+    AgentTrace,
+    GUITrace,
+    SubAgentTrace,
+    ToolTrace,
+)
 from observability import attributes as attrs
 from settings import MAX_GUI_IMAGES
 
 MAX_REQUIRED_TOOL_REMINDERS = 3
 
 OMITTED_IMAGE_TEXT = "ommited screenshot due to max allowed images per message"
+
+
+def _open_session() -> Session:
+    # The engine is read when the session opens, so a swapped engine (tests) is used.
+    return Session(db_engine.general_engine)
 
 
 class MaxGuiImagesHook(HookProvider):
@@ -164,24 +178,21 @@ class LimitToolCounts(HookProvider):
 
     def intercept_response(self, event: AfterToolCallEvent):
         # Remove one call if validation exception happened
-        tool_name = event.tool_use["name"]
-        if (
-            event.exception
-            and isinstance(event.exception, ValidationError)
-            or isinstance(event.exception, TypeError)
-        ) or (
-            event.result
-            and event.result.get("status", "") == "error"
-            and (
-                "TypeError"
-                in next(iter(event.result.get("content", [])), {}).get("text", "")
-                or "ValidationError"
-                in next(iter(event.result.get("content", [])), {}).get("text", "")
-            )
-        ):
+        if _is_argument_error(event):
+            tool_name = event.tool_use["name"]
             with self._lock:
                 tool_count = self.tool_counts.get(tool_name, 0) - 1
                 self.tool_counts[tool_name] = max(0, tool_count)
+
+
+def _is_argument_error(event: AfterToolCallEvent) -> bool:
+    """Whether the tool call failed on its arguments rather than in the tool."""
+    if isinstance(event.exception, (ValidationError, TypeError)):
+        return True
+    if not event.result or event.result.get("status", "") != "error":
+        return False
+    text = next(iter(event.result.get("content", [])), {}).get("text", "")
+    return "TypeError" in text or "ValidationError" in text
 
 
 class ToolLoggingHook(HookProvider):
@@ -202,14 +213,11 @@ class ToolLoggingHook(HookProvider):
         registry.add_callback(AfterToolCallEvent, self.log_tool_response)
 
     def log_tool_call(self, event: BeforeToolCallEvent) -> None:
-        from database.engine import general_engine
-        from database.logging.models import ToolTrace
-
         tool_name = event.tool_use.get("name", "")
         if tool_name not in self.tools:
             return
 
-        with Session(general_engine) as session:
+        with _open_session() as session:
             trace_id = uuid4()
             tool_trace = ToolTrace(
                 id=trace_id,
@@ -222,14 +230,11 @@ class ToolLoggingHook(HookProvider):
             self.trace_id = trace_id
 
     def log_tool_response(self, event: AfterToolCallEvent) -> None:
-        from database.engine import general_engine
-        from database.logging.models import ToolTrace
-
         tool_name = event.tool_use.get("name", "")
         if tool_name not in self.tools:
             return
 
-        with Session(general_engine) as session:
+        with _open_session() as session:
             tool_trace = session.get(ToolTrace, self.trace_id)
 
             if not tool_trace:
@@ -282,15 +287,8 @@ class AgentLoggingHook(HookProvider):
         # Skip if already logged, can happen if multiple invocations are made
         if self.created:
             return
-        from database.engine import general_engine
-        from database.logging.models import (
-            AgentGraphNodeTrace,
-            AgentTrace,
-            SubAgentTrace,
-        )
-
         node_trace_id = self._claim_open_node_trace()
-        with Session(general_engine) as session:
+        with _open_session() as session:
             # We first register the agent trace here
             trace = AgentTrace(
                 id=self.agent_trace_id,
@@ -341,40 +339,23 @@ class AgentLoggingHook(HookProvider):
         return context.trace.claim_open_node()
 
     def log_message(self, event: MessageAddedEvent) -> None:
-        message = {
+        message: dict[str, Any] = {
             "role": event.message.get("role", "unknown"),
-            "content": deepcopy(
-                event.message.get("content", [])
-            ),  # Includes text, toolcalls, images, etc.
+            # Includes text, toolcalls, images, etc.
+            "content": deepcopy(event.message.get("content", [])),
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
         for part in message["content"]:
-            if isinstance(part, dict) and part.get("image", None):
-                part[
-                    "image"  # pyright: ignore[reportGeneralTypeIssues]
-                ] = {}  # We reset the dict to remove the possibly large data
-                part["image"]["uuid"] = "<uuid_pending>"
-            elif (
-                isinstance(part, dict)
-                and (toolresult := part.get("toolResult", None))
-                and (content := toolresult.get("content", None))
-            ):
-                for item in content:
-                    if item.get("image", None):
-                        item[  # pyright: ignore[reportGeneralTypeIssues]
-                            "image"
-                        ] = {}
-                        item["image"]["uuid"] = "<uuid_pending>"
+            for block in _image_blocks(part):
+                # Drop the possibly large image data; the S3 uuid is filled in later.
+                block["image"] = {"uuid": PENDING_IMAGE_UUID}
 
         self.messages.append(message)
         self.update_trace()
 
     def update_trace(self, finished: bool = False, cost: float = 0.0):
-        from database.engine import general_engine
-        from database.logging.models import AgentTrace
-
-        with Session(general_engine) as session:
+        with _open_session() as session:
             trace = session.get(AgentTrace, self.agent_trace_id)
             if not trace:
                 raise RuntimeError(
@@ -398,10 +379,7 @@ class AgentLoggingHook(HookProvider):
         finished_at: datetime,
         success: bool = True,
     ):
-        from database.engine import general_engine
-        from database.logging.models import GUITrace
-
-        with Session(general_engine) as session:
+        with _open_session() as session:
             gui_trace = await GUITrace.create(
                 screenshot_b=screenshot_bytes,
                 agent_trace_id=self.agent_trace_id,
@@ -415,28 +393,32 @@ class AgentLoggingHook(HookProvider):
             session.commit()
             session.refresh(gui_trace)
 
-            # This is a fucking hack if I've ever seen one
-            # We need to update the agent trace messages with images so that they contain the uuid of the image stored in S3
-            # However GUI traces are not saved until the message has been sent and processed by the agent. Thus, here we retrieve the last
-            # message with image and fill in the image_uuid previously missing
-            for msg in reversed(self.messages):
-                for part in msg["content"]:
-                    if (
-                        part.get("image", None)
-                        and part["image"].get("uuid", None) == "<uuid_pending>"
-                    ):
-                        part["image"]["uuid"] = str(gui_trace.screenshot_key)
-                        self.update_trace()
-                        return
+            # Messages are logged before their screenshot's GUI trace is saved, so the
+            # latest image still pending gets the S3 uuid of the screenshot now.
+            if self._fill_pending_image(str(gui_trace.screenshot_key)):
+                self.update_trace()
 
-                    elif (
-                        isinstance(part, dict)
-                        and (toolresult := part.get("toolResult", None))
-                        and (content := toolresult.get("content", None))
-                    ):
-                        for item in content:
-                            if item.get("image", None) and item["image"].get(
-                                "uuid", None
-                            ):
-                                item["image"]["uuid"] = str(gui_trace.screenshot_key)
-                                return
+    def _fill_pending_image(self, image_uuid: str) -> bool:
+        """Give the latest logged image still pending `image_uuid`; whether there was one."""
+        for msg in reversed(self.messages):
+            for part in msg["content"]:
+                for block in _image_blocks(part):
+                    if block["image"].get("uuid") == PENDING_IMAGE_UUID:
+                        block["image"]["uuid"] = image_uuid
+                        return True
+        return False
+
+
+def _image_blocks(part: object) -> Iterator[dict[str, Any]]:
+    """The blocks of a logged message part that hold an image.
+
+    That is the part itself, or the items of the tool result it carries.
+    """
+    if not isinstance(part, dict):
+        return
+    if part.get("image"):
+        yield part
+    elif (tool_result := part.get("toolResult")) and (
+        content := tool_result.get("content")
+    ):
+        yield from (item for item in content if item.get("image"))

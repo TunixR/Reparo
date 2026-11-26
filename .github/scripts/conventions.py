@@ -202,9 +202,9 @@ def mentioned_paths(text: str) -> set[str]:
     paths: set[str] = set()
     stripped = URL_PATH_RE.sub(" ", text)
     for token in [*URL_PATH_RE.findall(text), *PATH_TOKEN_RE.findall(stripped)]:
-        token = re.sub(r"(:\d+)+$|#L\d+.*$", "", token).removeprefix("./")
-        if token and not token.startswith(("http", "//")):
-            paths.add(token)
+        path = re.sub(r"(:\d+)+$|#L\d+.*$", "", token).removeprefix("./")
+        if path and not path.startswith(("http", "//")):
+            paths.add(path)
     return paths
 
 

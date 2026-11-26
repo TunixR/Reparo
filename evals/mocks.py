@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands import ToolContext, tool
-
-from agent_tools.utils import set_continuation
+from strands import tool
 
 
 class GatewayMocks:
@@ -33,11 +31,8 @@ class GatewayMocks:
         @tool(
             name="route_to_human",
             description="Route the error to a human operator for manual intervention.",
-            context=True,
         )
-        async def mock_route_human(
-            tool_context: ToolContext, error_data: str = ""
-        ) -> dict[str, Any]:
+        async def mock_route_human(error_data: str = "") -> dict[str, Any]:
             capture.human_calls.append({"error_data": error_data})
             return {"routed": True, "message": "Error escalated to human operator."}
 
@@ -48,82 +43,3 @@ class GatewayMocks:
 
     def clear(self) -> None:
         self.human_calls.clear()
-
-
-class HandlerMocks:
-    """Mock tools for UI Exception Handler (Contribution 2: Task Identification).
-
-    Provides:
-    - recovery_agent: captures the task description the agent identifies.
-      Returns prompt injection to short-circuit further analysis.
-    - set_continuation: captures the continuation the agent names.
-      Always accepts it, to trigger the reporting phase.
-    """
-
-    def __init__(self) -> None:
-        self.recovery_calls: list[dict[str, Any]] = []
-        self.continuation_calls: list[dict[str, Any]] = []
-        self._build_tools()
-
-    def _build_tools(self) -> None:
-        capture = self
-
-        @tool(
-            name="recovery_agent",
-            description="Execute UI recovery actions using screenshots and automation.",
-            context=True,
-        )
-        async def mock_recovery_agent(
-            tool_context: ToolContext,
-            task: str = "",
-            action_history: list[Any] | None = None,
-            **kwargs: Any,
-        ) -> str:
-            capture.recovery_calls.append(
-                {
-                    "task": task,
-                    "action_history": action_history or [],
-                    **kwargs,
-                }
-            )
-            return (
-                "Recovery completed successfully in test environment. "
-                "The rest of the process was completed during recovery. "
-                "Use set_continuation with recovered and process_finished set to true."
-            )
-
-        @tool(
-            name="set_continuation",
-            description=set_continuation.tool_spec["description"],
-        )
-        def mock_set_continuation(
-            recovered: bool,
-            process_finished: bool,
-            model_event_id: str | None,
-            loop_iteration: list[int],
-        ) -> str:
-            capture.continuation_calls.append(
-                {
-                    "recovered": recovered,
-                    "process_finished": process_finished,
-                    "model_event_id": model_event_id,
-                    "loop_iteration": loop_iteration,
-                }
-            )
-            return "ok"
-
-        self._recovery_agent = mock_recovery_agent
-        self._set_continuation = mock_set_continuation
-
-    def build_tools(self) -> list[Any]:
-        return [self._recovery_agent, self._set_continuation]
-
-    @property
-    def identified_task(self) -> str | None:
-        if self.recovery_calls:
-            return self.recovery_calls[0].get("task")
-        return None
-
-    def clear(self) -> None:
-        self.recovery_calls.clear()
-        self.continuation_calls.clear()

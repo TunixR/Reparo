@@ -1,3 +1,0 @@
-class Config:
-    MAX_UI_ACTION_RETRIES = 3
-    MAX_ACTIONS_ALLOWED = 40

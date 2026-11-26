@@ -8,17 +8,8 @@ from pydantic import ConfigDict, Field, field_validator
 from templates.common import TemplateModel
 
 
-def _normalize_optional_id(value: str | int | None) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, str):
-        return value if value.strip() else None
-    raise ValueError("optional id fields must be str, int, or null")
-
-
-class RecoveryUiLogEntry(TemplateModel):
+class _RecoveryEvent(TemplateModel):
+    # The fields a UI log entry and the errored activity share, in schema order.
     model_config = ConfigDict(extra="forbid")
 
     case_id: str
@@ -30,11 +21,6 @@ class RecoveryUiLogEntry(TemplateModel):
     action_type: str
     application: str | None
     input: str | None
-    ui_element_target: str | None
-    ui_group: str | None = None
-    timestamp: str
-    previous_state: str | None
-    current_state: str | None
 
     @field_validator("case_id", "event_id", mode="before")
     @classmethod
@@ -50,7 +36,21 @@ class RecoveryUiLogEntry(TemplateModel):
     @field_validator("activity_id", "model_event_id", mode="before")
     @classmethod
     def normalize_optional_id(cls, value: str | int | None) -> str | None:
-        return _normalize_optional_id(value)
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str):
+            return value if value.strip() else None
+        raise ValueError("optional id fields must be str, int, or null")
+
+
+class RecoveryUiLogEntry(_RecoveryEvent):
+    ui_element_target: str | None
+    ui_group: str | None = None
+    timestamp: str
+    previous_state: str | None
+    current_state: str | None
 
     @field_validator("timestamp")
     @classmethod
@@ -64,36 +64,9 @@ class RecoveryUiLogEntry(TemplateModel):
         return value
 
 
-class RecoveryErroredAct(TemplateModel):
-    model_config = ConfigDict(extra="forbid")
-
-    case_id: str
-    activity_id: str | None
-    activity_name: str | None
-    event_id: str
-    event_name: str | None
-    model_event_id: str | None = None
-    action_type: str
-    application: str | None
-    input: str | None
+class RecoveryErroredAct(_RecoveryEvent):
     error_code: str
     error_description: str
-
-    @field_validator("case_id", "event_id", mode="before")
-    @classmethod
-    def normalize_required_id(cls, value: str | int) -> str:
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, str):
-            if not value.strip():
-                raise ValueError("id fields must be non-empty")
-            return value
-        raise ValueError("id fields must be str or int")
-
-    @field_validator("activity_id", "model_event_id", mode="before")
-    @classmethod
-    def normalize_optional_id(cls, value: str | int | None) -> str | None:
-        return _normalize_optional_id(value)
 
 
 Modality = Literal["vision", "dom", "a11y"]

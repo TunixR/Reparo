@@ -19,7 +19,6 @@ Notes:
 
 from __future__ import annotations
 
-import json
 from collections.abc import Collection
 from pathlib import Path
 from typing import Any
@@ -34,9 +33,43 @@ from database.agents.models import (
     AgentType,
     SubAgent,
 )
+from database.populators.config import load_config
 from database.populators.routers import find_router
 from database.provider.models import Router
 from database.tools.models import Tool
+
+CONFIG_PATH = Path(__file__).parent / "agents.json"
+"""The agents to seed, and their sub-agents.
+
+Expected structure:
+{
+  "agents": [
+    {
+      "name": "...",
+      "description": "...",
+      "prompt_file": "agent_name.md",  // in default_prompts/
+      "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
+      "agent_type": "Agent" | "TooledGuiAgent" | "TextGuiAgent",
+      "parser_path": "module:attribute",  // a TextGuiAgent's parser, else absent
+      "input_type": "TEXT" | "IMAGETEXT",  // a GUI agent's is always IMAGETEXT
+      "enabled": true,
+      "reasoning_effort": "medium",  // optional, unset keeps the provider default
+      "arguments": [  // FieldSpec, in order; a "default" makes one optional; a GUI agent has fixed ones
+        {"name": "...", "type": "str | None", "description": "...", "default": null}
+      ],
+      "output_model": {  // OutputModelSpec, or null; a GUI agent ignores it
+        "name": "ClassName",  // the structured-output tool name the LLM sees
+        "description": "...",  // the tool description
+        "fields": [{"name": "...", "type": "Literal['a', 'b']", "description": "..."}]
+      },
+      "tools": {"names": ["take_screenshot"], "limits": [null], "required": [false]}
+      }
+    ],
+  "sub_agents": [
+    {"parent": "UI Exception Handler", "child": "UI Standalone UITARS", "limit": 1}
+  ]
+}
+"""
 
 
 def _attach_tools(
@@ -186,56 +219,14 @@ def _resolve_agent_type(value: str) -> AgentType:
         raise ValueError(f"Unknown AgentType '{value}'.") from e
 
 
-def _load_json_config() -> dict[str, Any]:
-    """
-    Load agent configuration from adjacent JSON file:
-    database/populators/agents.json
-
-    Expected structure:
-    {
-      "agents": [
-        {
-          "name": "...",
-          "description": "...",
-          "prompt_file": "agent_name.md",  // in default_prompts/
-          "router": "text" | "vision" | "vision_tool" | "uitars" | "grounding",  // a role in routers.json
-          "agent_type": "Agent" | "TooledGuiAgent" | "TextGuiAgent",
-          "parser_path": "module:attribute",  // a TextGuiAgent's parser, else absent
-          "input_type": "TEXT" | "IMAGETEXT",  // a GUI agent's is always IMAGETEXT
-          "enabled": true,
-          "reasoning_effort": "medium",  // optional, unset keeps the provider default
-          "arguments": [  // FieldSpec, in order; a "default" makes one optional; a GUI agent has fixed ones
-            {"name": "...", "type": "str | None", "description": "...", "default": null}
-          ],
-          "output_model": {  // OutputModelSpec, or null; a GUI agent ignores it
-            "name": "ClassName",  // the structured-output tool name the LLM sees
-            "description": "...",  // the tool description
-            "fields": [{"name": "...", "type": "Literal['a', 'b']", "description": "..."}]
-          },
-          "tools": {"names": ["take_screenshot"], "limits": [null], "required": [false]}
-          }
-        ],
-      "sub_agents": [
-        {"parent": "UI Exception Handler", "child": "UI Standalone UITARS", "limit": 1}
-      ]
-    }
-    """
-    here = Path(__file__).parent
-    cfg_path = here / "agents.json"
-    if not cfg_path.exists():
-        raise FileNotFoundError(
-            f"[populate_agents] Missing JSON configuration file: {cfg_path}"
-        )
-    with cfg_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 DEFAULT_PROMPTS_DIR = Path(__file__).parent / "default_prompts"
 
 
 def agent_seed(name: str) -> dict[str, Any] | None:
     """The configuration ``agents.json`` seeds the agent called ``name`` with."""
-    agents: list[dict[str, Any]] = _load_json_config().get("agents", [])
+    agents: list[dict[str, Any]] = load_config(CONFIG_PATH, "populate_agents").get(
+        "agents", []
+    )
     return next((agent for agent in agents if agent["name"] == name), None)
 
 
@@ -256,7 +247,7 @@ def populate_agents(engine: Engine) -> None:
     """
     Populate the database with framework agents and their relationships from JSON.
     """
-    cfg = _load_json_config()
+    cfg = load_config(CONFIG_PATH, "populate_agents")
     agents_cfg: list[dict[str, Any]] = cfg.get("agents", [])
     subs_cfg: list[dict[str, Any]] = cfg.get("sub_agents", [])
 

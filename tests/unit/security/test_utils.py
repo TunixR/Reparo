@@ -6,8 +6,9 @@ from security.utils import is_session_valid
 
 
 def test_is_session_valid_rejects_naive_datetime():
-    naive_future = datetime.now() + timedelta(minutes=5)
-    naive_past = datetime.now() - timedelta(minutes=5)
+    naive_now = datetime.now(UTC).replace(tzinfo=None)
+    naive_future = naive_now + timedelta(minutes=5)
+    naive_past = naive_now - timedelta(minutes=5)
     with pytest.raises(ValueError, match="timezone-aware"):
         _ = is_session_valid(naive_future)
     with pytest.raises(ValueError, match="timezone-aware"):

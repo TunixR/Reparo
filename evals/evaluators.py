@@ -12,6 +12,8 @@ from strands_evals.evaluators import Evaluator
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
 from tenacity import retry, stop_after_attempt
 
+from evals.prompts import JUDGE_PROMPT
+
 
 def _parse_output(output: Any) -> dict[str, Any] | None:
     """Parse task function output (may be str JSON or dict)."""
@@ -23,13 +25,37 @@ def _parse_output(output: Any) -> dict[str, Any] | None:
         return None
 
 
-class RoutingEvaluator(Evaluator[str, str]):
-    """Deterministic evaluator for Contribution 1: Error Filtering.
+def _unparseable(evaluation_case: EvaluationData[str, str]) -> list[EvaluationOutput]:
+    """The failing verdict on a case whose agent output could not be parsed."""
+    return [
+        EvaluationOutput(
+            score=0.0,
+            test_pass=False,
+            reason=f"Could not parse agent output: {str(evaluation_case.actual_output)[:200]}",
+            label="UNPARSEABLE",
+        )
+    ]
 
-    The task function returns {"is_ui_error": bool}, the Gateway Orchestrator's
-    ``ui_exception`` decision. Compares against GT directly.
 
-    Metrics (at experiment level): precision, recall, F1 on is_ui_error.
+def evaluation_summary(
+    result: EvaluationOutput | None, *, with_label: bool = True
+) -> dict[str, Any]:
+    """An evaluator's verdict as the results JSON records it, all ``None`` without one."""
+    summary: dict[str, Any] = {
+        "score": result.score if result else None,
+        "pass": result.test_pass if result else None,
+    }
+    if with_label:
+        summary["label"] = result.label if result else None
+    summary["reason"] = result.reason if result else None
+    return summary
+
+
+class _ParsedOutputEvaluator(Evaluator[str, str]):
+    """An evaluator that judges the task function's output once it is parsed.
+
+    A case whose output can't be parsed fails as ``UNPARSEABLE``; subclasses
+    judge the others in ``_judge``.
     """
 
     @retry(stop=stop_after_attempt(3), reraise=True)
@@ -41,15 +67,41 @@ class RoutingEvaluator(Evaluator[str, str]):
         actual = _parse_output(evaluation_case.actual_output)
 
         if actual is None:
-            return [
-                EvaluationOutput(
-                    score=0.0,
-                    test_pass=False,
-                    reason=f"Could not parse agent output: {str(evaluation_case.actual_output)[:200]}",
-                    label="UNPARSEABLE",
-                )
-            ]
+            return _unparseable(evaluation_case)
+        return self._judge(evaluation_case, expected, actual)
 
+    def _judge(
+        self,
+        evaluation_case: EvaluationData[str, str],
+        expected: dict[str, Any],
+        actual: dict[str, Any],
+    ) -> list[EvaluationOutput]:
+        """Judge a case from its expected output and its parsed actual output."""
+        raise NotImplementedError
+
+    @override
+    async def evaluate_async(
+        self, evaluation_case: EvaluationData[str, str]
+    ) -> list[EvaluationOutput]:
+        return self.evaluate(evaluation_case)
+
+
+class RoutingEvaluator(_ParsedOutputEvaluator):
+    """Deterministic evaluator for Contribution 1: Error Filtering.
+
+    The task function returns {"is_ui_error": bool}, the Gateway Orchestrator's
+    ``ui_exception`` decision. Compares against GT directly.
+
+    Metrics (at experiment level): precision, recall, F1 on is_ui_error.
+    """
+
+    @override
+    def _judge(
+        self,
+        evaluation_case: EvaluationData[str, str],
+        expected: dict[str, Any],
+        actual: dict[str, Any],
+    ) -> list[EvaluationOutput]:
         expected_val = expected.get("is_ui_error")
         actual_val = actual.get("is_ui_error")
 
@@ -73,14 +125,8 @@ class RoutingEvaluator(Evaluator[str, str]):
             )
         ]
 
-    @override
-    async def evaluate_async(
-        self, evaluation_case: EvaluationData[str, str]
-    ) -> list[EvaluationOutput]:
-        return self.evaluate(evaluation_case)
 
-
-class TaskIdentificationEvaluator(Evaluator[str, str]):
+class TaskIdentificationEvaluator(_ParsedOutputEvaluator):
     """LLM-as-judge evaluator for Task Identification.
 
     Uses the JUDGE_PROMPT from the notebook to evaluate on two axes:
@@ -94,26 +140,13 @@ class TaskIdentificationEvaluator(Evaluator[str, str]):
         super().__init__()
         self.judge_model = judge_model
 
-    @retry(stop=stop_after_attempt(3), reraise=True)
     @override
-    def evaluate(
-        self, evaluation_case: EvaluationData[str, str]
+    def _judge(
+        self,
+        evaluation_case: EvaluationData[str, str],
+        expected: dict[str, Any],
+        actual: dict[str, Any],
     ) -> list[EvaluationOutput]:
-        from evals.prompts import JUDGE_PROMPT
-
-        expected = json.loads(evaluation_case.expected_output or "{}")
-        actual = _parse_output(evaluation_case.actual_output)
-
-        if actual is None:
-            return [
-                EvaluationOutput(
-                    score=0.0,
-                    test_pass=False,
-                    reason=f"Could not parse agent output: {str(evaluation_case.actual_output)[:200]}",
-                    label="UNPARSEABLE",
-                )
-            ]
-
         generated_task = actual.get("generated_task", "")
 
         if not generated_task:
@@ -182,12 +215,6 @@ class TaskIdentificationEvaluator(Evaluator[str, str]):
                 label=label,
             )
         ]
-
-    @override
-    async def evaluate_async(
-        self, evaluation_case: EvaluationData[str, str]
-    ) -> list[EvaluationOutput]:
-        return self.evaluate(evaluation_case)
 
     def evaluate_with_consensus(
         self,

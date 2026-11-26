@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 from pydantic import (
     BaseModel,
@@ -112,6 +112,7 @@ class ConditionType(TypeDecorator[Condition]):
     impl = JSONB
     cache_ok = True
 
+    @override
     def process_bind_param(
         self, value: Condition | Mapping[str, Any] | None, dialect: Dialect
     ) -> dict[str, Any] | None:
@@ -121,6 +122,7 @@ class ConditionType(TypeDecorator[Condition]):
             CONDITION.validate_python(value), mode="json", by_alias=True
         )
 
+    @override
     def process_result_value(
         self, value: dict[str, Any] | None, dialect: Dialect
     ) -> Condition | None:

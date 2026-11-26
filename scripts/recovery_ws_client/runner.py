@@ -98,58 +98,63 @@ class RecoveryWsRunner:
                 )
             )
 
-            if msg_type == "ping":
-                continue
-
             if msg_type == "screenshot":
-                screenshot = capture_screenshot_bytes(
-                    save_dir=self.config.save_screenshots_dir
-                )
-                await websocket.send(screenshot)
-                self.transcript.add(
-                    TranscriptEvent.create(
-                        direction="outbound",
-                        event_type="screenshot_bytes",
-                        payload={"bytes": len(screenshot)},
-                    )
-                )
-                continue
-
-            if msg_type == "action":
+                await self._send_screenshot(websocket)
+            elif msg_type == "action":
                 self.transcript.summary.actions_received += 1
                 await self.action_queue.put(message)
-                continue
-
-            if msg_type == "done":
-                self.transcript.summary.terminal_type = "done"
-                self.terminal_content = message.get("content")
-                recovery_id = message.get("id")
-                if isinstance(recovery_id, str):
-                    self.transcript.summary.recovery_id = recovery_id
+            elif self._end_on_terminal(msg_type, message):
                 self.stop_event.set()
                 break
 
-            if msg_type == "eval_result":
-                self.transcript.summary.terminal_type = "done"
-                self.eval_result = message["content"]
-                self.transcript.add(
-                    TranscriptEvent.create(
-                        direction="inbound",
-                        event_type="eval_result",
-                        payload=message,
-                    )
-                )
-                self.stop_event.set()
-                break
+    async def _send_screenshot(self, websocket) -> None:  # pyright: ignore[reportMissingParameterType]
+        screenshot = capture_screenshot_bytes(save_dir=self.config.save_screenshots_dir)
+        await websocket.send(screenshot)
+        self.transcript.add(
+            TranscriptEvent.create(
+                direction="outbound",
+                event_type="screenshot_bytes",
+                payload={"bytes": len(screenshot)},
+            )
+        )
 
-            if msg_type == "error":
-                self.transcript.summary.terminal_type = "error"
-                self.terminal_content = {
-                    "code": message.get("code"),
-                    "content": message.get("content"),
-                }
-                self.stop_event.set()
-                break
+    def _end_on_terminal(self, msg_type: str, message: dict[str, Any]) -> bool:
+        """Record a terminal message; False when `msg_type` is not one (e.g. `ping`)."""
+        terminal_handlers = {
+            "done": self._record_done,
+            "eval_result": self._record_eval_result,
+            "error": self._record_error,
+        }
+        handler = terminal_handlers.get(msg_type)
+        if handler is None:
+            return False
+        handler(message)
+        return True
+
+    def _record_done(self, message: dict[str, Any]) -> None:
+        self.transcript.summary.terminal_type = "done"
+        self.terminal_content = message.get("content")
+        recovery_id = message.get("id")
+        if isinstance(recovery_id, str):
+            self.transcript.summary.recovery_id = recovery_id
+
+    def _record_eval_result(self, message: dict[str, Any]) -> None:
+        self.transcript.summary.terminal_type = "done"
+        self.eval_result = message["content"]
+        self.transcript.add(
+            TranscriptEvent.create(
+                direction="inbound",
+                event_type="eval_result",
+                payload=message,
+            )
+        )
+
+    def _record_error(self, message: dict[str, Any]) -> None:
+        self.transcript.summary.terminal_type = "error"
+        self.terminal_content = {
+            "code": message.get("code"),
+            "content": message.get("content"),
+        }
 
     async def _send_abort(self, websocket) -> None:  # pyright: ignore[reportMissingParameterType]
         abort = {
@@ -166,8 +171,22 @@ class RecoveryWsRunner:
         # Best effort: the server may already be gone.
         with suppress(ConnectionClosed, TimeoutError):
             await asyncio.wait_for(websocket.send(json.dumps(abort)), timeout=5)
+        self._write_log()
+
+    def _write_log(self) -> None:
         if self.config.log_json is not None:
             write_transcript(self.config.log_json, self.transcript)
+
+    def _record_failure(
+        self, terminal_type: str, event_type: str, exc: Exception
+    ) -> None:
+        self.transcript.summary.terminal_type = terminal_type
+        self.transcript.add(
+            TranscriptEvent.create(
+                direction="internal", event_type=event_type, payload=str(exc)
+            )
+        )
+        self._write_log()
 
     def initial_payload(self) -> dict[str, Any]:
         """The recovery payload in Reparo's Contract version, carrying the
@@ -217,32 +236,12 @@ class RecoveryWsRunner:
                     worker.cancel()
                     await asyncio.gather(worker, return_exceptions=True)
 
-            if self.config.log_json is not None:
-                write_transcript(self.config.log_json, self.transcript)
-
-            return 0 if self.transcript.summary.terminal_type == "done" else 1
-
+            self._write_log()
         except ConnectionClosed as exc:
-            self.transcript.summary.terminal_type = "disconnect"
-            self.transcript.add(
-                TranscriptEvent.create(
-                    direction="internal",
-                    event_type="connection_closed",
-                    payload=str(exc),
-                )
-            )
-            if self.config.log_json is not None:
-                write_transcript(self.config.log_json, self.transcript)
+            self._record_failure("disconnect", "connection_closed", exc)
             return 2
         except Exception as exc:  # noqa: BLE001
-            self.transcript.summary.terminal_type = "exception"
-            self.transcript.add(
-                TranscriptEvent.create(
-                    direction="internal",
-                    event_type="exception",
-                    payload=str(exc),
-                )
-            )
-            if self.config.log_json is not None:
-                write_transcript(self.config.log_json, self.transcript)
+            self._record_failure("exception", "exception", exc)
             return 3
+        else:
+            return 0 if self.transcript.summary.terminal_type == "done" else 1

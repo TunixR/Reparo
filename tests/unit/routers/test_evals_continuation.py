@@ -88,9 +88,7 @@ def _run(
 ) -> tuple[dict[str, Any], ScriptedModel, ReadableSpan]:
     scripted = ScriptedModel(*turns)
     monkeypatch.setattr(evals_module, "TracedOpenAIModel", lambda **_: scripted)
-    monkeypatch.setattr(
-        evals_module, "behaviour_of", lambda agent: _FakeGuiAgent(agent)
-    )
+    monkeypatch.setattr(evals_module, "behaviour_of", _FakeGuiAgent)
     payload = {
         "variables": VARIABLES,
         "ui_log": [],

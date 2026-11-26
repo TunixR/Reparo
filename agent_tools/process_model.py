@@ -154,28 +154,34 @@ def _read_scope(model: ProcessModel, element: Element) -> None:
             source, target = child.get("sourceRef"), child.get("targetRef")
             if source and target:
                 scope.edges.append((source, target))
-            continue
-        if tag in _NON_NODE_TAGS:
-            continue
-        node_id = child.get("id")
-        if not node_id:
-            continue
-
-        scope.nodes.setdefault(node_id, child.get("name"))
-        model.parent_scope.setdefault(node_id, scope_id)
-        if tag == "startEvent":
-            scope.start_events.append(node_id)
-        elif tag == "boundaryEvent" and (attached := child.get("attachedToRef")):
-            boundary_events.append((attached, node_id))
-        if tag in TASK_TAGS:
-            model.tasks.setdefault(node_id, ModelEvent(node_id, child.get("name")))
-        if tag in TASK_TAGS or tag in SUBPROCESS_TAGS:
-            model.looping.setdefault(node_id, _looping_kind(child))
-        if tag in SUBPROCESS_TAGS:
-            _read_scope(model, child)
+        elif tag not in _NON_NODE_TAGS and (node_id := child.get("id")):
+            _read_flow_node(model, scope, child, node_id, boundary_events)
 
     # A boundary event leaves the activity it is attached to.
     scope.edges.extend(boundary_events)
+
+
+def _read_flow_node(
+    model: ProcessModel,
+    scope: Scope,
+    element: Element,
+    node_id: str,
+    boundary_events: list[tuple[str, str]],
+) -> None:
+    """Record one flow node of `scope`, and read it as a scope if it is a subprocess."""
+    tag = _local(element.tag)
+    scope.nodes.setdefault(node_id, element.get("name"))
+    model.parent_scope.setdefault(node_id, scope.id)
+    if tag == "startEvent":
+        scope.start_events.append(node_id)
+    elif tag == "boundaryEvent" and (attached := element.get("attachedToRef")):
+        boundary_events.append((attached, node_id))
+    if tag in TASK_TAGS:
+        model.tasks.setdefault(node_id, ModelEvent(node_id, element.get("name")))
+    if tag in TASK_TAGS or tag in SUBPROCESS_TAGS:
+        model.looping.setdefault(node_id, _looping_kind(element))
+    if tag in SUBPROCESS_TAGS:
+        _read_scope(model, element)
 
 
 def parse_model(model: str) -> ProcessModel | None:
@@ -266,7 +272,28 @@ def _natural_loops(scope: Scope) -> list[tuple[str, set[str]]] | None:
     roots = [n for n in scope.start_events if n in nodes]
     roots += sorted(n for n in nodes if not predecessors[n] and n not in roots)
 
-    # Iterative DFS, recording back-edges (target still on the stack).
+    visited, back_edges = _back_edges(roots, successors)
+    if visited != nodes:
+        # A cycle with no way in from a start: its depth can't be read.
+        return None
+
+    dominators = _dominators(visited, roots, predecessors)
+    loops: dict[str, set[str]] = {}
+    for tail, header in back_edges:
+        if header not in dominators[tail]:
+            return None  # Irreducible: a cycle entered at more than one node.
+        _grow_loop_body(loops.setdefault(header, {header}), tail, predecessors)
+    return list(loops.items())
+
+
+def _back_edges(
+    roots: list[str], successors: dict[str, list[str]]
+) -> tuple[set[str], list[tuple[str, str]]]:
+    """Iterative DFS from `roots`, recording back-edges (target still on the stack).
+
+    Returns:
+        The nodes reached and the back-edges `(tail, header)`.
+    """
     on_stack: set[str] = set()
     visited: set[str] = set()
     back_edges: list[tuple[str, str]] = []
@@ -288,25 +315,20 @@ def _natural_loops(scope: Scope) -> list[tuple[str, set[str]]] | None:
                 visited.add(child)
                 on_stack.add(child)
                 stack.append((child, iter(successors[child])))
+    return visited, back_edges
 
-    if visited != nodes:
-        # A cycle with no way in from a start: its depth can't be read.
-        return None
 
-    dominators = _dominators(visited, roots, predecessors)
-    loops: dict[str, set[str]] = {}
-    for tail, header in back_edges:
-        if header not in dominators[tail]:
-            return None  # Irreducible: a cycle entered at more than one node.
-        body = loops.setdefault(header, {header})
-        pending = [tail]
-        while pending:
-            node = pending.pop()
-            if node in body:
-                continue
-            body.add(node)
-            pending.extend(predecessors[node])
-    return list(loops.items())
+def _grow_loop_body(
+    body: set[str], tail: str, predecessors: dict[str, list[str]]
+) -> None:
+    """Add to `body` every node that reaches `tail` without passing through `body`."""
+    pending = [tail]
+    while pending:
+        node = pending.pop()
+        if node in body:
+            continue
+        body.add(node)
+        pending.extend(predecessors[node])
 
 
 def _dominators(

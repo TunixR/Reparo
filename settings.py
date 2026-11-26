@@ -26,7 +26,6 @@ PROVIDER_VISION_TOOL_MODEL = os.getenv("PROVIDER_VISION_TOOL_MODEL", "")
 PROVIDER_GROUNDING_MODEL = os.getenv("PROVIDER_GROUNDING_MODEL", "")
 PROVIDER_GROUNDING_MODEL_BACKBONE = os.getenv("PROVIDER_GROUNDING_MODEL_BACKBONE", "")
 MAX_GUI_IMAGES = int(os.getenv("MAX_GUI_IMAGES", "5"))
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
 
 def _router_setting(role: str, setting: str, default: str) -> str:

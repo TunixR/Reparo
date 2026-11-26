@@ -41,13 +41,13 @@ def get_current_user(
         if username is None or session_id_raw is None:
             raise credentials_exception
         session_id = UUID(str(session_id_raw))
-    except InvalidTokenError:
+    except InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
-        )
-    except ValueError:
-        raise credentials_exception
+        ) from exc
+    except ValueError as exc:
+        raise credentials_exception from exc
 
     user_session = session.get(UserSession, session_id)
     if not user_session:

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from strands.telemetry import StrandsTelemetry
 
 from observability.config import ObservabilitySettings
 from observability.correlation import RequestContextMiddleware
@@ -41,7 +42,14 @@ class Observability:
             self.logger_provider.shutdown()
 
 
-_current: Observability | None = None
+@dataclass(slots=True)
+class _Active:
+    """The observability `configure_observability` set up last, until it is shut down."""
+
+    current: Observability | None = None
+
+
+_active = _Active()
 
 
 def configure_observability(
@@ -53,8 +61,6 @@ def configure_observability(
     set_global: bool = True,
 ) -> Observability:
     """Configure traces, logs, correlation, and exception handlers for an app."""
-    global _current
-
     settings = settings or ObservabilitySettings.from_settings()
     tracer_provider: TracerProvider | None = None
     logger_provider: LoggerProvider | None = None
@@ -83,29 +89,26 @@ def configure_observability(
         exclude_spans=["receive", "send"],
     )
 
-    _current = Observability(
+    observability = Observability(
         settings=settings,
         tracer_provider=tracer_provider,
         logger_provider=logger_provider,
     )
-    return _current
+    _active.current = observability
+    return observability
 
 
 def setup_strands_telemetry() -> None:
     """Share the app tracer provider with Strands so spans stay in one trace."""
-    observability = _current
+    observability = _active.current
     if observability is None or observability.tracer_provider is None:
         return
-
-    from strands.telemetry import StrandsTelemetry
-
     _ = StrandsTelemetry(tracer_provider=observability.tracer_provider).setup_meter(
         enable_otlp_exporter=True
     )
 
 
 def shutdown_observability() -> None:
-    global _current
-    if _current is not None:
-        _current.shutdown()
-        _current = None
+    if _active.current is not None:
+        _active.current.shutdown()
+        _active.current = None

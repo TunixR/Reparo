@@ -37,6 +37,7 @@ from database.agent_graphs.models import (
 from database.agents.models import Agent
 from database.agents.specs import OutputModelSpec
 from database.populators.agents import DEFAULT_PROMPTS_DIR, agent_seed
+from database.populators.config import load_config
 
 LOG_PREFIX = "[populate_agent_graphs]"
 CONFIG_PATH = Path(__file__).parent / "agent_graphs.json"
@@ -104,7 +105,7 @@ def populate_agent_graphs(engine: Engine) -> list[ManualStep]:
 
 
 def _load_seeds() -> list[AgentGraphSeed]:
-    config: dict[str, Any] = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    config = load_config(CONFIG_PATH, "populate_agent_graphs")
     return [AgentGraphSeed.model_validate(g) for g in config.get("agent_graphs", [])]
 
 
@@ -126,18 +127,8 @@ def _populate_graph(session: Session, seed: AgentGraphSeed) -> list[ManualStep]:
         return []
     if not (seed.enabled and seed.is_default_recovery):
         return []
-    if outdated:
-        current = entry.output_model.name if entry.output_model else "none"
-        why = (
-            f"its entry agent '{entry.name}' has another output model ({current}) "
-            "than agents.json seeds, so recoveries run that agent alone"
-        )
-    elif AgentGraph.default_recovery_id(session) is None:
-        why = (
-            "no agent graph is the enabled default recovery graph, so recoveries "
-            "end with NO_AGENT_GRAPH"
-        )
-    else:
+    why = _disabled_reason(session, entry, outdated=outdated)
+    if why is None:
         return []
     entered = _graphs_entered(session, entry, graph)
     if any(other.is_default_recovery for other in entered):
@@ -151,6 +142,23 @@ def _populate_graph(session: Session, seed: AgentGraphSeed) -> list[ManualStep]:
     for number, step in enumerate(steps, start=1):
         print(f"  {number}. {step}")
     return steps
+
+
+def _disabled_reason(session: Session, entry: Agent, *, outdated: bool) -> str | None:
+    """Why recoveries don't run the seeded default graph, or None if that is fine:
+    another graph is the enabled default."""
+    if outdated:
+        current = entry.output_model.name if entry.output_model else "none"
+        return (
+            f"its entry agent '{entry.name}' has another output model ({current}) "
+            "than agents.json seeds, so recoveries run that agent alone"
+        )
+    if AgentGraph.default_recovery_id(session) is None:
+        return (
+            "no agent graph is the enabled default recovery graph, so recoveries "
+            "end with NO_AGENT_GRAPH"
+        )
+    return None
 
 
 def _outdated(agent: Agent) -> bool:

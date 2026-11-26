@@ -2,17 +2,15 @@ import asyncio
 import base64
 from io import BytesIO
 
-import cv2
-import numpy as np
 from fastapi import WebSocketDisconnect
 from PIL import Image
-from skimage.metrics import structural_similarity as ssim
 from strands import ToolContext, tool
 
 from observability.instrumentation.gui_agent import GuiTaskTelemetry
 from robot.channel import RobotIO
 
-IMAGE_SIMILARITY_THRESHOLD = 0.95  # Threshold for image similarity (0 to 1)
+# Seconds to wait for the robot to send back a screenshot.
+SCREENSHOT_TIMEOUT_SECONDS = 15.0
 
 
 @tool(description="Convert an image file to a base64-encoded string.")
@@ -43,9 +41,7 @@ def image_to_base64(image_path: str) -> str:
             buffer = BytesIO()
             pil_image.save(buffer, format="JPEG")
 
-            encoded_string = base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-        return encoded_string
+            return base64.b64encode(buffer.getvalue()).decode("utf-8")
     except Exception as e:  # noqa: BLE001
         return str(e)
 
@@ -88,58 +84,11 @@ async def take_screenshot(
         ]
     except WebSocketDisconnect as _:
         raise
-    except Exception as e:  # noqa: BLE001
-        raise Exception(f"Error taking screenshot: {e!s}")  # noqa: TRY002
+    except Exception as e:
+        raise Exception(f"Error taking screenshot: {e!s}") from e  # noqa: TRY002
 
 
-async def compare_images(
-    before_image: bytes, expected_change: bool, websocket: RobotIO
-) -> bool:
-    """
-    Compare two images and determine if they are identical.
-
-    Args:
-        before_image (bytes): The image bytes taken before the robot action. This one should be present in the chat history.
-        expected_change (bool): Whether a change is expected between the two images.
-
-    Returns:
-        bool: True if the comparison matches the expectation, False otherwise.
-    """
-    try:
-        after_image_cv2 = cv2.imdecode(
-            np.frombuffer(await screenshot_bytes(websocket), np.uint8),
-            cv2.IMREAD_GRAYSCALE,
-        )
-        before_image_cv2 = cv2.imdecode(
-            np.frombuffer(before_image, np.uint8), cv2.IMREAD_GRAYSCALE
-        )
-        # assert before_image.shape == after_image_cv2.shape, (
-        #     "Images must be the same size."
-        # )
-
-        # Compute SSIM between two images
-        ssim_index = ssim(
-            before_image_cv2,
-            after_image_cv2,
-            full=False,
-            channel_axis=-1,
-        )
-
-        return (
-            (ssim_index < IMAGE_SIMILARITY_THRESHOLD) == expected_change
-            if isinstance(ssim_index, float)
-            else False
-        )  # its always gonna be a float
-
-    except WebSocketDisconnect as _:
-        raise
-    except Exception as _:  # noqa: BLE001
-        raise ValueError(
-            "Error comparing images. Use the take_screenshot() tool and judge the outcome yourself"
-        )
-
-
-async def request_remote_screenshot(websocket: RobotIO, timeout: float = 15.0) -> bytes:
+async def request_remote_screenshot(websocket: RobotIO) -> bytes:
     """
     Send a request to the robot and wait for it to send back a screenshot.
 
@@ -150,28 +99,27 @@ async def request_remote_screenshot(websocket: RobotIO, timeout: float = 15.0) -
 
     Args:
         websocket (RobotIO): The robot, normally its recovery connection.
-        message (str): Message payload to send to the client asking for a screenshot.
-        timeout (float): Seconds to wait for the client's response.
 
     Returns:
         bytes: Raw image bytes (JPEG/PNG) as received or decoded from base64.
 
     Raises:
-        TimeoutError: If no response is received within `timeout` seconds.
+        TimeoutError: If no response is received within
+            `SCREENSHOT_TIMEOUT_SECONDS`.
         RuntimeError: For unexpected message formats or disconnections.
     """
 
     await websocket.send_json({"type": "screenshot", "content": ""})
 
     try:
-        data = await asyncio.wait_for(websocket.receive_bytes(), timeout=timeout)
-        return data
+        async with asyncio.timeout(SCREENSHOT_TIMEOUT_SECONDS):
+            return await websocket.receive_bytes()
     except WebSocketDisconnect as _:
         raise
-    except TimeoutError:
-        raise TimeoutError("Timed out waiting for screenshot from client")
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"Unable to interpret client response as image: {e}")
+    except TimeoutError as e:
+        raise TimeoutError("Timed out waiting for screenshot from client") from e
+    except Exception as e:
+        raise RuntimeError(f"Unable to interpret client response as image: {e}") from e
 
 
 async def screenshot_bytes(websocket: RobotIO) -> bytes:

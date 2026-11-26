@@ -10,7 +10,10 @@ from logging.handlers import RotatingFileHandler
 from typing import TYPE_CHECKING, override
 
 from opentelemetry import trace
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
 from observability.attributes import OTEL_EVENT_NAME, REQUEST_ID
@@ -27,7 +30,6 @@ from observability.tracing import build_resource
 if TYPE_CHECKING:
     from types import TracebackType
 
-    from opentelemetry.sdk._logs import LoggerProvider
     from opentelemetry.sdk._logs.export import LogRecordExporter
 
     type ExcInfo = (
@@ -115,14 +117,10 @@ def create_logger_provider(
     *,
     set_global: bool = True,
 ) -> LoggerProvider:
-    from opentelemetry._logs import set_logger_provider
-    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-    from opentelemetry.sdk._logs import LoggerProvider as SdkLoggerProvider
-
     if exporter is None:
         exporter = OTLPLogExporter(endpoint=settings.otlp_endpoint("logs"))
 
-    provider = SdkLoggerProvider(resource=build_resource(settings))
+    provider = LoggerProvider(resource=build_resource(settings))
     # Processors run in order on the same record: redact before exporting.
     provider.add_log_record_processor(RedactingLogRecordProcessor())
     provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
