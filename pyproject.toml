@@ -305,9 +305,7 @@ ignore_names = [
 ]
 
 [tool.complexipy]
-# Cognitive complexity: how hard a function's control flow is to follow. Functions already over
-# the limit are recorded in complexipy-snapshot.json; a new one, or a recorded one that gets
-# worse, fails. A recorded function that improves leaves the snapshot on the next run.
+# Cognitive complexity: how hard a function's control flow is to follow.
 paths = ["."]
 exclude = ["migrations/**"]
 max-complexity-allowed = 15

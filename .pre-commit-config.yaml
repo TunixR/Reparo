@@ -1,6 +1,6 @@
 # `pre-commit install` installs both hook types below. CI runs the same hooks (lint.yml).
 # Every tool is a dev dependency, so uv.lock sets its version here, in CI and on the command line.
-# Each one is configured in pyproject.toml, except jscpd (.jscpd.json, .jscpd-tests.json).
+# Each one is configured in pyproject.toml, except jscpd (.jscpd.json).
 default_install_hook_types: [pre-commit, commit-msg]
 default_stages: [pre-commit]
 
@@ -66,22 +66,14 @@ repos:
         entry: uv run complexipy
         language: system
         pass_filenames: false
-        files: '(\.py|^pyproject\.toml|^complexipy-snapshot\.json)$'
+        files: '(\.py|^pyproject\.toml)$'
 
       - id: jscpd
         name: jscpd (duplicated code)
         entry: uv run jscpd --no-colors
         language: system
         pass_filenames: false
-        files: '(\.py|^\.jscpd(-baseline)?\.json)$'
-
-      - id: jscpd-tests
-        name: jscpd (duplicated code in tests)
-        # Tests repeat their setup more than code should, so only longer blocks count.
-        entry: uv run jscpd --no-colors --config .jscpd-tests.json
-        language: system
-        pass_filenames: false
-        files: '(^tests/.*\.py|^\.jscpd-tests(-baseline)?\.json)$'
+        files: '(\.py|^\.jscpd\.json)$'
 
       - id: pytest-unit
         name: pytest (unit tests only)

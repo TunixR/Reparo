@@ -7,7 +7,6 @@
     "(?ms)^from [\\w.]+ import \\(.*?^\\)"
   ],
   "similarity": 0.8,
-  "baseline": ".jscpd-baseline.json",
-  "failOnNewClones": 0,
+  "exitCode": 1,
   "failOnEmpty": true
 }

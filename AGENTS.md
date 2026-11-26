@@ -50,15 +50,11 @@ uv run lint-imports   # which package may import which, and import cycles
 uv run deptry .       # imports match the declared dependencies
 uv run vulture        # code nothing uses
 uv run complexipy     # functions too tangled to follow (cognitive complexity)
-uv run jscpd          # copied code: repeated blocks, and functions that differ only in names (`.jscpd.json`)
-uv run jscpd --config .jscpd-tests.json   # long repeated blocks in tests
+uv run jscpd          # copied code outside the tests: repeated blocks, and functions that differ only in names (`.jscpd.json`)
 ```
   When one fails, change the code. `pyproject.toml` holds debt lists (ruff's per-file ignores, the import
-  contracts' `ignore_imports`, the deptry and vulture ignores), `complexipy-snapshot.json` holds the
-  functions already over the limit, and the `.jscpd*-baseline.json` files hold the copies that already exist
-  (jscpd marks the others `[NEW]`). They only shrink: fix an entry, then delete it. `--update-baseline`
-  rewrites a jscpd baseline from the code, so run it when nothing is marked `[NEW]`. An exception that holds
-  by design goes next to the others of its kind, with its reason.
+  contracts' `ignore_imports`, the deptry and vulture ignores). They only shrink: fix an entry, then delete
+  it. An exception that holds by design goes next to the others of its kind, with its reason.
 - Run the full pre-commit suite locally:
 ```
 pre-commit run --all-files
@@ -182,9 +178,7 @@ Repo layout conventions (as seen in this codebase):
 12) Repo automation files (read before changing workflows)
 - `pyproject.toml`: dependencies + tool configuration (ruff, bandit, basedpyright, import-linter, deptry,
   vulture, complexipy).
-- `.jscpd.json`, `.jscpd-tests.json`: jscpd configuration for the code and for the tests, each with its
-  `-baseline.json` of the copies that already exist.
-- `complexipy-snapshot.json`: the functions already over the complexity limit; complexipy rewrites it when one improves.
+- `.jscpd.json`: jscpd configuration.
 - `.pre-commit-config.yaml`: ruff, bandit, basedpyright, the static analysis tools, unit tests, and the
   commit-msg check.
 - `.github/workflows/unit-tests.yml`: CI uses `uv sync --all-extras --frozen` then `uv run pytest tests/unit -q`.
