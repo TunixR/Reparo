@@ -24,6 +24,7 @@ from strands.types.tools import ToolResultContent
 from database import engine as db_engine
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
 from database.logging.models import (
+    PENDING_IMAGE_UUID,
     AgentGraphNodeTrace,
     AgentTrace,
     GUITrace,
@@ -36,9 +37,6 @@ from settings import MAX_GUI_IMAGES
 MAX_REQUIRED_TOOL_REMINDERS = 3
 
 OMITTED_IMAGE_TEXT = "ommited screenshot due to max allowed images per message"
-
-# Image uuid a logged message carries until its screenshot is stored in S3.
-PENDING_IMAGE_UUID = "<uuid_pending>"
 
 
 def _open_session() -> Session:

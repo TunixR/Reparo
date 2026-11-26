@@ -25,13 +25,13 @@ if TYPE_CHECKING:
 # A log section with the time it happened, to interleave sections chronologically.
 type _TimestampedLog = tuple[datetime, str]
 
-# Image uuid a message carries until its screenshot finishes uploading to S3.
-_PENDING_IMAGE_UUID = "<uuid_pending>"
+# Image uuid a logged message carries until its screenshot finishes uploading to S3.
+PENDING_IMAGE_UUID = "<uuid_pending>"
 
 
 async def _image_markdown(image: dict[str, Any]) -> str:
     image_uuid: str = image.get("uuid", "")
-    if image_uuid == _PENDING_IMAGE_UUID:
+    if image_uuid == PENDING_IMAGE_UUID:
         return "_Image upload pending..._\n"
     image_b = await S3Client.download_bytes(image_uuid)
     if not image_b:

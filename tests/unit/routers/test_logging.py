@@ -475,6 +475,55 @@ async def test_logging_exception_ui_log_lists_steps_in_the_order_they_ran(
     assert [row["text"] for row in rows] == ["first", "second"]
 
 
+@pytest.mark.asyncio
+async def test_logging_exception_ui_log_keeps_a_step_without_a_screenshot(
+    session: Session,
+    mock_user: User,
+    mock_agent: Agent,
+    mock_robot_exception: RobotException,
+    make_agent_trace: Callable[..., AgentTrace],
+    make_gui_trace: Callable[..., GUITrace],
+    client: TestClient,
+):
+    trace = make_agent_trace(
+        agent=mock_agent, robot_exception_id=mock_robot_exception.id
+    )
+    key = await MockS3Client.upload_bytes(
+        file_bytes=b"jpeg-bytes", content_type="image/jpeg"
+    )
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    _ = make_gui_trace(
+        agent_trace=trace,
+        screenshot_key=None,
+        action_content={"content": "no screenshot"},
+        created_at=start,
+    )
+    _ = make_gui_trace(
+        agent_trace=trace,
+        screenshot_key=key,
+        action_content={"content": "with screenshot"},
+        created_at=start + timedelta(seconds=1),
+    )
+
+    headers = make_auth_headers(mock_user, session)
+    response = client.get(
+        f"/logging/ui_log/?exception_id={mock_robot_exception.id}", headers=headers
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    with zipfile.ZipFile(BytesIO(response.content)) as zipf:
+        rows = list(csv.DictReader(StringIO(zipf.read("ui_log.csv").decode())))
+        names = set(zipf.namelist())
+    assert [(row["text"], row["screenshot"]) for row in rows] == [
+        ("no screenshot", ""),
+        ("with screenshot", f"{key}.jpeg"),
+    ]
+    assert {name for name in names if name.startswith("screenshots/")} == {
+        "screenshots/",
+        f"screenshots/{key}.jpeg",
+    }
+
+
 def test_logging_exception_ui_log_returns_404_for_missing_id(
     session: Session, mock_user: User, client: TestClient
 ):

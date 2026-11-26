@@ -144,7 +144,9 @@ def _ui_log_rows(gui_trace: GUITrace) -> list[str]:
     content = gui_trace.action_content
     timestamp = gui_trace.finished_at.isoformat() if gui_trace.finished_at else ""
     text = content.get("content", "")
-    screenshot = f"{gui_trace.screenshot_key}.jpeg"
+    # A step without a screenshot keeps its row, with the screenshot cell empty.
+    key = gui_trace.screenshot_key
+    screenshot = f"{key}.jpeg" if key is not None else ""
 
     def row(event: str, click: tuple[str, str]) -> str:
         return f"{timestamp},{event},{click[0]},{click[1]},{text},{screenshot}\n"
