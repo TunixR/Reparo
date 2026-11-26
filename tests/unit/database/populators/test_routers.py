@@ -100,7 +100,7 @@ def test_backbones_resolve_by_value_or_name(backbone: str):
 
 
 def test_an_unknown_backbone_names_the_allowed_values():
-    with pytest.raises(ValueError, match="QWEN3.5"):
+    with pytest.raises(ValueError, match=r"QWEN3\.5"):
         _ = routers._resolve_vision_backbone("QWEN3.8")  # pyright: ignore[reportPrivateUsage]
 
 

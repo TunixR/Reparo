@@ -186,7 +186,7 @@ def test_construction_rejects_a_non_identifier_output_model_name() -> None:
 def test_assignment_validates_like_construction() -> None:
     agent = _make_agent(_make_router())
 
-    with pytest.raises(ValueError, match="unknown type 'set'|set"):
+    with pytest.raises(ValueError, match=r"unknown type 'set'|set"):
         agent.arguments = [{"name": "x", "type": "set[str]", "description": "X"}]  # pyright: ignore[reportAttributeAccessIssue] - the JSON form converts
 
 

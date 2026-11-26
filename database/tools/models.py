@@ -43,14 +43,14 @@ class Tool(SQLModel, table=True):
         module_path, function_name = self.fn_module.rsplit(".", 1)
         try:
             module = import_module(module_path)
-        except Exception as e:  # noqa: BLE001
-            raise ImportError(f"Could not import module '{module_path}': {e}")
+        except Exception as e:
+            raise ImportError(f"Could not import module '{module_path}': {e}") from e
         try:
             fn: Callable = getattr(module, function_name)  # pyright: ignore[reportMissingTypeArgument]
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise ImportError(
                 f"Could not find function '{function_name}' in module '{module_path}': {e}"
-            )
+            ) from e
         # Check it has the @tool decorator by looking for the 'name' attribute
         if not isinstance(fn, DecoratedFunctionTool):
             raise ValueError(  # noqa: TRY004

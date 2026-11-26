@@ -42,7 +42,7 @@ def _load_task_identification_cases() -> list[Case[str, str]]:
         ground_truths = json.load(f)
 
     cases: list[Case[str, str]] = []
-    for payload, gt in zip(payloads, ground_truths):
+    for payload, gt in zip(payloads, ground_truths, strict=True):
         expected = json.dumps(
             {
                 "validity": gt.get("validity", True),

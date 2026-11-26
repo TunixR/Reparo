@@ -9,7 +9,7 @@ from tests.unit.agent_tools._shared.fakes import (
 )
 
 # ---------------------------------------------------------------------------
-# Tests: register_hooks
+# Tests for register_hooks
 # ---------------------------------------------------------------------------
 
 
@@ -34,7 +34,7 @@ def test_register_hooks_adds_callbacks():
 
 
 # ---------------------------------------------------------------------------
-# Tests: throttling logic
+# Tests for throttling logic
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +78,7 @@ def test_reset_counts_clears_state():
 
 
 # ---------------------------------------------------------------------------
-# Tests: decrement on exceptions in intercept_response
+# Tests for decrement on exceptions in intercept_response
 # ---------------------------------------------------------------------------
 
 

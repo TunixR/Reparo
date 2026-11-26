@@ -15,7 +15,6 @@ their capabilities.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,9 +23,27 @@ from sqlalchemy import Engine
 from sqlmodel import Session, select
 
 import settings
+from database.populators.config import load_config
 from database.provider.models import Router
 
 CONFIG_PATH = Path(__file__).parent / "routers.json"
+"""The router roles to seed.
+
+Expected structure:
+{
+  "routers": [
+    {
+      "role": "grounding",  // unique; agents reference it
+      "model_name": "$PROVIDER_GROUNDING_MODEL" | "literal-model-name",
+      "provider_type": "$ROUTER_GROUNDING_PROVIDER" | "openrouter" | "openai" | "vllm",
+      "api_endpoint": "$ROUTER_GROUNDING_API_BASE" | "http://localhost:8000/v1",
+      "api_key": "$ROUTER_GROUNDING_API_KEY" | "literal-api-key",
+      "capabilities": ["TEXT", "VISION"],  // optional, defaults to ["TEXT"]
+      "vision_backbone": "QWEN3.5"  // optional, defaults to OTHER for vision routers
+    }
+  ]
+}
+"""
 
 
 @dataclass
@@ -42,33 +59,6 @@ class RouterSpec:
         default_factory=lambda: [Router.Capability.TEXT]
     )
     vision_backbone: Router.VisionBackbone | None = None
-
-
-def _load_json_config() -> dict[str, Any]:
-    """
-    Load router configuration from `database/populators/routers.json`.
-
-    Expected structure:
-    {
-      "routers": [
-        {
-          "role": "grounding",  // unique; agents reference it
-          "model_name": "$PROVIDER_GROUNDING_MODEL" | "literal-model-name",
-          "provider_type": "$ROUTER_GROUNDING_PROVIDER" | "openrouter" | "openai" | "vllm",
-          "api_endpoint": "$ROUTER_GROUNDING_API_BASE" | "http://localhost:8000/v1",
-          "api_key": "$ROUTER_GROUNDING_API_KEY" | "literal-api-key",
-          "capabilities": ["TEXT", "VISION"],  // optional, defaults to ["TEXT"]
-          "vision_backbone": "QWEN3.5"  // optional, defaults to OTHER for vision routers
-        }
-      ]
-    }
-    """
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError(
-            f"[populate_routers] Missing JSON configuration file: {CONFIG_PATH}"
-        )
-    with CONFIG_PATH.open("r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def _resolve_token(value: str | None) -> str:
@@ -179,7 +169,9 @@ def _merge_backbones(
 
 def resolve_router_specs() -> dict[str, RouterSpec]:
     """Return every router role in `routers.json`, resolved and merged, keyed by role."""
-    items: list[dict[str, Any]] = _load_json_config().get("routers", [])
+    items: list[dict[str, Any]] = load_config(CONFIG_PATH, "populate_routers").get(
+        "routers", []
+    )
     by_target: dict[tuple[str, str], RouterSpec] = {}
     by_role: dict[str, RouterSpec] = {}
     for item in items:

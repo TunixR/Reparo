@@ -75,6 +75,10 @@ def _bounded(value: object, limit: int) -> str | None:
     return str(value)[:limit]
 
 
+def _frame_kind(kind: type[str | bytes]) -> str:
+    return "binary" if issubclass(kind, bytes) else "text"
+
+
 def parse_abort(data: Any) -> RobotAbort | None:
     """The abort ``data`` describes, if it is an ``abort`` message."""
     if not isinstance(data, dict) or data.get("type") != ABORT_MESSAGE_TYPE:  # pyright: ignore[reportUnknownMemberType]
@@ -242,12 +246,19 @@ class RobotConnection:
             self._raise_if_ended()
         return frame  # pyright: ignore[reportReturnType] - only _END is not a frame
 
+    async def _next_of[F: (str, bytes)](self, kind: type[F]) -> F:
+        """The robot's next frame, which must be of `kind`."""
+        frame = await self._next()
+        if not isinstance(frame, kind):
+            raise TypeError(
+                f"Expected a {_frame_kind(kind)} frame from the robot, "
+                f"got {_frame_kind(type(frame))}."
+            )
+        return frame
+
     async def receive_text(self) -> str:
         """The robot's next frame, which must be text."""
-        frame = await self._next()
-        if isinstance(frame, bytes):
-            raise TypeError("Expected a text frame from the robot, got binary.")
-        return frame
+        return await self._next_of(str)
 
     async def receive_json(self) -> Any:
         """The robot's next frame, which must be JSON text."""
@@ -255,10 +266,7 @@ class RobotConnection:
 
     async def receive_bytes(self) -> bytes:
         """The robot's next frame, which must be binary."""
-        frame = await self._next()
-        if isinstance(frame, str):
-            raise TypeError("Expected a binary frame from the robot, got text.")
-        return frame
+        return await self._next_of(bytes)
 
     async def send_json(self, data: Any) -> None:
         async with self._send_lock:

@@ -24,6 +24,7 @@ from tenacity import retry, stop_after_attempt
 import settings
 from database.agents.specs import OutputModelSpec, build_output_model
 from database.populators.agents import agent_seed
+from evals.prompts import GATEWAY_PROMPT, TASK_INFERENCE_ONLY
 from templates.common import TemplateModel
 
 
@@ -96,24 +97,6 @@ def _extract_final_task(agent: StrandsAgent) -> str:
     if match := re.search(r'"final_task":\s*(.*?)$', text, re.DOTALL):
         return match.group(1).strip()
 
-    # Try regex for <Final task>...</Final task>
-    # match = re.search(r"<Final task>(.*?)</Final task>", text, re.DOTALL)
-    # if match:
-    #     return match.group(1).strip()
-
-    # # Fallback: try <Final task>: ... (without closing tag)
-    # match = re.search(r"<Final task>:\s*(.*?)$", text, re.DOTALL)
-    # if match:
-    #     return match.group(1).strip()
-
-    # # Last resort: grab last non-empty line
-    # lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
-    # if lines:
-    #     last_line = lines[-1]
-    #     # Strip any remaining tags
-    #     last_line = re.sub(r"</?Final task>:", "", last_line).strip()
-    #     return last_line
-
     return "TASK_NOT_FOUND"
 
 
@@ -129,8 +112,6 @@ def gateway_task(case: Case[str, str], mocks: Any) -> dict[str, Any]:
     - tool_calls: which mock tools were called and with what args
     - raw_instruction: what was sent to the model
     """
-    from evals.prompts import GATEWAY_PROMPT
-
     mocks.clear()
     error_input = json.loads(case.input)
     model = build_model()
@@ -230,33 +211,9 @@ def _load_image_content(image_path: Path) -> ContentBlock:
     }
 
 
-@retry(stop=stop_after_attempt(3), reraise=True)
-async def _run_handler_async(
-    case: Case[str, str],
-    *,
-    api_url: str | None = None,
-    model_name: str | None = None,
-    image_path: Path | None = None,
-) -> tuple[dict[str, Any], Any, float | None, float | None]:
-    """Run the handler agent asynchronously, tracking first/last token times.
-
-    Uses stream_async to capture precise timing and the AgentResult (with metrics)
-    from a single invocation.
-
-    Returns (task_output, agent_result).
-    """
-    from evals.prompts import TASK_INFERENCE_ONLY
-
-    payload = json.loads(case.input)
-    model = build_model(model_name=model_name, api_url=api_url)
-
-    agent = StrandsAgent(
-        model=model,
-        system_prompt=TASK_INFERENCE_ONLY,
-        callback_handler=None,
-    )
-
-    instruction = (
+def _handler_instruction(payload: dict[str, Any]) -> str:
+    """The text instruction describing a recovery payload to the task inference agent."""
+    return (
         f"task_name: {payload.get('task_name', '')},\n"
         f"platform={payload.get('platform', '')},\n"
         f"os={payload.get('os', '')},\n"
@@ -266,35 +223,74 @@ async def _run_handler_async(
         f"model={payload.get('model', '')}"
     )
 
-    if image_path is not None and image_path.exists():
-        prompt: str | list[ContentBlock] = [
-            ContentBlock(text=instruction),
-            _load_image_content(image_path),
-        ]
-    else:
-        prompt = instruction
 
+def _handler_prompt(
+    instruction: str, image_path: Path | None
+) -> str | list[ContentBlock]:
+    """The instruction alone, or with the screenshot at ``image_path`` when it exists."""
+    if image_path is None or not image_path.exists():
+        return instruction
+    return [ContentBlock(text=instruction), _load_image_content(image_path)]
+
+
+async def _stream_with_token_times(
+    agent: StrandsAgent, prompt: str | list[ContentBlock]
+) -> tuple[Any, float | None, float | None]:
+    """Stream the agent's answer to ``prompt``.
+
+    Returns (agent_result, first_token_time, last_token_time): the final event's
+    AgentResult (with metrics) and the wall-clock times of the first and last
+    content events, which carry the token data.
+    """
     first_token_time: float | None = None
     last_token_time: float | None = None
     agent_result: Any = None
 
     async for event in agent.stream_async(prompt):
         now = time.time()
-        if isinstance(event, dict):
-            # Content events carry token data
-            if "data" in event:
-                if first_token_time is None:
-                    first_token_time = now
-                last_token_time = now
-            # Final event carries the AgentResult with metrics
-            if "result" in event:
-                agent_result = event["result"]
+        if not isinstance(event, dict):
+            continue
+        if "data" in event:
+            if first_token_time is None:
+                first_token_time = now
+            last_token_time = now
+        if "result" in event:
+            agent_result = event["result"]
 
-    generated_task = _extract_final_task(agent)
+    return agent_result, first_token_time, last_token_time
+
+
+@retry(stop=stop_after_attempt(3), reraise=True)
+def _run_handler(
+    case: Case[str, str],
+    *,
+    api_url: str | None = None,
+    model_name: str | None = None,
+    image_path: Path | None = None,
+) -> tuple[dict[str, Any], Any, float | None, float | None]:
+    """Run the handler agent, tracking first/last token times.
+
+    Uses stream_async to capture precise timing and the AgentResult (with metrics)
+    from a single invocation.
+
+    Returns (task_output, agent_result, first_token_time, last_token_time).
+    """
+    payload = json.loads(case.input)
+    agent = StrandsAgent(
+        model=build_model(model_name=model_name, api_url=api_url),
+        system_prompt=TASK_INFERENCE_ONLY,
+        callback_handler=None,
+    )
+    instruction = _handler_instruction(payload)
+    prompt = _handler_prompt(instruction, image_path)
+
+    agent_result, first_token_time, last_token_time = asyncio.run(
+        _stream_with_token_times(agent, prompt)
+    )
 
     return (
         {
-            "generated_task": generated_task,
+            "generated_task": _extract_final_task(agent),
             "model_messages": _extract_agent_messages(agent),
             "raw_instruction": instruction,
         },
@@ -323,13 +319,11 @@ def handler_task(
     - raw_instruction: what was sent to the model
     - agent_metrics: token usage and timing metrics
     """
-    task_output, agent_result, first_token_time, last_token_time = asyncio.run(
-        _run_handler_async(
-            case,
-            api_url=api_url,
-            model_name=model_name,
-            image_path=image_path,
-        )
+    task_output, agent_result, first_token_time, last_token_time = _run_handler(
+        case,
+        api_url=api_url,
+        model_name=model_name,
+        image_path=image_path,
     )
 
     if agent_result is not None:

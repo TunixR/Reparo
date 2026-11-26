@@ -29,13 +29,14 @@ class S3Client:
         async with S3Client._client() as s3_client:  # pyright: ignore[reportGeneralTypeIssues]
             try:
                 await s3_client.head_bucket(Bucket=bucket)
-                return False
             except ClientError as exc:
                 if exc.response.get("Error", {}).get("Code") not in (
                     "404",
                     "NoSuchBucket",
                 ):
                     raise
+            else:
+                return False
             await s3_client.create_bucket(Bucket=bucket)
         return True
 
@@ -73,8 +74,7 @@ class S3Client:
         """
         async with S3Client._client() as s3_client:  # pyright: ignore[reportGeneralTypeIssues]
             obj = await s3_client.get_object(Bucket=bucket, Key=key)
-            file_bytes = await obj["Body"].read()
-        return file_bytes
+            return await obj["Body"].read()
 
     @staticmethod
     async def bulk_download_bytes(

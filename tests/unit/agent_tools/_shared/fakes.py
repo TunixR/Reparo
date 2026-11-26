@@ -1,6 +1,6 @@
 import types
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 from strands.agent.agent import Agent
@@ -8,9 +8,7 @@ from strands.hooks import (
     AfterToolCallEvent,
     BeforeInvocationEvent,
     BeforeToolCallEvent,
-    MessageAddedEvent,
 )
-from strands.types.content import ContentBlock
 from strands.types.tools import ToolResult
 
 
@@ -70,25 +68,6 @@ class FakeAfterToolCallEvent(AfterToolCallEvent):
         self.tool_use = {"name": tool_name, "input": None, "toolUseId": ""}
         self.exception = exception
         self.result = result or {"status": "success", "content": [], "toolUseId": ""}
-
-
-class FakeMessageAddedEvent(MessageAddedEvent):
-    """
-    Fake event used to call AgentLoggingHook.log_message.
-
-    Attributes:
-        message: dict with 'role' and 'content'
-    """
-
-    def __init__(  # pyright: ignore[reportMissingSuperCall]
-        self,
-        role: Literal["user", "assistant"] = "assistant",
-        content: list[ContentBlock] | None = None,
-    ):
-        self.message = {
-            "role": role,
-            "content": content or [],
-        }
 
 
 # Helpers to generate a ValidationError in a deterministic way

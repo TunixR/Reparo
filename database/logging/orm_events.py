@@ -10,6 +10,10 @@ from sqlmodel import (
 from database.logging.models import GUITrace, SubAgentTrace
 from s3.utils import S3Client
 
+# The event loop keeps only weak references to tasks; holding them here keeps a
+# screenshot deletion from being garbage collected before it finishes.
+_screenshot_deletions: set[asyncio.Task[None]] = set()
+
 
 @event.listens_for(SubAgentTrace, "before_insert")
 @event.listens_for(SubAgentTrace, "before_update")
@@ -53,4 +57,6 @@ def _cascade_delete_gui_trace_screenshot(_, __: Any, target: GUITrace):  # pyrig
     except RuntimeError:
         asyncio.run(S3Client.delete_object(target.screenshot_key))
     else:
-        _ = loop.create_task(S3Client.delete_object(target.screenshot_key))
+        task = loop.create_task(S3Client.delete_object(target.screenshot_key))
+        _screenshot_deletions.add(task)
+        task.add_done_callback(_screenshot_deletions.discard)

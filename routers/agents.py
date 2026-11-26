@@ -20,6 +20,7 @@ from database.engine import commit_or_500
 from database.general import SessionDep
 from database.provider.models import Router
 from middlewares.auth import get_current_user, require_admin
+from routers.common import get_or_404
 
 router = APIRouter(
     prefix="/agents",
@@ -40,13 +41,7 @@ def get_agent(
     agent_id: UUID,
     session: SessionDep,
 ) -> Agent:
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
-    return agent
+    return get_or_404(session, Agent, agent_id)
 
 
 @router.post(
@@ -66,12 +61,7 @@ def create_agent(
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
 ) -> BaseModel:
-    router_obj = session.get(Router, payload.router_id)
-    if not router_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Router not found",
-        )
+    router_obj = get_or_404(session, Router, payload.router_id)
 
     try:
         agent = Agent(**payload.model_dump(), router=router_obj)
@@ -103,19 +93,9 @@ def update_agent(
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
 ) -> BaseModel:
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
+    agent = get_or_404(session, Agent, agent_id)
 
-    router_obj = session.get(Router, payload.router_id or agent.router_id)
-    if not router_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Router not found",
-        )
+    router_obj = get_or_404(session, Router, payload.router_id or agent.router_id)
 
     try:
         ignored = service.update_agent(session, agent, payload, router_obj)
@@ -152,12 +132,7 @@ def delete_agent(
     session: SessionDep,
     _current_user: Annotated[User, Depends(require_admin)],
 ) -> None:
-    agent = session.get(Agent, agent_id)
-    if not agent:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Agent not found",
-        )
+    agent = get_or_404(session, Agent, agent_id)
 
     try:
         service.delete_agent(session, agent)

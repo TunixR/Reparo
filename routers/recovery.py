@@ -295,6 +295,72 @@ async def _run_agent_graph(
     return outcome, invocation_state
 
 
+async def _receive_recovery_context(
+    robot: RobotConnection, turn: telemetry.RecoveryTurnTelemetry
+) -> tuple[Any, RecoveryContext]:
+    """The robot's payload, decoded, and the recovery context validated from it."""
+    # One payload per connection. Read the raw text so its size is known
+    # without re-serializing it. An abort instead of a payload just closes.
+    raw = await robot.receive_text()
+    data = _decode_payload_or_raise(raw)
+    turn.payload_received(raw, data)
+    _check_contract_version_or_raise(data)
+
+    # Validate before looking up the agent graph, so a malformed payload is
+    # reported as such even on a misconfigured server.
+    recovery_context = RecoveryContext.from_payload(
+        payload=_validate_payload_or_raise(data)
+    )
+    turn.context_built(recovery_context)
+    return data, recovery_context
+
+
+async def _recover_and_answer(
+    robot: RobotConnection,
+    session: database.SessionDep,
+    graph_id: UUID,
+    exception: RobotException,
+    recovery_context: RecoveryContext,
+    turn: telemetry.RecoveryTurnTelemetry,
+) -> None:
+    """Run the agent graph, send its answer as ``done`` and store its success."""
+    # The agent graph run is a child span of this turn. It is cancelled as
+    # soon as the robot aborts or goes away.
+    run_trace = AgentGraphRunTrace.open(graph_id, exception.id)
+    try:
+        outcome, invocation_state = await robot.run(
+            _run_agent_graph(
+                session,
+                graph_id,
+                robot,
+                exception,
+                recovery_context,
+                run_trace,
+            )
+        )
+        answer, failure_reason = _build_answer(
+            outcome.output,
+            invocation_state,
+            graph_failed=outcome.failure_reason is not None,
+        )
+        run_trace.close(outcome, answer)
+    except BaseException as exc:
+        run_trace.fail(exc)
+        raise
+    turn.answered(answer, failure_reason)
+    success = answer.success
+
+    await robot.send_json(
+        {"type": "done", "content": answer.model_dump(), "id": str(exception.id)}
+    )
+    await robot.close()
+
+    exception.infered_success = success
+    session.add(exception)
+    session.commit()
+    turn.completed(success)
+
+
 @router.websocket("/robot_exception/ws")
 async def handle_robot_exception(websocket: WebSocket, session: database.SessionDep):
     """
@@ -325,19 +391,7 @@ async def _run_recovery_turn(
     """
     exception: RobotException | None = None
     try:
-        # One payload per connection. Read the raw text so its size is known
-        # without re-serializing it. An abort instead of a payload just closes.
-        raw = await robot.receive_text()
-        data = _decode_payload_or_raise(raw)
-        turn.payload_received(raw, data)
-        _check_contract_version_or_raise(data)
-
-        # Validate before looking up the agent graph, so a malformed payload is
-        # reported as such even on a misconfigured server.
-        recovery_context = RecoveryContext.from_payload(
-            payload=_validate_payload_or_raise(data)
-        )
-        turn.context_built(recovery_context)
+        data, recovery_context = await _receive_recovery_context(robot, turn)
 
         graph_id = AgentGraph.default_recovery_id(session)
         if graph_id is None:
@@ -354,41 +408,9 @@ async def _run_recovery_turn(
             )
         turn.persisted(exception.id)
 
-        # The agent graph run is a child span of this turn. It is cancelled as
-        # soon as the robot aborts or goes away.
-        run_trace = AgentGraphRunTrace.open(graph_id, exception.id)
-        try:
-            outcome, invocation_state = await robot.run(
-                _run_agent_graph(
-                    session,
-                    graph_id,
-                    robot,
-                    exception,
-                    recovery_context,
-                    run_trace,
-                )
-            )
-            answer, failure_reason = _build_answer(
-                outcome.output,
-                invocation_state,
-                graph_failed=outcome.failure_reason is not None,
-            )
-            run_trace.close(outcome, answer)
-        except BaseException as exc:
-            run_trace.fail(exc)
-            raise
-        turn.answered(answer, failure_reason)
-        success = answer.success
-
-        await robot.send_json(
-            {"type": "done", "content": answer.model_dump(), "id": str(exception.id)}
+        await _recover_and_answer(
+            robot, session, graph_id, exception, recovery_context, turn
         )
-        await robot.close()
-
-        exception.infered_success = success
-        session.add(exception)
-        session.commit()
-        turn.completed(success)
     except AbortedByRobot as exc:
         # No ``done``: the recovery, if there is one, fails with the robot's reason.
         if exception is not None:

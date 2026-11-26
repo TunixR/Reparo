@@ -192,7 +192,7 @@ class AgentBehaviour(ABC):
         return AgentLoggingHook(
             agent_id=self.agent.id,
             invocation_state=invocation_state,
-            parent_trace_id=invocation_state.get("parent_trace_id", None),
+            parent_trace_id=invocation_state.get("parent_trace_id"),
         )
 
     def record_usage(

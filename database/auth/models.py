@@ -153,10 +153,3 @@ class UserPasswordChange(SQLModel):
         None, description="Current password (required for self)"
     )
     new_password: str = Field(..., min_length=8)
-
-
-class UserLogin(SQLModel):
-    """Schema for user login."""
-
-    username: str
-    password: str

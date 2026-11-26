@@ -27,12 +27,13 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
+from strands_evals import Case
 from strands_evals.types.evaluation import EvaluationData
 
 import settings
 from evals.agents import build_model, handler_task
 from evals.dataset import load_cases
-from evals.evaluators import TaskIdentificationEvaluator
+from evals.evaluators import TaskIdentificationEvaluator, evaluation_summary
 
 OUTPUT_DIR = Path("experiment_files")
 DATA_DIR = Path(__file__).parent / "data"
@@ -87,6 +88,130 @@ def _get_output_path(custom: str | None) -> Path:
     return OUTPUT_DIR / "task_identification_eval.json"
 
 
+EXTENSIVENESS_LABELS = ("INSUFFICIENT", "OPTIMAL", "EXTENSIVE", "INVALID")
+
+
+def _run_case(
+    case: Case[str, str],
+    evaluator: TaskIdentificationEvaluator,
+    *,
+    api_url: str | None,
+    model_name: str | None,
+    image_path: Path | None,
+    judge_iterations: int,
+) -> dict[str, Any]:
+    """Run the agent on one case, judge it, print its verdict and return its result entry."""
+    task_output = handler_task(
+        case,
+        api_url=api_url,
+        model_name=model_name,
+        image_path=image_path,
+    )
+
+    eval_data = EvaluationData[str, str](
+        input=case.input,
+        actual_output=json.dumps(task_output),
+        expected_output=case.expected_output,
+        name=case.name,
+        metadata=case.metadata,
+    )
+
+    eval_results, judge_votes = evaluator.evaluate_with_consensus(
+        eval_data,
+        iterations=judge_iterations,
+    )
+    eval_result = eval_results[0] if eval_results else None
+
+    agent_m = task_output.get("agent_metrics", {})
+
+    status = "PASS" if (eval_result and eval_result.test_pass) else "FAIL"
+    tokens = agent_m.get("total_tokens", 0)
+    dur = agent_m.get("total_duration_s", 0.0)
+    f2l = agent_m.get("first_to_last_token_s", 0.0)
+    print(
+        f"  [{status}] label={eval_result.label if eval_result else '—'}  "
+        + f"task='{task_output.get('generated_task', 'NONE')}' "
+        + f"tokens={tokens}  duration={dur:.1f}s  first-to-last={f2l:.1f}s"
+    )
+
+    return {
+        "case_id": case.name,
+        "task": (case.metadata or {}).get("task_name", ""),
+        "ground_truth": json.loads(case.expected_output or "{}"),
+        "agent_output": {
+            "generated_task": task_output.get("generated_task"),
+            "raw_instruction": task_output.get("raw_instruction", ""),
+            "model_messages": task_output.get("model_messages", []),
+        },
+        "agent_metrics": {
+            "input_tokens": agent_m.get("input_tokens", 0),
+            "output_tokens": agent_m.get("output_tokens", 0),
+            "total_tokens": tokens,
+            "total_duration_s": dur,
+            "first_to_last_token_s": f2l,
+        },
+        "evaluation": evaluation_summary(eval_result),
+        "judge_iterations": judge_iterations,
+        "judge_votes": judge_votes,
+        "vision_enabled": image_path is not None,
+    }
+
+
+def _quality_metrics(case_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """The valid rate and extensiveness distribution of the cases' evaluations."""
+    passes = [
+        r["evaluation"]["pass"]
+        for r in case_results
+        if r["evaluation"]["pass"] is not None
+    ]
+    labels = [
+        r["evaluation"]["label"]
+        for r in case_results
+        if r["evaluation"]["label"] is not None
+    ]
+
+    valid_count = sum(1 for p in passes if p)
+    total_count = len(passes)
+    return {
+        "valid_rate": valid_count / total_count if total_count > 0 else 0.0,
+        "total_cases": total_count,
+        "valid_count": valid_count,
+        "extensiveness_distribution": {
+            label: labels.count(label) for label in EXTENSIVENESS_LABELS
+        },
+    }
+
+
+def _sum(entries: list[dict[str, Any]], group: str, metric: str) -> Any:
+    """The sum of ``entry[group][metric]`` over ``entries``."""
+    return sum(entry[group][metric] for entry in entries)
+
+
+def _resource_metrics(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    total_tokens: int,
+    duration_s: float,
+    first_to_last_token_s: float,
+    case_count: int,
+) -> dict[str, Any]:
+    """Token and timing totals, with their averages over ``case_count`` cases (at least 1)."""
+    n = case_count or 1
+    return {
+        "total_input_tokens": input_tokens,
+        "total_output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "avg_input_tokens": round(input_tokens / n),
+        "avg_output_tokens": round(output_tokens / n),
+        "avg_tokens": round(total_tokens / n),
+        "total_duration_s": round(duration_s, 3),
+        "avg_duration_s": round(duration_s / n, 3),
+        "total_first_to_last_token_s": round(first_to_last_token_s, 3),
+        "avg_first_to_last_token_s": round(first_to_last_token_s / n, 3),
+    }
+
+
 def run_evaluation(
     *,
     api_url: str | None = None,
@@ -102,105 +227,20 @@ def run_evaluation(
     evaluator = TaskIdentificationEvaluator(judge_model=judge_model)
 
     case_results: list[dict[str, Any]] = []
-
     for i, case in enumerate(cases):
         print(f"[{i + 1}/{len(cases)}] Running {case.name}...")
-
-        image_path = DATA_DIR / "images" / f"{i}.png" if vision else None
-
-        task_output = handler_task(
-            case,
-            api_url=api_url,
-            model_name=model_name,
-            image_path=image_path,
+        case_results.append(
+            _run_case(
+                case,
+                evaluator,
+                api_url=api_url,
+                model_name=model_name,
+                image_path=DATA_DIR / "images" / f"{i}.png" if vision else None,
+                judge_iterations=judge_iterations,
+            )
         )
 
-        eval_data = EvaluationData[str, str](
-            input=case.input,
-            actual_output=json.dumps(task_output),
-            expected_output=case.expected_output,
-            name=case.name,
-            metadata=case.metadata,
-        )
-
-        eval_results, judge_votes = evaluator.evaluate_with_consensus(
-            eval_data,
-            iterations=judge_iterations,
-        )
-        eval_result = eval_results[0] if eval_results else None
-
-        gt = json.loads(case.expected_output or "{}")
-        agent_m = task_output.get("agent_metrics", {})
-
-        result_entry = {
-            "case_id": case.name,
-            "task": (case.metadata or {}).get("task_name", ""),
-            "ground_truth": gt,
-            "agent_output": {
-                "generated_task": task_output.get("generated_task"),
-                "raw_instruction": task_output.get("raw_instruction", ""),
-                "model_messages": task_output.get("model_messages", []),
-            },
-            "agent_metrics": {
-                "input_tokens": agent_m.get("input_tokens", 0),
-                "output_tokens": agent_m.get("output_tokens", 0),
-                "total_tokens": agent_m.get("total_tokens", 0),
-                "total_duration_s": agent_m.get("total_duration_s", 0.0),
-                "first_to_last_token_s": agent_m.get("first_to_last_token_s", 0.0),
-            },
-            "evaluation": {
-                "score": eval_result.score if eval_result else None,
-                "pass": eval_result.test_pass if eval_result else None,
-                "label": eval_result.label if eval_result else None,
-                "reason": eval_result.reason if eval_result else None,
-            },
-            "judge_iterations": judge_iterations,
-            "judge_votes": judge_votes,
-            "vision_enabled": vision,
-        }
-        case_results.append(result_entry)
-
-        status = "PASS" if (eval_result and eval_result.test_pass) else "FAIL"
-        tokens = agent_m.get("total_tokens", 0)
-        dur = agent_m.get("total_duration_s", 0.0)
-        f2l = agent_m.get("first_to_last_token_s", 0.0)
-        print(
-            f"  [{status}] label={eval_result.label if eval_result else '—'}  "
-            + f"task='{task_output.get('generated_task', 'NONE')}' "
-            + f"tokens={tokens}  duration={dur:.1f}s  first-to-last={f2l:.1f}s"
-        )
-
-    # Aggregate metrics
-    passes = [
-        r["evaluation"]["pass"]
-        for r in case_results
-        if r["evaluation"]["pass"] is not None
-    ]
-    labels = [
-        r["evaluation"]["label"]
-        for r in case_results
-        if r["evaluation"]["label"] is not None
-    ]
-
-    valid_count = sum(1 for p in passes if p)
-    total_count = len(passes)
-
-    extensiveness_counts = {
-        "INSUFFICIENT": sum(1 for lbl in labels if lbl == "INSUFFICIENT"),
-        "OPTIMAL": sum(1 for lbl in labels if lbl == "OPTIMAL"),
-        "EXTENSIVE": sum(1 for lbl in labels if lbl == "EXTENSIVE"),
-        "INVALID": sum(1 for lbl in labels if lbl == "INVALID"),
-    }
-
-    # Agent metrics aggregation
-    all_input = sum(r["agent_metrics"]["input_tokens"] for r in case_results)
-    all_output = sum(r["agent_metrics"]["output_tokens"] for r in case_results)
-    all_total = sum(r["agent_metrics"]["total_tokens"] for r in case_results)
-    all_duration = sum(r["agent_metrics"]["total_duration_s"] for r in case_results)
-    all_f2l = sum(r["agent_metrics"]["first_to_last_token_s"] for r in case_results)
-    n = len(case_results) if case_results else 1
-
-    full_results = {
+    return {
         "experiment": "task_identification_eval",
         "timestamp": datetime.now(UTC).isoformat(),
         "model_id": model_name or settings.PROVIDER_MODEL,
@@ -211,29 +251,20 @@ def run_evaluation(
             "vision": vision,
         },
         "metrics": {
-            "task_identification": {
-                "valid_rate": valid_count / total_count if total_count > 0 else 0.0,
-                "total_cases": total_count,
-                "valid_count": valid_count,
-                "extensiveness_distribution": extensiveness_counts,
-            },
-            "agent_resources": {
-                "total_input_tokens": all_input,
-                "total_output_tokens": all_output,
-                "total_tokens": all_total,
-                "avg_input_tokens": round(all_input / n),
-                "avg_output_tokens": round(all_output / n),
-                "avg_tokens": round(all_total / n),
-                "total_duration_s": round(all_duration, 3),
-                "avg_duration_s": round(all_duration / n, 3),
-                "total_first_to_last_token_s": round(all_f2l, 3),
-                "avg_first_to_last_token_s": round(all_f2l / n, 3),
-            },
+            "task_identification": _quality_metrics(case_results),
+            "agent_resources": _resource_metrics(
+                input_tokens=_sum(case_results, "agent_metrics", "input_tokens"),
+                output_tokens=_sum(case_results, "agent_metrics", "output_tokens"),
+                total_tokens=_sum(case_results, "agent_metrics", "total_tokens"),
+                duration_s=_sum(case_results, "agent_metrics", "total_duration_s"),
+                first_to_last_token_s=_sum(
+                    case_results, "agent_metrics", "first_to_last_token_s"
+                ),
+                case_count=len(case_results),
+            ),
         },
         "case_results": case_results,
     }
-
-    return full_results
 
 
 def _merge_repetition_results(all_runs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -282,65 +313,22 @@ def _merge_repetition_results(all_runs: list[dict[str, Any]]) -> dict[str, Any]:
         merged_entry["judge_votes"] = case_judge_votes[case_id]
         merged_case_results.append(merged_entry)
 
-    # Rebuild aggregate metrics from merged labels
-    merged_labels = [
-        cr["evaluation"]["label"]
-        for cr in merged_case_results
-        if cr["evaluation"]["label"] is not None
-    ]
-    merged_passes = [
-        cr["evaluation"]["pass"]
-        for cr in merged_case_results
-        if cr["evaluation"]["pass"] is not None
-    ]
-
-    valid_count = sum(1 for p in merged_passes if p)
-    total_count = len(merged_passes)
-
-    extensiveness_counts = {
-        "INSUFFICIENT": sum(1 for lbl in merged_labels if lbl == "INSUFFICIENT"),
-        "OPTIMAL": sum(1 for lbl in merged_labels if lbl == "OPTIMAL"),
-        "EXTENSIVE": sum(1 for lbl in merged_labels if lbl == "EXTENSIVE"),
-        "INVALID": sum(1 for lbl in merged_labels if lbl == "INVALID"),
-    }
-
-    # Average agent metrics across runs
-    all_input = 0
-    all_output = 0
-    all_total = 0
-    all_duration = 0.0
-    all_f2l = 0.0
-    for run in all_runs:
-        ar = run["metrics"]["agent_resources"]
-        all_input += ar["total_input_tokens"]
-        all_output += ar["total_output_tokens"]
-        all_total += ar["total_tokens"]
-        all_duration += ar["total_duration_s"]
-        all_f2l += ar["total_first_to_last_token_s"]
-
-    n_cases = len(merged_case_results) if merged_case_results else 1
-
     merged = dict(base)
     merged["config"]["repetitions"] = n_runs
+    # Rebuild quality metrics from the merged labels; sum resources over all runs
+    run_metrics = [run["metrics"] for run in all_runs]
     merged["metrics"] = {
-        "task_identification": {
-            "valid_rate": valid_count / total_count if total_count > 0 else 0.0,
-            "total_cases": total_count,
-            "valid_count": valid_count,
-            "extensiveness_distribution": extensiveness_counts,
-        },
-        "agent_resources": {
-            "total_input_tokens": all_input,
-            "total_output_tokens": all_output,
-            "total_tokens": all_total,
-            "avg_input_tokens": round(all_input / n_cases),
-            "avg_output_tokens": round(all_output / n_cases),
-            "avg_tokens": round(all_total / n_cases),
-            "total_duration_s": round(all_duration, 3),
-            "avg_duration_s": round(all_duration / n_cases, 3),
-            "total_first_to_last_token_s": round(all_f2l, 3),
-            "avg_first_to_last_token_s": round(all_f2l / n_cases, 3),
-        },
+        "task_identification": _quality_metrics(merged_case_results),
+        "agent_resources": _resource_metrics(
+            input_tokens=_sum(run_metrics, "agent_resources", "total_input_tokens"),
+            output_tokens=_sum(run_metrics, "agent_resources", "total_output_tokens"),
+            total_tokens=_sum(run_metrics, "agent_resources", "total_tokens"),
+            duration_s=_sum(run_metrics, "agent_resources", "total_duration_s"),
+            first_to_last_token_s=_sum(
+                run_metrics, "agent_resources", "total_first_to_last_token_s"
+            ),
+            case_count=len(merged_case_results),
+        ),
     }
     merged["case_results"] = merged_case_results
     merged["repetitions_summary"] = {

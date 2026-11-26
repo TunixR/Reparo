@@ -177,3 +177,51 @@ async def test_register_gui_trace_saves_a_gui_entry():
     assert gui.action_type == "click"
     assert gui.action_content == {"x": 10, "y": 20}
     assert gui.success is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"image": {"format": "jpeg", "source": {"bytes": b"..."}}}],
+        [
+            {
+                "toolResult": {
+                    "toolUseId": "t1",
+                    "content": [{"image": {"source": {"bytes": b"..."}}}],
+                }
+            }
+        ],
+    ],
+    ids=["image", "tool_result_image"],
+)
+@pytest.mark.asyncio
+async def test_register_gui_trace_fills_the_pending_image(content: list[Any]):
+    class MsgEvt:
+        def __init__(self, message: dict[str, Any]):
+            self.message = message
+
+    hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={"inputs": {}})
+    hook.log_start(FakeBeforeInvocationEvent())
+    hook.log_message(MsgEvt({"role": "user", "content": content}))  # pyright: ignore[reportArgumentType]
+
+    def logged_image() -> dict[str, Any]:
+        [part] = hook.messages[-1]["content"]
+        if "toolResult" in part:
+            [part] = part["toolResult"]["content"]
+        return part["image"]
+
+    assert logged_image() == {"uuid": "<uuid_pending>"}
+
+    await hook.register_gui_trace(
+        action_type="click",
+        action_content={},
+        screenshot_bytes=b"\x89PNG",
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
+    )
+
+    [gui] = [o for o in _STORE.values() if isinstance(o, GUITrace)]
+    assert logged_image() == {"uuid": str(gui.screenshot_key)}
+    trace: AgentTrace | None = _STORE.get(hook.agent_trace_id)  # type: ignore[assignment]
+    assert isinstance(trace, AgentTrace)
+    assert trace.messages == hook.messages

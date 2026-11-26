@@ -24,7 +24,7 @@ from templates.recovery_payload import RecoveryPayload
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # pyright: ignore[reportUnusedParameter]
+async def lifespan(_app: FastAPI):
     """Set up Strands telemetry and flush observability data on shutdown."""
     setup_strands_telemetry()
     yield

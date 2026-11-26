@@ -153,7 +153,7 @@ class GuiAgent(AgentBehaviour, ABC):
             image=image,
             screen=Screen(width, height),
         )
-        agent = StrandsAgent(  # type: ignore
+        agent = StrandsAgent(
             model=self.agent.get_model(),
             tools=self._tools(run),
             hooks=[hook, MaxGuiImagesHook()],
@@ -175,7 +175,6 @@ class GuiAgent(AgentBehaviour, ABC):
                 raise run.disconnect
             if telemetry.outcome is None:
                 telemetry.model_stopped(telemetry.actions)
-            return run
         except WebSocketDisconnect:
             telemetry.client_disconnected(telemetry.actions)
             raise
@@ -191,6 +190,8 @@ class GuiAgent(AgentBehaviour, ABC):
             if not contain_errors:
                 raise
             run.error = str(e)
+            return run
+        else:
             return run
         finally:
             self.record_usage(agent, hook)

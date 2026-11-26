@@ -23,6 +23,7 @@ from database.logging.models import (
     ToolTrace,
 )
 from middlewares.auth import get_current_user
+from routers.common import get_or_404, not_found
 from s3.utils import S3Client
 
 
@@ -36,33 +37,6 @@ class RecoveryContextEnriched(BaseModel):
     model: str
     ui_log: list[dict[str, Any]]
     errored_act: dict[str, Any] | None
-
-
-class RecoveryUiLogEntryResponse(BaseModel):
-    case_id: str
-    activity_id: str | None
-    event_id: str
-    event_name: str | None
-    action_type: str
-    application: str | None
-    input: str | None
-    ui_element_target: str | None
-    ui_group: str | None
-    timestamp: str
-    previous_state: str | None
-    current_state: str | None
-
-
-class RecoveryErroredActResponse(BaseModel):
-    case_id: str
-    activity_id: str | None
-    event_id: str
-    event_name: str | None
-    action_type: str
-    application: str | None
-    input: str | None
-    error_code: str
-    error_description: str
 
 
 router = APIRouter(
@@ -99,25 +73,21 @@ def _get_recovery_context_or_404(
     exception_id: UUID,
     session: SessionDep,
 ) -> RecoveryContext:
-    robot_exception = session.get(RobotException, exception_id)
-    if not robot_exception:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="RobotException not found",
-        )
-
+    _ = get_or_404(session, RobotException, exception_id)
     recovery_context = session.exec(
         select(RecoveryContext).where(
             RecoveryContext.robot_exception_id == exception_id
         )
     ).first()
     if not recovery_context:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="RecoveryContext not found",
-        )
-
+        raise not_found("RecoveryContext not found")
     return recovery_context
+
+
+def _list_traces[T: (AgentTrace, GUITrace, ToolTrace)](
+    session: Session, trace: type[T], robot_exception_id: UUID | None
+) -> Sequence[T]:
+    return session.exec(_traces_of_recovery(trace, robot_exception_id)).unique().all()
 
 
 def _delete(session: Session, row: SQLModel) -> None:
@@ -147,18 +117,56 @@ async def get_agent_trace_markdown(agent_trace_id: UUID, session: SessionDep):
     """
     Endpoint to retrieve the markdown log for a given agent trace ID.
     """
-    agent_trace = session.exec(
-        select(AgentTrace).where(AgentTrace.id == agent_trace_id)
-    ).first()
-
-    if not agent_trace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"AgentTrace with ID {agent_trace_id} not found.",
-        )
-
+    agent_trace = get_or_404(
+        session,
+        AgentTrace,
+        agent_trace_id,
+        f"AgentTrace with ID {agent_trace_id} not found.",
+    )
     markdown_log = await agent_trace.get_makdown_log()
     return Response(content=markdown_log, media_type="text/markdown")
+
+
+_UI_LOG_HEADER = "timestamp,event_type,click_x,click_y,text,screenshot\n"
+
+
+def _click(box: Sequence[Any], default: tuple[str, str]) -> tuple[str, str]:
+    """A box's relative ([0,1]) click coordinates, or ``default`` if there is none."""
+    return (str(box[0]), str(box[1])) if box else default
+
+
+def _ui_log_rows(gui_trace: GUITrace) -> list[str]:
+    """The UI log CSV rows of one GUI action: none, one, or a start and an end."""
+    event_type = gui_trace.action_type
+    kind = event_type.lower()
+    if kind in ("wait", "finish"):
+        return []
+    content = gui_trace.action_content
+    timestamp = gui_trace.finished_at.isoformat() if gui_trace.finished_at else ""
+    text = content.get("content", "")
+    screenshot = f"{gui_trace.screenshot_key}.jpeg"
+
+    def row(event: str, click: tuple[str, str]) -> str:
+        return f"{timestamp},{event},{click[0]},{click[1]},{text},{screenshot}\n"
+
+    start = _click(content.get("start_box", []), ("", ""))
+    if kind == "scroll":
+        return [row(f"scroll_{content.get('direction', '')}", start)]
+    if kind in ("drag", "select"):
+        end = _click(content.get("end_box", []), start)
+        return [row(f"{event_type}_start", start), row(f"{event_type}_end", end)]
+    return [row(event_type, start)]
+
+
+def _ui_log_zip(ui_log: str, screenshots: dict[str, bytes]) -> bytes:
+    """A zip of the UI log CSV and a ``screenshots`` folder of its images."""
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
+        zipf.writestr("ui_log.csv", data=ui_log)
+        zipf.mkdir("screenshots")
+        for key, img_bytes in screenshots.items():
+            zipf.writestr(f"screenshots/{key}.jpeg", data=img_bytes)
+    return buffer.getvalue()
 
 
 @router.get(
@@ -174,15 +182,12 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
     """
     Retrieve the UI log for a given robot exception ID.
     """
-    robot_exception = session.exec(
-        select(RobotException).where(RobotException.id == exception_id)
-    ).first()
-
-    if not robot_exception:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"RobotException with ID {exception_id} not found.",
-        )
+    _ = get_or_404(
+        session,
+        RobotException,
+        exception_id,
+        f"RobotException with ID {exception_id} not found.",
+    )
     gui_traces = (
         session.exec(
             _traces_of_recovery(GUITrace, exception_id, oldest_first=True).where(
@@ -192,58 +197,19 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
         .unique()
         .all()
     )
-
-    ui_log = "timestamp,event_type,click_x,click_y,text,screenshot\n"
-    screenshots = []
-
-    for gui_trace in gui_traces:
-        timestamp = gui_trace.finished_at.isoformat() if gui_trace.finished_at else ""
-        event_type = gui_trace.action_type
-        click_x = ""
-        click_y = ""
-        text = gui_trace.action_content.get("content", "")
-        screenshot = f"{gui_trace.screenshot_key}.jpeg"
-
-        screenshots.append(gui_trace.screenshot_key)
-
-        coords = gui_trace.action_content.get("start_box", [])
-        if coords:
-            # Relative coordinates [0,1]
-            click_x = str(coords[0])
-            click_y = str(coords[1])
-
-        # Special cases
-        if event_type.lower() == "scroll":
-            direction = gui_trace.action_content.get("direction", "")
-            event_type = f"scroll_{direction}"
-
-        # Two events: start and end
-        elif event_type.lower() == "drag" or event_type.lower() == "select":
-            ui_log += f"{timestamp},{event_type}_start,{click_x},{click_y},{text},{screenshot}\n"
-            end_coords = gui_trace.action_content.get("end_box", [])
-            if end_coords:
-                click_x = str(end_coords[0])
-                click_y = str(end_coords[1])
-            ui_log += f"{timestamp},{event_type}_end,{click_x},{click_y},{text},{screenshot}\n"
-            continue
-
-        elif event_type.lower() == "wait" or event_type.lower() == "finish":
-            continue
-
-        ui_log += f"{timestamp},{event_type},{click_x},{click_y},{text},{screenshot}\n"
-
-    screenshots = await S3Client.bulk_download_bytes(screenshots)
-
-    # Construct zip file in memory
-    buffer = BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zipf:
-        zipf.writestr("ui_log.csv", data=ui_log)
-        # Create screenshot folder
-        zipf.mkdir("screenshots")
-        for key, img_bytes in screenshots.items():
-            zipf.writestr(f"screenshots/{key}.jpeg", data=img_bytes)
-
-    return StreamingResponse(iter([buffer.getvalue()]), media_type="application/zip")
+    ui_log = _UI_LOG_HEADER + "".join(
+        row for gui_trace in gui_traces for row in _ui_log_rows(gui_trace)
+    )
+    screenshots = await S3Client.bulk_download_bytes(
+        [
+            key
+            for gui_trace in gui_traces
+            if (key := gui_trace.screenshot_key) is not None
+        ]
+    )
+    return StreamingResponse(
+        iter([_ui_log_zip(ui_log, screenshots)]), media_type="application/zip"
+    )
 
 
 @router.get(
@@ -252,9 +218,7 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
 def list_agent_traces(
     session: SessionDep, robot_exception_id: RobotExceptionFilter = None
 ) -> Sequence[AgentTrace]:
-    return (
-        session.exec(_traces_of_recovery(AgentTrace, robot_exception_id)).unique().all()
-    )
+    return _list_traces(session, AgentTrace, robot_exception_id)
 
 
 @router.get(
@@ -266,12 +230,7 @@ def get_agent_trace(
     trace_id: UUID,
     session: SessionDep,
 ) -> AgentTrace:
-    trace = session.get(AgentTrace, trace_id)
-    if not trace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="AgentTrace not found"
-        )
-    return trace
+    return get_or_404(session, AgentTrace, trace_id)
 
 
 @router.delete(
@@ -283,12 +242,7 @@ def delete_agent_trace(
     trace_id: UUID,
     session: SessionDep,
 ) -> None:
-    trace = session.get(AgentTrace, trace_id)
-    if not trace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="AgentTrace not found"
-        )
-    _delete(session, trace)
+    _delete(session, get_or_404(session, AgentTrace, trace_id))
 
 
 @router.get(
@@ -309,12 +263,7 @@ def list_agent_graph_traces(
 def _get_agent_graph_trace_or_404(
     trace_id: UUID, session: SessionDep
 ) -> AgentGraphTrace:
-    trace = session.get(AgentGraphTrace, trace_id)
-    if not trace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="AgentGraphTrace not found"
-        )
-    return trace
+    return get_or_404(session, AgentGraphTrace, trace_id)
 
 
 @router.get(
@@ -346,9 +295,7 @@ async def get_agent_graph_trace_markdown(
 def list_gui_traces(
     session: SessionDep, robot_exception_id: RobotExceptionFilter = None
 ) -> Sequence[GUITrace]:
-    return (
-        session.exec(_traces_of_recovery(GUITrace, robot_exception_id)).unique().all()
-    )
+    return _list_traces(session, GUITrace, robot_exception_id)
 
 
 @router.get(
@@ -358,12 +305,7 @@ def get_gui_trace(
     gui_trace_id: UUID,
     session: SessionDep,
 ) -> GUITrace:
-    gtrace = session.get(GUITrace, gui_trace_id)
-    if not gtrace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="GUITrace not found"
-        )
-    return gtrace
+    return get_or_404(session, GUITrace, gui_trace_id)
 
 
 @router.delete(
@@ -375,12 +317,7 @@ def delete_gui_trace(
     gui_trace_id: UUID,
     session: SessionDep,
 ) -> None:
-    gtrace = session.get(GUITrace, gui_trace_id)
-    if not gtrace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="GUITrace not found"
-        )
-    _delete(session, gtrace)
+    _delete(session, get_or_404(session, GUITrace, gui_trace_id))
 
 
 @router.get(
@@ -389,9 +326,7 @@ def delete_gui_trace(
 def list_tool_traces(
     session: SessionDep, robot_exception_id: RobotExceptionFilter = None
 ) -> Sequence[ToolTrace]:
-    return (
-        session.exec(_traces_of_recovery(ToolTrace, robot_exception_id)).unique().all()
-    )
+    return _list_traces(session, ToolTrace, robot_exception_id)
 
 
 @router.get(
@@ -403,12 +338,7 @@ def get_tool_trace(
     tool_trace_id: UUID,
     session: SessionDep,
 ) -> ToolTrace:
-    ttrace = session.get(ToolTrace, tool_trace_id)
-    if not ttrace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="ToolTrace not found"
-        )
-    return ttrace
+    return get_or_404(session, ToolTrace, tool_trace_id)
 
 
 @router.delete(
@@ -420,12 +350,7 @@ def delete_tool_trace(
     tool_trace_id: UUID,
     session: SessionDep,
 ) -> None:
-    ttrace = session.get(ToolTrace, tool_trace_id)
-    if not ttrace:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="ToolTrace not found"
-        )
-    _delete(session, ttrace)
+    _delete(session, get_or_404(session, ToolTrace, tool_trace_id))
 
 
 @router.get(
@@ -460,12 +385,7 @@ def get_robot_exception(
     exception_id: UUID,
     session: SessionDep,
 ) -> RobotException:
-    rex = session.get(RobotException, exception_id)
-    if not rex:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="RobotException not found"
-        )
-    return rex
+    return get_or_404(session, RobotException, exception_id)
 
 
 @router.delete(
@@ -477,12 +397,7 @@ def delete_robot_exception(
     exception_id: UUID,
     session: SessionDep,
 ) -> None:
-    rex = session.get(RobotException, exception_id)
-    if not rex:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="RobotException not found"
-        )
-    _delete(session, rex)
+    _delete(session, get_or_404(session, RobotException, exception_id))
 
 
 @router.get(
