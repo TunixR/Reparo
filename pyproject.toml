@@ -35,12 +35,95 @@ dependencies = [
 dev = [
     "bandit>=1.9.3",
     "basedpyright>=1.39.9",
+    "complexipy>=9.0.0",
+    "deptry>=0.25.1",
+    "import-linter>=2.17",
+    "jscpd>=5.4.3",
     "ruff>=0.17.5",
+    "vulture>=2.16",
 ]
 temp = [
     "opencv-python-headless>=5.1.0.95",
     "scikit-image>=0.25.2",
 ]
+
+[tool.ruff.lint]
+# On top of ruff's default rule set. Each family is here for what review would otherwise catch.
+extend-select = [
+    "ARG",      # arguments nothing reads
+    "ASYNC",    # blocking calls and timeouts in async code
+    "B",        # likely bugs (the bugbear rules the defaults leave out)
+    "DTZ",      # datetimes without a timezone
+    "ERA",      # commented-out code
+    "PERF",     # needless work in loops
+    "PGH",      # blanket `# type: ignore` and `# noqa`: a suppression names its rule
+    "PIE",      # needless code
+    "PLC0415",  # imports inside functions, the usual patch over an import cycle
+    "PLR0915",  # functions too long to read
+    "PLR1714",  # repeated equality comparisons
+    "PLW",      # constructs that are probably mistakes
+    "RET",      # needless return and else
+    "RUF",      # ruff's own checks, with unused `# noqa` (RUF100) and dangling tasks (RUF006)
+    "SIM",      # code that has a simpler form
+    "SLF",      # reaching into another object's private members
+    "T20",      # print and pprint left behind
+    "TRY300",   # a return inside try that belongs in else
+    "TRY400",   # logging.error where logging.exception keeps the traceback
+]
+
+[tool.ruff.lint.per-file-ignores]
+# By design: fixtures and mocks take arguments they don't read, and tests reach into internals.
+"tests/**" = ["ARG", "SLF001", "PLC0415", "PLR0915"]
+# By design: command-line programs print.
+"evals/**" = ["T201"]
+"scripts/**" = ["T201"]
+"populate.py" = ["T201"]
+"database/populators/**" = ["T201"]
+".github/scripts/**" = ["T201"]
+# By design: Alembic writes its operations as comments.
+"migrations/**" = ["ERA001"]
+# Debt: what these files broke when the rules above were turned on. Fix a file, then delete its
+# line; never add one. New code follows the rules.
+".github/scripts/conventions.py" = ["PLW2901"]
+"agent_tools/hooks.py" = ["ARG002", "PLC0415", "RET505", "RUF021"]
+"agent_tools/image.py" = ["ASYNC109", "B904", "ERA001", "RET504", "TRY300"]
+"database/agent_graphs/conditions.py" = ["ARG002"]
+"database/agents/behaviours/base.py" = ["SIM910"]
+"database/agents/behaviours/gui/base.py" = ["ARG002", "PGH003", "TRY300"]
+"database/agents/behaviours/gui/shared.py" = ["SIM105"]
+"database/logging/models.py" = ["B007", "PLR0915"]
+"database/logging/orm_events.py" = ["RUF006"]
+"database/populators/tools.py" = ["SLF001"]
+"database/provider/models.py" = ["PLR1714", "RET504", "RET505"]
+"database/tools/models.py" = ["B904"]
+"evals/agents.py" = ["ASYNC240", "ERA001", "PLC0415"]
+"evals/dataset.py" = ["B905"]
+"evals/evaluators.py" = ["PLC0415"]
+"evals/mocks.py" = ["ARG001"]
+"evals/run_filter_eval.py" = ["RET504"]
+"evals/run_recovery_eval.py" = ["ERA001", "PLC0415"]
+"evals/run_task_eval.py" = ["RET504"]
+"main.py" = ["ARG001"]
+"middlewares/auth.py" = ["B904"]
+"migrations/versions/0008_ui_recovery_default_graph.py" = ["T201"]
+"observability/__init__.py" = ["PLC0415", "PLW0603"]
+"observability/instrumentation/genai.py" = ["SLF001"]
+"observability/logging.py" = ["PLC0415"]
+"observability/tracing.py" = ["PLC0415"]
+"routers/recovery.py" = ["PLR0915"]
+"routers/tools.py" = ["RET504"]
+"s3/utils.py" = ["RET504", "TRY300"]
+"scripts/recovery_ws_client/__init__.py" = ["PLC0415"]
+"scripts/recovery_ws_client/actions.py" = ["B904", "PLR0915"]
+"scripts/recovery_ws_client/runner.py" = ["TRY300"]
+"scripts/recovery_ws_test_client.py" = ["ERA001", "TRY300"]
+"security/utils.py" = ["RET504"]
+"tests/unit/agent_tools/test_image_tools.py" = ["ERA001"]
+"tests/unit/agent_tools/test_limit_tool_counts.py" = ["ERA001"]
+"tests/unit/database/agents/test_agent.py" = ["RUF043"]
+"tests/unit/database/populators/test_routers.py" = ["RUF043"]
+"tests/unit/routers/test_evals_continuation.py" = ["PLW0108"]
+"tests/unit/security/test_utils.py" = ["DTZ005"]
 
 [tool.bandit]
 exclude_dirs = ["tests", "migrations", ".venv", "evals"]
@@ -61,3 +144,172 @@ reportCallInDefaultInitializer = false
 # Only errors fail the check, as `--level error` intends. Under GitHub Actions basedpyright still
 # counts warnings (as annotations) and would fail on them otherwise.
 failOnWarnings = false
+
+[tool.deptry]
+# Compares the imports in the code with the dependencies declared above.
+
+[tool.deptry.per_rule_ignores]
+# DEP002, a declared dependency nothing imports. By design: SQLAlchemy loads psycopg2 from the
+# database URL. Debt: the test runner and its plugins belong in the dev group, and nothing uses
+# strands-agents-tools.
+DEP002 = ["psycopg2-binary", "pytest", "pytest-asyncio", "pytest-cov", "strands-agents-tools"]
+# DEP003, an import of a package only another dependency brings in. Debt: declare each of these,
+# then delete it here.
+DEP003 = [
+    "botocore",
+    "dotenv",
+    "jwt",
+    "pydantic",
+    "pydantic_core",
+    "requests",
+    "sqlalchemy",
+    "starlette",
+    "tenacity",
+]
+
+[tool.importlinter]
+# Which package may import which. The top-level modules (main, populate, settings, config) are
+# not packages, so the contracts don't cover them.
+root_packages = [
+    "routers",
+    "evals",
+    "scripts",
+    "middlewares",
+    "database",
+    "agent_tools",
+    "observability",
+    "robot",
+    "security",
+    "s3",
+    "templates",
+    "gateway",
+    "modules",
+]
+
+[[tool.importlinter.contracts]]
+name = "Packages import downwards only"
+type = "layers"
+# A package imports only from the rows below its own. Packages on one row (joined by `:`) may
+# import each other.
+layers = [
+    "routers : evals : scripts",
+    "middlewares",
+    "database",
+    "agent_tools : observability",
+    "robot : security : s3",
+    "templates",
+]
+# Debt: the upward imports that existed when this contract was written. They are what makes
+# `database` and these two packages depend on each other. Remove an import, then delete its line
+# (a line that matches nothing fails the check); never add one.
+ignore_imports = [
+    "agent_tools.hooks -> database.agent_graphs.runner",
+    "agent_tools.hooks -> database.engine",
+    "agent_tools.hooks -> database.logging.models",
+    "observability.instrumentation.agent_graph -> database.agent_graphs.runner",
+    "observability.instrumentation.recovery -> database.logging.models",
+]
+
+[[tool.importlinter.contracts]]
+name = "No import cycles inside a package"
+type = "acyclic_siblings"
+# The modules and subpackages inside each of these must not import each other in a circle.
+ancestors = [
+    "routers",
+    "evals",
+    "scripts",
+    "middlewares",
+    "database",
+    "agent_tools",
+    "observability",
+    "robot",
+    "security",
+    "s3",
+    "templates",
+]
+# Debt: the imports that close the cycles in `database` today. Same rule as above.
+ignore_imports = [
+    "database.agent_graphs.runner -> database.agent_graphs.models",
+    "database.agent_graphs.runner -> database.logging.agent_graph_tracing",
+    "database.agents.behaviours.base -> database.agent_graphs.runner",
+]
+
+[tool.vulture]
+# Functions, classes, attributes and variables nothing uses. The tests count as users.
+paths = ["."]
+# scripted_model.py: its `raise` before `yield` is how a stub becomes an async generator.
+exclude = [".venv/", "migrations/", "tests/unit/shared/scripted_model.py"]
+min_confidence = 60
+# By design: the framework calls what these decorate.
+ignore_decorators = [
+    "@router.*",
+    "@app.*",
+    "@*.fixture",
+    "@tool",
+    "@field_validator",
+    "@model_validator",
+    "@field_serializer",
+    "@computed_field",
+    "@event.listens_for",
+    "@validates",
+    "@compiles",
+    "@override",
+]
+ignore_names = [
+    # By design: names a framework or a protocol reads.
+    "model_config",        # pydantic
+    "cache_ok",            # SQLAlchemy TypeDecorator: attributes, methods and their signatures
+    "dialect",
+    "impl",
+    "process_bind_param",
+    "process_result_value",
+    "pytest_plugins",      # pytest
+    "pytestmark",
+    "exc_type",            # __exit__ and __aexit__ signatures
+    "tb",
+    "__getattr__",         # module-level attribute hook
+    "ROUTER_*",            # settings named by database/populators/routers.json
+    "PROVIDER_*",
+    "resume",              # set on a Strands event
+    "FAILSAFE",            # set on pyautogui
+    "_tracer_instance",    # set on the Strands tracer
+    "MINIMAL",             # enum members stored by value
+    "LOW",
+    "agent_graph_trace",   # ORM relationships and foreign keys
+    "agent_graph_trace_id",
+    "agent_graph_traces",
+    "graph_nodes",
+    "recovery_context_id",
+    "contract_version",    # fields of the wire and of responses
+    "reflections",
+    "token_type",
+    "ts",
+    "_Second",             # tests: a class that must fail to define, fields and attributes of fakes
+    "commit_count",
+    "ignored_field",
+    "mock_s3client_model",
+    "severity",
+    "tags",
+    # Debt: nothing uses these. Delete the code or use it, then delete its line; never add one.
+    "FakeMessageAddedEvent",
+    "HandlerMocks",
+    "MAX_ACTIONS_ALLOWED",
+    "MAX_UI_ACTION_RETRIES",
+    "OLLAMA_URL",
+    "RecoveryErroredActResponse",
+    "RecoveryUiLogEntryResponse",
+    "UserLogin",
+    "compare_images",
+    "constant_time_equals",
+    "identified_task",
+]
+
+[tool.complexipy]
+# Cognitive complexity: how hard a function's control flow is to follow. Functions already over
+# the limit are recorded in complexipy-snapshot.json; a new one, or a recorded one that gets
+# worse, fails. A recorded function that improves leaves the snapshot on the next run.
+paths = ["."]
+exclude = ["migrations/**"]
+max-complexity-allowed = 15
+failed = true
+

@@ -1,18 +1,25 @@
-# `pre-commit install` installs both hook types below.
+# `pre-commit install` installs both hook types below. CI runs the same hooks (lint.yml).
+# Every tool is a dev dependency, so uv.lock sets its version here, in CI and on the command line.
+# Each one is configured in pyproject.toml, except jscpd (.jscpd.json, .jscpd-tests.json).
 default_install_hook_types: [pre-commit, commit-msg]
 default_stages: [pre-commit]
 
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.14
+  - repo: local
     hooks:
       - id: ruff
         name: ruff (linter)
-        args: [--fix]
+        entry: uv run ruff check --force-exclude --fix
+        language: system
         types_or: [python, pyi]
+        require_serial: true
+
       - id: ruff-format
         name: ruff (formatter)
+        entry: uv run ruff format --force-exclude
+        language: system
         types_or: [python, pyi]
+        require_serial: true
 
   # Security linter
   - repo: https://github.com/PyCQA/bandit
@@ -32,6 +39,49 @@ repos:
         pass_filenames: false
         types: [python]
         stages: [pre-commit]
+
+      - id: import-linter
+        name: import-linter (package layers and import cycles)
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        files: '(\.py|^pyproject\.toml)$'
+
+      - id: deptry
+        name: deptry (imports match declared dependencies)
+        entry: uv run deptry .
+        language: system
+        pass_filenames: false
+        files: '(\.py|^pyproject\.toml|^uv\.lock)$'
+
+      - id: vulture
+        name: vulture (unused code)
+        entry: uv run vulture
+        language: system
+        pass_filenames: false
+        files: '(\.py|^pyproject\.toml)$'
+
+      - id: complexipy
+        name: complexipy (cognitive complexity)
+        entry: uv run complexipy
+        language: system
+        pass_filenames: false
+        files: '(\.py|^pyproject\.toml|^complexipy-snapshot\.json)$'
+
+      - id: jscpd
+        name: jscpd (duplicated code)
+        entry: uv run jscpd --no-colors
+        language: system
+        pass_filenames: false
+        files: '(\.py|^\.jscpd(-baseline)?\.json)$'
+
+      - id: jscpd-tests
+        name: jscpd (duplicated code in tests)
+        # Tests repeat their setup more than code should, so only longer blocks count.
+        entry: uv run jscpd --no-colors --config .jscpd-tests.json
+        language: system
+        pass_filenames: false
+        files: '(^tests/.*\.py|^\.jscpd-tests(-baseline)?\.json)$'
 
       - id: pytest-unit
         name: pytest (unit tests only)

@@ -34,7 +34,7 @@ uv sync --all-extras --frozen
 Pre-commit and CI expect these tools:
 - Lint + auto-fix + format (ruff):
 ```
-uv run ruff . --fix
+uv run ruff check . --fix && uv run ruff format .
 ```
 - Type-check (basedpyright):
 ```
@@ -44,6 +44,21 @@ uv run basedpyright -p pyproject.toml --level error
 ```
 uv run bandit -c pyproject.toml -r .
 ```
+- Static analysis, one tool per kind of finding. Each tool's rules and exceptions are in `pyproject.toml`:
+```
+uv run lint-imports   # which package may import which, and import cycles
+uv run deptry .       # imports match the declared dependencies
+uv run vulture        # code nothing uses
+uv run complexipy     # functions too tangled to follow (cognitive complexity)
+uv run jscpd          # copied code: repeated blocks, and functions that differ only in names (`.jscpd.json`)
+uv run jscpd --config .jscpd-tests.json   # long repeated blocks in tests
+```
+  When one fails, change the code. `pyproject.toml` holds debt lists (ruff's per-file ignores, the import
+  contracts' `ignore_imports`, the deptry and vulture ignores), `complexipy-snapshot.json` holds the
+  functions already over the limit, and the `.jscpd*-baseline.json` files hold the copies that already exist
+  (jscpd marks the others `[NEW]`). They only shrink: fix an entry, then delete it. `--update-baseline`
+  rewrites a jscpd baseline from the code, so run it when nothing is marked `[NEW]`. An exception that holds
+  by design goes next to the others of its kind, with its reason.
 - Run the full pre-commit suite locally:
 ```
 pre-commit run --all-files
@@ -109,7 +124,7 @@ revision (review it: autogenerate misses enum value changes and needs backfills 
 
 7) “Full verification” (recommended before PR)
 ```
-uv run ruff . --fix && uv run basedpyright -p pyproject.toml --level error && uv run bandit -c pyproject.toml -r . && uv run pytest tests/unit -q
+pre-commit run --all-files
 ```
 
 8) Code style (repo conventions)
@@ -165,8 +180,13 @@ Repo layout conventions (as seen in this codebase):
 - `bandit` excludes `tests/` and `migrations/` (see `[tool.bandit]` in `pyproject.toml`).
 
 12) Repo automation files (read before changing workflows)
-- `pyproject.toml`: dependencies + tool configuration (bandit, basedpyright).
-- `.pre-commit-config.yaml`: ruff, bandit, basedpyright, unit tests, and the commit-msg check.
+- `pyproject.toml`: dependencies + tool configuration (ruff, bandit, basedpyright, import-linter, deptry,
+  vulture, complexipy).
+- `.jscpd.json`, `.jscpd-tests.json`: jscpd configuration for the code and for the tests, each with its
+  `-baseline.json` of the copies that already exist.
+- `complexipy-snapshot.json`: the functions already over the complexity limit; complexipy rewrites it when one improves.
+- `.pre-commit-config.yaml`: ruff, bandit, basedpyright, the static analysis tools, unit tests, and the
+  commit-msg check.
 - `.github/workflows/unit-tests.yml`: CI uses `uv sync --all-extras --frozen` then `uv run pytest tests/unit -q`.
 - `.github/workflows/lint.yml`: runs the pre-commit hooks (except unit tests) in CI.
 - `.github/workflows/pr-title.yml`, `triage.yml`, `labels.yml`: PR-title check, automatic labels,
@@ -184,7 +204,7 @@ Repo layout conventions (as seen in this codebase):
 15) Agent workflow (practical default)
 1. `uv sync --all-extras --frozen`
 2. Make the smallest change that satisfies the request.
-3. `uv run ruff . --fix`
+3. `uv run ruff check . --fix`
 4. `uv run basedpyright -p pyproject.toml --level error`
 5. Run the narrowest relevant test(s) (`pytest` nodeid preferred).
 

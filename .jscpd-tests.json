@@ -1,0 +1,9 @@
+{
+  "path": ["tests"],
+  "format": ["python"],
+  "minLines": 10,
+  "minTokens": 100,
+  "baseline": ".jscpd-tests-baseline.json",
+  "failOnNewClones": 0,
+  "failOnEmpty": true
+}
