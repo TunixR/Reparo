@@ -105,3 +105,16 @@ knowingly leave one behind, add it here.
   for the same model, or another model that needs the tags, gets the wrong framing silently.
 - **What fixing it means:** a property of the router (like its `vision_backbone`), set when it is
   configured, that says how the model wants observations framed.
+
+## 11. Code the static analysis tools already complain about
+
+- **Where:** the debt lists in `pyproject.toml` (ruff's per-file ignores, the import contracts'
+  `ignore_imports`, the deptry and vulture entries marked as debt). complexipy and jscpd have no
+  list: `uv run complexipy` and `uv run jscpd` name the functions over the complexity limit and
+  the copied code.
+- **Why it's debt:** the tools were turned on without changing the code. The lists name what failed
+  that day (lint findings, imports against the package layers, import cycles in `database`, unused
+  code) and exempt it. Nothing exempts the tangled functions and the copied code, so the complexipy
+  and jscpd hooks fail until those are fixed.
+- **What fixing it means:** fix what an entry names and delete the entry, until the lists are empty;
+  untangle the functions and share the copied code until both hooks pass. Then this entry goes too.

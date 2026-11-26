@@ -1,0 +1,12 @@
+{
+  "path": ["."],
+  "format": ["python"],
+  "ignore": ["**/.venv/**", "**/migrations/**", "**/tests/**"],
+  "ignorePattern": [
+    "(?m)^(?:from|import) [^(\\n]*$",
+    "(?ms)^from [\\w.]+ import \\(.*?^\\)"
+  ],
+  "similarity": 0.8,
+  "exitCode": 1,
+  "failOnEmpty": true
+}

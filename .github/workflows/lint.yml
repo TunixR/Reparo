@@ -1,6 +1,6 @@
 name: Lint
-# Runs the pre-commit hooks (ruff, ruff-format, bandit, basedpyright) so CI enforces what local
-# hooks check. Unit tests run in unit-tests.yml.
+# Runs the pre-commit hooks, so CI enforces what local hooks check (.pre-commit-config.yaml lists
+# them). Unit tests run in unit-tests.yml.
 
 on:
   push:
