@@ -20,7 +20,7 @@ from agent_tools.utils import (
 )
 from database.agents.behaviours import GuiAgent, agent_types_of, behaviour_of
 from database.agents.models import Agent
-from database.engine import open_session
+from database.engine import open_session, update_by_id
 from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
@@ -47,7 +47,6 @@ from routers.recovery import (  # basedpyright: ignore[reportPrivateUsage]
     _persist_exception_with_context,
     _record_abort,
     _send_error_and_close,
-    _update_exception,
     _validate_payload_or_raise,
     find_enabled_robot_key,
 )
@@ -236,13 +235,15 @@ Process Model:
 
 @router.websocket("/recovery/ws")
 async def handle_recovery_eval(websocket: WebSocket) -> None:
-    # The agent's session ends its read transaction at once, so the eval holds no
-    # connection while it runs; the agent stays loaded and attached for the run.
+    # Everything the run reads off the agent is loaded first; then its session
+    # ends its read transaction, so the eval holds no connection while it runs.
     with open_session(expire_on_commit=False) as session:
         robot_key = find_enabled_robot_key(
             session, websocket.headers.get(ROBOT_KEY_HEADER)
         )
         agent = _get_valid_agent(websocket, session)
+        if agent is not None:
+            agent.load_tree()
         session.commit()
         await _accept_and_run_eval(websocket, robot_key, agent)
 
@@ -304,7 +305,7 @@ async def _run_eval_turn(
         )
         await robot.close()
 
-        _update_exception(exception, infered_success=result["success"])
+        update_by_id(RobotException, exception.id, infered_success=result["success"])
     except AbortedByRobot as exc:
         if exception is not None:
             _record_abort(exception, exc.abort)

@@ -14,10 +14,10 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 POSTGRES_URL = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 # The app engine's connection pool (database/engine.py). The defaults are SQLAlchemy's;
 # POSTGRES_POOL_RECYCLE is in seconds, -1 never recycles a connection for its age.
-POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "5"))
-POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "10"))
-POSTGRES_POOL_TIMEOUT = float(os.getenv("POSTGRES_POOL_TIMEOUT", "30"))
-POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE", "-1"))
+POSTGRES_POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE") or "5")
+POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW") or "10")
+POSTGRES_POOL_TIMEOUT = float(os.getenv("POSTGRES_POOL_TIMEOUT") or "30")
+POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE") or "-1")
 
 # LLM provider routers, seeded by populate.py from database/populators/routers.json.
 # PROVIDER (openrouter, openai or vllm), PROVIDER_API_BASE and PROVIDER_API_KEY are the defaults

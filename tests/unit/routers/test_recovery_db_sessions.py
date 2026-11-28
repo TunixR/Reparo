@@ -18,12 +18,12 @@ from sqlmodel import Session, select
 
 import routers.evals as evals_module
 from database.agent_graphs.models import AgentGraph
-from database.agent_graphs.runner import GraphOutcome, NodeRun
+from database.agent_graphs.runner import NodeRun
 from database.agents.behaviours import AgentBehaviour
-from database.agents.models import Agent
+from database.agents.models import Agent, AgentTool, SubAgent
 from database.logging.models import RobotException
 from database.provider.models import Router
-from robot.channel import RobotConnection
+from database.tools.models import Tool
 from tests.unit.fixtures.agent_graph_fixtures import MakeAgentGraph, Node
 from tests.unit.fixtures.robot_ws_fixtures import receive_skipping_pings
 
@@ -73,12 +73,40 @@ def robot_key(make_robot_key) -> None:  # pyright: ignore[reportMissingParameter
 @pytest.fixture
 def graph(
     robot_key: None,  # pyright: ignore[reportUnusedParameter]
+    session: Session,
     make_agent: Callable[..., Agent],
     mock_router: Router,
+    mock_tool: Tool,
     make_agent_graph: MakeAgentGraph,
 ) -> AgentGraph:
-    gateway = make_agent(router=mock_router, name="Gateway")
-    return make_agent_graph(Node("gateway", gateway))
+    """Gateway, then Report; the gateway calls Error, which calls a GUI agent with a tool.
+
+    The sub-agent of a sub-agent is past the reach of joined eager loading.
+    """
+    gateway, error, gui, report = (
+        make_agent(router=mock_router, name=name)
+        for name in ("Gateway", "Error", "GUI", "Report")
+    )
+    session.add_all(
+        [
+            SubAgent(parent_agent_id=gateway.id, child_agent_id=error.id),
+            SubAgent(parent_agent_id=error.id, child_agent_id=gui.id),
+            AgentTool(
+                agent_id=gui.id, tool_id=mock_tool.id, limit=None, required=False
+            ),
+        ]
+    )
+    session.commit()
+    return make_agent_graph(Node("gateway", gateway), Node("report", report))
+
+
+def _read_like_a_run(agent: Agent) -> list[str]:
+    """What a run reads off an agent and every agent below it: router, tools, sub-agents."""
+    return [
+        agent.router.model_name,
+        *(tool.name for tool in agent.get_tools()),
+        *(name for sub in agent.get_sub_agents() for name in _read_like_a_run(sub)),
+    ]
 
 
 @pytest.fixture
@@ -91,9 +119,8 @@ def node_holders(
     async def _node(
         self: AgentBehaviour, _state: dict[str, Any], _input_map: Mapping[str, str]
     ) -> NodeRun:
+        assert _read_like_a_run(self.agent)
         seen.append(holders.now())
-        # What the agents read off the graph's ORM objects is still loaded.
-        assert self.agent.router.model_name
         return NodeRun(output=_Report())
 
     monkeypatch.setattr(AgentBehaviour, "run_node", _node)
@@ -124,31 +151,6 @@ def test_no_connection_is_held_while_waiting_for_the_payload(
         assert receive_skipping_pings(ws)["type"] == "done"
 
 
-def test_no_connection_is_held_while_the_graph_runs(
-    client: TestClient,
-    holders: ConnectionHolders,
-    graph: AgentGraph,
-    valid_recovery_payload: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-):
-    seen: list[set[Session]] = []
-    names: list[str] = []
-
-    async def _run(self: AgentGraph, state: dict[str, Any]) -> GraphOutcome:
-        seen.append(holders.now())
-        names.append(self.name)
-        assert isinstance(state["websocket"], RobotConnection)
-        return GraphOutcome("gateway", None, 1)
-
-    monkeypatch.setattr(AgentGraph, "run", _run)
-
-    message = _recover(client, valid_recovery_payload)
-
-    assert message["type"] == "done"
-    assert seen == [set()]
-    assert names == [graph.name]
-
-
 def test_no_connection_is_held_while_a_node_runs(
     client: TestClient,
     session: Session,
@@ -159,7 +161,7 @@ def test_no_connection_is_held_while_a_node_runs(
     message = _recover(client, valid_recovery_payload)
 
     assert message["type"] == "done"
-    assert node_holders == [set()]
+    assert node_holders == [set(), set()]
     session.expire_all()
     exception = session.exec(select(RobotException)).one()
     assert exception.infered_success is False

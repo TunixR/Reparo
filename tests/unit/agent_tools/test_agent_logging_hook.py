@@ -8,27 +8,19 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from sqlalchemy import Engine
 from sqlmodel import Session, select
+from strands.types.content import ContentBlock
 
 from agent_tools.hooks import AgentLoggingHook
 from database.logging.models import AgentTrace, GUITrace, SubAgentTrace
 from tests.unit.agent_tools._shared.fakes import (
     FakeBeforeInvocationEvent,
+    FakeMessageAddedEvent,
     FakeRegistry,
     is_bound_method_of,
 )
 from tests.unit.shared.sql_statements import recorded_statements, touching
 
-
-@pytest.fixture(autouse=True)
-def _app_engine(app_engine: Engine) -> Engine:  # pyright: ignore[reportUnusedFunction]
-    return app_engine
-
-
-class MsgEvt:
-    """A minimal MessageAddedEvent: the hook only reads its message."""
-
-    def __init__(self, message: dict[str, Any]):
-        self.message = message
+pytestmark = pytest.mark.usefixtures("app_engine")
 
 
 def _stored_trace(engine: Engine, trace_id: UUID) -> AgentTrace | None:
@@ -132,8 +124,12 @@ def test_log_message_updates_trace_output_and_finished(engine: Engine):
     hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={"inputs": {}})
     hook.log_start(FakeBeforeInvocationEvent())
 
-    hook.log_message(MsgEvt({"role": "assistant", "content": [{"text": "Hello"}]}))  # pyright: ignore[reportArgumentType]
-    hook.log_message(MsgEvt({"role": "user", "content": [{"text": "Hi!"}]}))  # pyright: ignore[reportArgumentType]
+    hook.log_message(
+        FakeMessageAddedEvent({"role": "assistant", "content": [{"text": "Hello"}]})
+    )
+    hook.log_message(
+        FakeMessageAddedEvent({"role": "user", "content": [{"text": "Hi!"}]})
+    )
 
     trace = _stored_trace(engine, hook.agent_trace_id)
     assert isinstance(trace, AgentTrace)
@@ -159,7 +155,9 @@ def test_each_message_is_one_update_and_no_select(engine: Engine):
 
     with recorded_statements(engine) as statements:
         for n in range(5):
-            hook.log_message(MsgEvt({"role": "user", "content": [{"text": str(n)}]}))  # pyright: ignore[reportArgumentType]
+            hook.log_message(
+                FakeMessageAddedEvent({"role": "user", "content": [{"text": str(n)}]})
+            )
         hook.update_trace(finished=True)
 
     assert touching(statements, "SELECT", "agenttrace") == []
@@ -170,7 +168,7 @@ def test_each_message_is_one_update_and_no_select(engine: Engine):
 def test_update_trace_without_its_trace_raises():
     hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={})
 
-    with pytest.raises(RuntimeError, match="not found"):
+    with pytest.raises(LookupError, match="not found"):
         hook.update_trace()
 
 
@@ -220,7 +218,7 @@ async def test_register_gui_trace_fills_the_pending_image(
 ):
     hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={"inputs": {}})
     hook.log_start(FakeBeforeInvocationEvent())
-    hook.log_message(MsgEvt({"role": "user", "content": content}))  # pyright: ignore[reportArgumentType]
+    hook.log_message(FakeMessageAddedEvent({"role": "user", "content": content}))
 
     def logged_image() -> dict[str, Any]:
         [part] = hook.messages[-1]["content"]
@@ -249,8 +247,8 @@ async def test_register_gui_trace_fills_the_pending_image(
 async def test_a_gui_step_is_one_insert_and_one_trace_update(engine: Engine):
     hook = AgentLoggingHook(agent_id=uuid4(), invocation_state={"inputs": {}})
     hook.log_start(FakeBeforeInvocationEvent())
-    image = {"image": {"format": "jpeg", "source": {"bytes": b"..."}}}
-    hook.log_message(MsgEvt({"role": "user", "content": [image]}))  # pyright: ignore[reportArgumentType]
+    image: ContentBlock = {"image": {"format": "jpeg", "source": {"bytes": b"..."}}}
+    hook.log_message(FakeMessageAddedEvent({"role": "user", "content": [image]}))
 
     with recorded_statements(engine) as statements:
         await hook.register_gui_trace(
@@ -261,6 +259,6 @@ async def test_a_gui_step_is_one_insert_and_one_trace_update(engine: Engine):
             finished_at=datetime.now(UTC),
         )
 
-    assert [s for s in statements if s.startswith("SELECT")] == []
+    assert touching(statements, "SELECT") == []
     assert len(touching(statements, "INSERT", "guitrace")) == 1
     assert len(touching(statements, "UPDATE", "agenttrace")) == 1

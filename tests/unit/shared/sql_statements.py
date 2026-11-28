@@ -24,6 +24,6 @@ def recorded_statements(engine: Engine) -> Iterator[list[str]]:
         event.remove(engine, "before_cursor_execute", _record)
 
 
-def touching(statements: list[str], verb: str, table: str) -> list[str]:
-    """The statements that start with ``verb`` and name ``table``."""
+def touching(statements: list[str], verb: str, table: str = "") -> list[str]:
+    """The statements that start with ``verb`` and name ``table``, or any table."""
     return [s for s in statements if s.startswith(verb) and table.upper() in s]

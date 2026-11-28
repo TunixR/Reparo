@@ -21,7 +21,7 @@ from strands.types.content import ContentBlock, Message
 from strands.types.tools import ToolResultContent
 
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
-from database.engine import open_session, update_row
+from database.engine import open_session, update_by_id, update_row
 from database.logging.models import (
     PENDING_IMAGE_UUID,
     AgentGraphNodeTrace,
@@ -235,17 +235,13 @@ class ToolLoggingHook(HookProvider):
             output = next(iter(event.result.get("content", [])), {}).get("text", "")
             success = True
 
-        with open_session() as session:
-            if not update_row(
-                session,
-                ToolTrace,
-                self.trace_id,
-                output=output,
-                success=success,
-                finished_at=datetime.now(UTC),
-            ):
-                raise RuntimeError(f"ToolTrace with id {self.trace_id} not found.")
-            session.commit()
+        update_by_id(
+            ToolTrace,
+            self.trace_id,
+            output=output,
+            success=success,
+            finished_at=datetime.now(UTC),
+        )
 
 
 class AgentLoggingHook(HookProvider):
@@ -361,12 +357,7 @@ class AgentLoggingHook(HookProvider):
         values: dict[str, object] = {"messages": self.messages}
         if finished:
             values |= {"finished_at": datetime.now(UTC), "cost": cost}
-        with open_session() as session:
-            if not update_row(session, AgentTrace, self.agent_trace_id, **values):
-                raise RuntimeError(
-                    f"AgentTrace with id {self.agent_trace_id} not found."
-                )
-            session.commit()
+        update_by_id(AgentTrace, self.agent_trace_id, **values)
 
     async def register_gui_trace(
         self,
@@ -386,15 +377,13 @@ class AgentLoggingHook(HookProvider):
             created_at=started_at,
             finished_at=finished_at,
         )
-        # Read before the commit expires it: the key is set by the upload, not the database.
-        screenshot_key = str(gui_trace.screenshot_key)
-        with open_session() as session:
+        with open_session(expire_on_commit=False) as session:
             session.add(gui_trace)
             session.commit()
 
         # Messages are logged before their screenshot's GUI trace is saved, so the
         # latest image still pending gets the S3 uuid of the screenshot now.
-        if self._fill_pending_image(screenshot_key):
+        if self._fill_pending_image(str(gui_trace.screenshot_key)):
             self.update_trace()
 
     def _fill_pending_image(self, image_uuid: str) -> bool:

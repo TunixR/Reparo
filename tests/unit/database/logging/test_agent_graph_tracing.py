@@ -15,15 +15,11 @@ from database.logging.models import (
     AgentGraphTrace,
     AgentGraphTraceStatus,
 )
-from tests.unit.shared.sql_statements import recorded_statements
+from tests.unit.shared.sql_statements import recorded_statements, touching
 
 
 class _Answer(BaseModel):
     success: bool = True
-
-
-def _selects(statements: list[str]) -> list[str]:
-    return [s for s in statements if s.startswith("SELECT")]
 
 
 def test_a_traced_run_writes_without_reading(app_engine: Engine):
@@ -33,7 +29,7 @@ def test_a_traced_run_writes_without_reading(app_engine: Engine):
             pass
         run_trace.close(GraphOutcome("gateway", None, 1), _Answer())
 
-    assert _selects(statements) == []
+    assert touching(statements, "SELECT") == []
     assert [s.split()[0] for s in statements] == [
         "INSERT",
         "INSERT",
@@ -68,7 +64,8 @@ def test_a_failed_node_and_run_are_traced_as_failed(app_engine: Engine):
         assert node.error == "ValueError: bad output"
 
 
-def test_closing_a_trace_that_is_gone_raises(app_engine: Engine):  # pyright: ignore[reportUnusedParameter]
+@pytest.mark.usefixtures("app_engine")
+def test_closing_a_trace_that_is_gone_raises():
     run_trace = AgentGraphRunTrace(uuid4())
 
     with pytest.raises(LookupError):

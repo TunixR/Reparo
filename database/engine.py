@@ -70,6 +70,14 @@ def update_row(
     return session.exec(statement).rowcount == 1
 
 
+def update_by_id(model: type[SQLModel], row_id: UUID, **values: object) -> None:
+    """`update_row` in a session of its own, committed; raises `LookupError` if the row is gone."""
+    with open_session() as session:
+        if not update_row(session, model, row_id, **values):
+            raise LookupError(f"{model.__name__} {row_id} not found.")
+        session.commit()
+
+
 def commit_or_500(session: Session, action: str) -> None:
     """Commit, or roll back and raise a generic 500.
 

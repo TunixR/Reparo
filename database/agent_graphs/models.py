@@ -135,7 +135,7 @@ class AgentGraph(SQLModel, table=True):
         session = object_session(self)
         if session is None:
             return all(node.agent.enabled for node in self.nodes)
-        return not self._disabled_agents(session)
+        return not self._any_agent_disabled(session)
 
     def _still_runnable(self) -> bool:
         """`can_run`, read in a short session of its own.
@@ -147,12 +147,13 @@ class AgentGraph(SQLModel, table=True):
         session = object_session(self)
         if session is None:
             return self.can_run
+        # On the graph's own engine, the one it was loaded from.
         with Session(session.get_bind()) as check:
-            return not self._disabled_agents(check)
+            return not self._any_agent_disabled(check)
 
-    def _disabled_agents(self, session: OrmSession) -> int:
-        """How many of the nodes' agents the database has disabled now."""
-        return (
+    def _any_agent_disabled(self, session: OrmSession) -> bool:
+        """Whether the database has any of the nodes' agents disabled now."""
+        return bool(
             session.scalar(
                 select(func.count())
                 .select_from(Agent)
@@ -161,7 +162,6 @@ class AgentGraph(SQLModel, table=True):
                     col(Agent.enabled).is_(False),
                 )
             )
-            or 0
         )
 
     def recovery_gaps(self) -> list[str]:

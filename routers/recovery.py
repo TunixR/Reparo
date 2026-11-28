@@ -29,7 +29,7 @@ from database.agent_graphs.runner import (
     AgentGraphContext,
     GraphOutcome,
 )
-from database.engine import open_session, update_row
+from database.engine import open_session, update_by_id
 from database.keys.models import RobotKey
 from database.logging.agent_graph_tracing import AgentGraphRunTrace
 from database.logging.models import RecoveryContext, RobotException
@@ -172,17 +172,11 @@ def _persist_exception_with_context(
     return exception
 
 
-def _update_exception(exception: RobotException, **values: object) -> None:
-    """Store ``values`` on the recovery's exception, in a session of its own."""
-    with open_session() as session:
-        _ = update_row(session, RobotException, exception.id, **values)
-        session.commit()
-
-
 def _record_abort(exception: RobotException, abort: RobotAbort) -> None:
     """Store a robot abort on its recovery, which ends as failed."""
-    _update_exception(
-        exception,
+    update_by_id(
+        RobotException,
+        exception.id,
         abort_code=abort.error_code,
         abort_description=abort.error_description,
         infered_success=False,
@@ -296,13 +290,15 @@ async def _run_agent_graph(
             recovery_inputs=_recovery_inputs(recovery_context), trace=run_trace
         ),
     }
-    # The graph's session ends its read transaction before the run, which returns
-    # its connection to the pool for the minutes the run lasts. The graph stays
-    # loaded and attached, so what the run reads off it needs no new query.
+    # Everything the run reads is loaded first; then the graph's session ends its
+    # read transaction, returning its connection to the pool for the minutes the
+    # run lasts. The graph stays attached for the per-node enabled check.
     with open_session(expire_on_commit=False) as session:
         graph = session.get(AgentGraph, graph_id)
         if graph is None:
             raise LookupError(f"The agent graph {graph_id} is gone.")
+        for node in graph.nodes:
+            node.agent.load_tree()
         session.commit()
         outcome = await graph.run(invocation_state)
     return outcome, invocation_state
@@ -366,7 +362,7 @@ async def _recover_and_answer(
     )
     await robot.close()
 
-    _update_exception(exception, infered_success=success)
+    update_by_id(RobotException, exception.id, infered_success=success)
     turn.completed(success)
 
 

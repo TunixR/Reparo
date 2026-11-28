@@ -13,10 +13,7 @@ from tests.unit.agent_tools._shared.fakes import (
 )
 from tests.unit.shared.sql_statements import recorded_statements, touching
 
-
-@pytest.fixture(autouse=True)
-def _app_engine(app_engine: Engine) -> Engine:  # pyright: ignore[reportUnusedFunction]
-    return app_engine
+pytestmark = pytest.mark.usefixtures("app_engine")
 
 
 def _stored(engine: Engine, trace_id: UUID) -> ToolTrace | None:
@@ -114,5 +111,5 @@ def test_log_tool_response_without_its_trace_raises():
     hook = ToolLoggingHook(agent_trace_id=uuid4(), tools={"tool_x": uuid4()})
     hook.trace_id = uuid4()
 
-    with pytest.raises(RuntimeError, match="not found"):
+    with pytest.raises(LookupError, match="not found"):
         hook.log_tool_response(FakeAfterToolCallEvent("tool_x", exception=None))

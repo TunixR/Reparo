@@ -125,10 +125,10 @@ knowingly leave one behind, add it here.
 - **Where:** `AgentLoggingHook.update_trace` in `agent_tools/hooks.py`, and `AgentTrace.messages`
   in `database/logging/models.py`.
 - **Why it's debt:** every message an agent adds writes the whole list again, so a run of n
-  messages writes O(n²) data. Appending in SQL (`messages || :new`) wouldn't help much: Postgres
-  rewrites a whole JSONB value on any change, and an earlier message still changes when its
-  screenshot's S3 uuid is filled in. The write is one UPDATE without a read, which is as cheap as
-  this layout allows.
+  messages writes O(n²) data. Appending in SQL (`messages || :new`) would only cut the JSON
+  encoding and the bytes sent, not the write: Postgres rewrites a whole JSONB value on any change,
+  and an earlier message still changes when its screenshot's S3 uuid is filled in, which needs a
+  full rewrite. The write is one UPDATE without a read.
 - **What fixing it means:** store each message as a row of its own (agent trace, position,
   content), inserted once and updated only to fill in a screenshot, with a migration of the
   existing lists and of the readers (`routers/logging.py`, the markdown export).
