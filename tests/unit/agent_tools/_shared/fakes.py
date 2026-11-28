@@ -8,7 +8,9 @@ from strands.hooks import (
     AfterToolCallEvent,
     BeforeInvocationEvent,
     BeforeToolCallEvent,
+    MessageAddedEvent,
 )
+from strands.types.content import Message
 from strands.types.tools import ToolResult
 
 
@@ -33,6 +35,13 @@ class FakeBeforeInvocationEvent(BeforeInvocationEvent):
 
     def __init__(self):  # pyright: ignore[reportMissingSuperCall]
         self.agent = Agent()
+
+
+class FakeMessageAddedEvent(MessageAddedEvent):
+    """Fake event for a message added to the conversation; hooks read its message only."""
+
+    def __init__(self, message: Message):  # pyright: ignore[reportMissingSuperCall]
+        self.message = message
 
 
 class FakeBeforeToolCallEvent(BeforeToolCallEvent):

@@ -15,7 +15,7 @@ from fastapi import (
 )
 from opentelemetry import trace
 from pydantic import BaseModel, ValidationError
-from sqlmodel import select
+from sqlmodel import Session, select
 
 import database.general as database
 from agent_tools.utils import (
@@ -29,6 +29,7 @@ from database.agent_graphs.runner import (
     AgentGraphContext,
     GraphOutcome,
 )
+from database.engine import open_session, update_by_id
 from database.keys.models import RobotKey
 from database.logging.agent_graph_tracing import AgentGraphRunTrace
 from database.logging.models import RecoveryContext, RobotException
@@ -80,9 +81,7 @@ class RecoveryWsErrorResponse(TemplateModel):
     content: str
 
 
-def find_enabled_robot_key(
-    session: database.SessionDep, key_raw: str | None
-) -> RobotKey | None:
+def find_enabled_robot_key(session: Session, key_raw: str | None) -> RobotKey | None:
     """Return the enabled robot key matching a raw key, if any."""
     if not key_raw:
         return None
@@ -153,31 +152,35 @@ async def _send_error_and_close(
 
 
 def _persist_exception_with_context(
-    session: database.SessionDep,
     data: dict[str, Any],
     robot_key: RobotKey,
     recovery_context: RecoveryContext,
-):
+) -> RobotException:
+    """Save the exception and its recovery context, in a session of its own.
+
+    Both stay readable afterwards: every column is set in Python, so nothing is
+    read back.
+    """
     exception = RobotException(
         exception_details=data,
         robot_key_id=robot_key.id,
     )
     exception.recovery_context = recovery_context
-    session.add(exception)
-    session.commit()
-    session.refresh(exception)
+    with open_session(expire_on_commit=False) as session:
+        session.add(exception)
+        session.commit()
     return exception
 
 
-def _record_abort(
-    session: database.SessionDep, exception: RobotException, abort: RobotAbort
-) -> None:
+def _record_abort(exception: RobotException, abort: RobotAbort) -> None:
     """Store a robot abort on its recovery, which ends as failed."""
-    exception.abort_code = abort.error_code
-    exception.abort_description = abort.error_description
-    exception.infered_success = False
-    session.add(exception)
-    session.commit()
+    update_by_id(
+        RobotException,
+        exception.id,
+        abort_code=abort.error_code,
+        abort_description=abort.error_description,
+        infered_success=False,
+    )
 
 
 def _build_answer(
@@ -270,7 +273,6 @@ def _recovery_inputs(recovery_context: RecoveryContext) -> dict[str, Any]:
 
 
 async def _run_agent_graph(
-    session: database.SessionDep,
     graph_id: UUID,
     robot: RobotConnection,
     exception: RobotException,
@@ -288,10 +290,17 @@ async def _run_agent_graph(
             recovery_inputs=_recovery_inputs(recovery_context), trace=run_trace
         ),
     }
-    graph = session.get(AgentGraph, graph_id)
-    if graph is None:
-        raise LookupError(f"The agent graph {graph_id} is gone.")
-    outcome = await graph.run(invocation_state)
+    # Everything the run reads is loaded first; then the graph's session ends its
+    # read transaction, returning its connection to the pool for the minutes the
+    # run lasts. The graph stays attached for the per-node enabled check.
+    with open_session(expire_on_commit=False) as session:
+        graph = session.get(AgentGraph, graph_id)
+        if graph is None:
+            raise LookupError(f"The agent graph {graph_id} is gone.")
+        for node in graph.nodes:
+            node.agent.load_tree()
+        session.commit()
+        outcome = await graph.run(invocation_state)
     return outcome, invocation_state
 
 
@@ -317,7 +326,6 @@ async def _receive_recovery_context(
 
 async def _recover_and_answer(
     robot: RobotConnection,
-    session: database.SessionDep,
     graph_id: UUID,
     exception: RobotException,
     recovery_context: RecoveryContext,
@@ -330,7 +338,6 @@ async def _recover_and_answer(
     try:
         outcome, invocation_state = await robot.run(
             _run_agent_graph(
-                session,
                 graph_id,
                 robot,
                 exception,
@@ -355,18 +362,22 @@ async def _recover_and_answer(
     )
     await robot.close()
 
-    exception.infered_success = success
-    session.add(exception)
-    session.commit()
+    update_by_id(RobotException, exception.id, infered_success=success)
     turn.completed(success)
 
 
 @router.websocket("/robot_exception/ws")
-async def handle_robot_exception(websocket: WebSocket, session: database.SessionDep):
+async def handle_robot_exception(websocket: WebSocket):
     """
     Passes the exception to the robot exception handler for processing.
+
+    The connection lives for the whole recovery, so it takes no request-scoped
+    session: each database step opens and closes its own.
     """
-    robot_key = find_enabled_robot_key(session, websocket.headers.get(ROBOT_KEY_HEADER))
+    with open_session() as session:
+        robot_key = find_enabled_robot_key(
+            session, websocket.headers.get(ROBOT_KEY_HEADER)
+        )
     if not robot_key:
         telemetry.auth_failed(websocket.client)
         raise WebSocketDisconnect(code=1008, reason="Invalid robot key")
@@ -375,12 +386,11 @@ async def handle_robot_exception(websocket: WebSocket, session: database.Session
 
     with telemetry.recovery_turn(tracer, robot_key.id) as turn:
         async with RobotConnection(websocket) as robot:
-            await _run_recovery_turn(robot, session, robot_key, turn)
+            await _run_recovery_turn(robot, robot_key, turn)
 
 
 async def _run_recovery_turn(
     robot: RobotConnection,
-    session: database.SessionDep,
     robot_key: RobotKey,
     turn: telemetry.RecoveryTurnTelemetry,
 ) -> None:
@@ -393,7 +403,8 @@ async def _run_recovery_turn(
     try:
         data, recovery_context = await _receive_recovery_context(robot, turn)
 
-        graph_id = AgentGraph.default_recovery_id(session)
+        with open_session() as session:
+            graph_id = AgentGraph.default_recovery_id(session)
         if graph_id is None:
             raise RecoveryWsDomainError(
                 code=NO_AGENT_GRAPH,
@@ -404,17 +415,15 @@ async def _run_recovery_turn(
 
         with turn.persisting():
             exception = _persist_exception_with_context(
-                session, data, robot_key, recovery_context
+                data, robot_key, recovery_context
             )
         turn.persisted(exception.id)
 
-        await _recover_and_answer(
-            robot, session, graph_id, exception, recovery_context, turn
-        )
+        await _recover_and_answer(robot, graph_id, exception, recovery_context, turn)
     except AbortedByRobot as exc:
         # No ``done``: the recovery, if there is one, fails with the robot's reason.
         if exception is not None:
-            _record_abort(session, exception, exc.abort)
+            _record_abort(exception, exc.abort)
         turn.robot_aborted(exc.abort)
         await robot.close(ABORT_CLOSE_CODE)
     except WebSocketDisconnect:
