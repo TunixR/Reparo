@@ -87,7 +87,7 @@ def _get_recovery_context_or_404(
 def _list_traces[T: (AgentTrace, GUITrace, ToolTrace)](
     session: Session, trace: type[T], robot_exception_id: UUID | None
 ) -> Sequence[T]:
-    return session.exec(_traces_of_recovery(trace, robot_exception_id)).unique().all()
+    return session.exec(_traces_of_recovery(trace, robot_exception_id)).all()
 
 
 def _delete(session: Session, row: SQLModel) -> None:
@@ -190,15 +190,11 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
         exception_id,
         f"RobotException with ID {exception_id} not found.",
     )
-    gui_traces = (
-        session.exec(
-            _traces_of_recovery(GUITrace, exception_id, oldest_first=True).where(
-                col(GUITrace.success)
-            )
+    gui_traces = session.exec(
+        _traces_of_recovery(GUITrace, exception_id, oldest_first=True).where(
+            col(GUITrace.success)
         )
-        .unique()
-        .all()
-    )
+    ).all()
     ui_log = _UI_LOG_HEADER + "".join(
         row for gui_trace in gui_traces for row in _ui_log_rows(gui_trace)
     )
