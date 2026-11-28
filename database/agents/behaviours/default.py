@@ -153,4 +153,4 @@ class DefaultAgent(AgentBehaviour, agent_type=AgentType.Agent):
                 (h for h in hooks if isinstance(h, AgentLoggingHook)),
                 None,
             )
-            self.record_usage(strands_agent, hook)
+            await self.record_usage(strands_agent, hook)

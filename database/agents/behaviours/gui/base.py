@@ -194,7 +194,7 @@ class GuiAgent(AgentBehaviour, ABC):
         else:
             return run
         finally:
-            self.record_usage(agent, hook)
+            await self.record_usage(agent, hook)
 
     def _instruction(
         self, run: GuiRun, inputs: Mapping[str, Any], variables: dict[str, Any]

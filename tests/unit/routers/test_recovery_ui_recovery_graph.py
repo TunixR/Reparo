@@ -32,6 +32,7 @@ from tests.unit.agent_tools._shared.process_models import SPENDING_APPROVAL_MODE
 from tests.unit.shared.fake_websocket import make_test_image_bytes
 from tests.unit.shared.gui_fakes import patch_gui_io
 from tests.unit.shared.log_events import logged_events
+from tests.unit.shared.pricing import free_of_charge
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 GATEWAY = "Gateway Orchestrator"
@@ -70,7 +71,7 @@ def script(
         }
         monkeypatch.setattr(Agent, "get_model", lambda self: models[self.name])  # pyright: ignore[reportUnknownLambdaType,reportUnknownMemberType]
         monkeypatch.setattr(DefaultAgent, "logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
-        monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(Router, "get_conversation_cost", free_of_charge)
         patch_gui_io(monkeypatch)
         return models
 

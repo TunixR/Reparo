@@ -191,6 +191,7 @@ Log events:
 | `gui.action_retry` | WARN | `gui.action.iteration`, `error.type`, `exception.message` |
 | `gui.max_actions_exceeded` | WARN | `gui.task.max_actions` |
 | `agent.usage` | INFO | `agent.id`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `agent.cost` |
+| `pricing.fetch_failed` | WARN | `error.type`, `exception.message` (bounded); costs use the last fetched prices, or are unknown (`-1`) until a retry succeeds |
 | `agent_graph.condition_error` | WARN | `agent_graph.id`, `agent_graph.edge.id`, `error.type`, `exception.message` (bounded); the edge isn't followed |
 | `agent_graph.failed` | WARN | `agent_graph.id`, `agent_graph.outcome`, `agent_graph.nodes_run`; for `node_cancelled` and `error` also `error.type` and `exception.message` (bounded). An unexpected error is also `recovery.turn_failed`, which carries the stack trace. A cancelled run is not a failure |
 | `agent_graph.node_cancelled` | WARN | `agent_graph.id`, `agent_graph.node.key`, `agent.id` of the cancelled node; an agent of the graph was disabled during the run, so the node doesn't run and the recovery ends with an internal error |

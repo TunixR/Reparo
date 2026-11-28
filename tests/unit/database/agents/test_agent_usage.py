@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from strands import Agent as StrandsAgent
 
+from agent_tools.hooks import AgentLoggingHook
 from database.provider.models import Router
 from tests.unit.fixtures.agent_fixtures import EntryPoint, ScriptedAgent
+from tests.unit.shared.gui_fakes import FakeHook, fake_router, make_gui_agent
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 
@@ -28,9 +33,11 @@ def run_agent(
     caplog: pytest.LogCaptureFixture,
 ) -> Callable[..., Any]:
     """Run a real agent, through each entry point, on a model that plays ``turns``."""
-    monkeypatch.setattr(
-        Router, "get_conversation_cost", lambda _self, i, o: i * 0.001 + o * 0.01
-    )
+
+    async def cost(_self: Router, input_tokens: int, output_tokens: int) -> float:
+        return input_tokens * 0.001 + output_tokens * 0.01
+
+    monkeypatch.setattr(Router, "get_conversation_cost", cost)
     caplog.set_level(logging.INFO)
 
     async def _run(*turns: Turn) -> tuple[Any, ScriptedModel]:
@@ -69,3 +76,36 @@ async def test_usage_is_reported_when_the_second_invocation_fails(
 
     # Tokens of the first invocation are still accounted for.
     assert _usage_event(caplog)["gen_ai.usage.input_tokens"] == 100
+
+
+@pytest.mark.asyncio
+async def test_a_run_cancelled_while_pricing_still_finishes_its_trace() -> None:
+    pricing = asyncio.Event()
+
+    async def price_forever(_input_tokens: int, _output_tokens: int) -> float:
+        pricing.set()
+        _ = await asyncio.Event().wait()
+        return 0.0
+
+    router = fake_router()
+    router.get_conversation_cost = price_forever
+    agent = make_gui_agent("unused", router=router)
+    hook = FakeHook()
+    run = SimpleNamespace(
+        event_loop_metrics=SimpleNamespace(
+            accumulated_usage={"inputTokens": 100, "outputTokens": 10}
+        )
+    )
+    recording = asyncio.create_task(
+        agent.record_usage(
+            cast(StrandsAgent, cast(object, run)),
+            cast(AgentLoggingHook, cast(object, hook)),
+        )
+    )
+    _ = await pricing.wait()
+
+    _ = recording.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await recording
+    assert hook.trace_updates == [(True, -1.0)]

@@ -3,11 +3,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, override
 
-import requests
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Enum, Field, Relationship, SQLModel
 from strands.models import Model
 
+from database.provider.pricing import (
+    OPENROUTER_PRICING,
+    UNKNOWN_RATES,
+    Rates,
+)
 from database.provider.scripts.image import Qwen2_5ImageResizer
 from observability.instrumentation.genai import TracedOpenAIModel
 
@@ -159,33 +163,17 @@ class Router(SQLModel, table=True):
             f"Router provider {self.provider_type} not yet implemented."
         )
 
-    def get_rates(self) -> tuple[float, float]:
+    async def get_rates(self) -> Rates:
         """Return the token rates for the router model. Per token"""
         if self.provider_type == self.Provider.OPENROUTER:
-            headers = {"Authorization": f"Bearer {self.api_key}"}
-            response = requests.get(
-                "https://openrouter.ai/api/v1/models", headers=headers, timeout=10
-            )
+            return await OPENROUTER_PRICING.rates(self.model_name)
+        return UNKNOWN_RATES
 
-            if response.status_code == 200:
-                models = response.json()["data"]
-                # Find specific model
-                for model in models:
-                    if model["id"] == self.model_name:
-                        pricing = model.get("pricing", {})
-                        prompt_cost = float(pricing.get("prompt", 0)) * 1_000_000
-                        completion_cost = (
-                            float(pricing.get("completion", 0)) * 1_000_000
-                        )
-
-                        return (prompt_cost, completion_cost)
-            return (-1.0, -1.0)
-
-        return (-1.0, -1.0)
-
-    def get_conversation_cost(self, input_tokens: int, output_tokens: int) -> float:
+    async def get_conversation_cost(
+        self, input_tokens: int, output_tokens: int
+    ) -> float:
         """Calculate the cost of a conversation based on input and output tokens."""
-        prompt_rate, completion_rate = self.get_rates()
+        prompt_rate, completion_rate = await self.get_rates()
         if prompt_rate < 0 or completion_rate < 0:
             return -1.0  # Unknown cost
 
