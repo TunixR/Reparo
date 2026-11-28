@@ -113,6 +113,7 @@ class UserSession(SQLModel, table=True):
     )
     user_id: uuid.UUID = Field(
         foreign_key="user.id",
+        index=True,
         description="Foreign key to the user this session belongs to.",
     )
     user: User = Relationship(
