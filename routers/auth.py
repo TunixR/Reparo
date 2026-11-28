@@ -167,7 +167,7 @@ def list_users(
     """
     List all users. Requires admin role.
     """
-    users = session.exec(select(User)).unique().all()
+    users = session.exec(select(User)).all()
     return [UserPublic.model_validate(user) for user in users]
 
 
@@ -193,7 +193,7 @@ def search_users(
     if enabled is not None:
         statement = statement.where(User.enabled == enabled)
 
-    users = session.exec(statement).unique().all()
+    users = session.exec(statement).all()
     return [UserPublic.model_validate(user) for user in users]
 
 
@@ -326,7 +326,7 @@ def delete_current_user(
     """
     # Delete user's sessions first
     statement = select(UserSession).where(UserSession.user_id == current_user.id)
-    sessions = session.exec(statement).unique().all()
+    sessions = session.exec(statement).all()
     for user_session in sessions:
         session.delete(user_session)
 
@@ -356,7 +356,7 @@ def delete_user(
 
     # Delete user's sessions first
     statement = select(UserSession).where(UserSession.user_id == user_id)
-    sessions = session.exec(statement).unique().all()
+    sessions = session.exec(statement).all()
     for user_session in sessions:
         session.delete(user_session)
 

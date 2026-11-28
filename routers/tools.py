@@ -17,7 +17,7 @@ router = APIRouter(
 def list_tools(
     session: SessionDep,
 ) -> Sequence[Tool]:
-    tools = session.exec(select(Tool)).unique().all()
+    tools = session.exec(select(Tool)).all()
     return tools
 
 

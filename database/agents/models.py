@@ -206,9 +206,10 @@ class Agent(SQLModel, table=True):
         },
     )
 
+    # Grows with every run, so access raises: read it with an explicit query.
     traces: list["AgentTrace"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
         back_populates="agent",
-        sa_relationship_kwargs={"lazy": "joined"},
+        sa_relationship_kwargs={"lazy": "raise"},
     )
 
     created_at: datetime = Field(

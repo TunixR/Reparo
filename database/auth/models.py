@@ -66,9 +66,10 @@ class User(SQLModel, table=True):
         description="User role for authorization.",
     )
 
+    # Grows with every login, so access raises: read it with an explicit query.
     sessions: list["UserSession"] = Relationship(
         back_populates="user",
-        sa_relationship_kwargs={"lazy": "joined"},
+        sa_relationship_kwargs={"lazy": "raise"},
     )
 
     created_at: datetime = Field(
