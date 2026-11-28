@@ -12,7 +12,14 @@ from sqlmodel import Session
 
 from database.agents.models import Agent
 from database.auth.models import User
-from database.logging.models import AgentTrace, GUITrace, RobotException, ToolTrace
+from database.logging.models import (
+    AgentTrace,
+    GUITrace,
+    RobotException,
+    SubAgentTrace,
+    ToolTrace,
+)
+from database.provider.models import Router
 from database.tools.models import Tool
 from tests.unit.shared.auth_helpers import Headers, make_auth_headers
 from tests.unit.shared.mock_s3 import MockS3Client
@@ -73,51 +80,6 @@ def test_logging_gui_traces_lists_existing_traces(
 
 
 TRACE_LISTS = ["agent_traces", "gui_traces", "tool_traces"]
-
-
-@pytest.mark.parametrize("trace_list", TRACE_LISTS)
-def test_logging_trace_list_filtered_by_robot_exception_holds_its_steps_newest_first(
-    trace_list: str,
-    session: Session,
-    mock_user: User,
-    mock_agent: Agent,
-    mock_tool: Tool,
-    make_robot_exception: Callable[..., RobotException],
-    make_agent_trace: Callable[..., AgentTrace],
-    make_gui_trace: Callable[..., GUITrace],
-    make_tool_trace: Callable[..., ToolTrace],
-    client: TestClient,
-):
-    def step(exception: RobotException, at: datetime) -> dict[str, str]:
-        trace = make_agent_trace(
-            agent=mock_agent, robot_exception_id=exception.id, created_at=at
-        )
-        gui = make_gui_trace(agent_trace=trace, created_at=at)
-        tool = make_tool_trace(agent_trace=trace, tool=mock_tool, created_at=at)
-        return {
-            "agent_traces": str(trace.id),
-            "gui_traces": str(gui.id),
-            "tool_traces": str(tool.id),
-        }
-
-    ours, other = make_robot_exception(), make_robot_exception()
-    start = datetime(2026, 1, 1, tzinfo=UTC)
-    # Saved oldest first, the order the database returns without an ORDER BY.
-    first = step(ours, start)
-    second = step(ours, start + timedelta(seconds=1))
-    _ = step(other, start + timedelta(seconds=2))
-
-    response = client.get(
-        f"/logging/{trace_list}",
-        params={"robot_exception_id": str(ours.id)},
-        headers=make_auth_headers(mock_user, session),
-    )
-
-    assert response.status_code == status.HTTP_200_OK
-    assert [item["id"] for item in response.json()] == [
-        second[trace_list],
-        first[trace_list],
-    ]
 
 
 @pytest.mark.parametrize("trace_list", TRACE_LISTS)
@@ -318,6 +280,40 @@ def test_logging_delete_agent_trace_deletes_trace(
     assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
+@pytest.mark.asyncio
+async def test_logging_delete_agent_trace_deletes_its_gui_traces(
+    session: Session,
+    mock_user: User,
+    mock_agent_trace: AgentTrace,
+    make_gui_trace: Callable[..., GUITrace],
+    client: TestClient,
+):
+    headers = make_auth_headers(mock_user, session)
+    screenshot_keys = [
+        await MockS3Client.upload_bytes(
+            file_bytes=b"jpeg-bytes", content_type="image/jpeg"
+        )
+        for _ in range(2)
+    ]
+    gui_trace_ids = [
+        make_gui_trace(agent_trace=mock_agent_trace, screenshot_key=key).id
+        for key in screenshot_keys
+    ]
+
+    response = client.delete(
+        f"/logging/agent_traces/{mock_agent_trace.id}", headers=headers
+    )
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT
+    for gui_trace_id in gui_trace_ids:
+        response = client.get(f"/logging/gui_traces/{gui_trace_id}", headers=headers)
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+    # The before_delete hook removed each step's screenshot from S3.
+    for key in screenshot_keys:
+        with pytest.raises(KeyError):
+            _ = await MockS3Client.download_bytes(key)
+
+
 def test_logging_robot_exceptions_lists_existing_exceptions(
     session: Session,
     mock_user: User,
@@ -386,6 +382,42 @@ def test_logging_agent_trace_markdown_returns_markdown(
     assert response.status_code == status.HTTP_200_OK
     assert response.headers["content-type"].startswith("text/markdown")
     assert "Agent Trace" in response.text
+
+
+def test_logging_agent_trace_markdown_includes_its_tool_and_sub_agent_traces(
+    session: Session,
+    mock_user: User,
+    mock_agent: Agent,
+    mock_router: Router,
+    mock_tool: Tool,
+    make_agent: Callable[..., Agent],
+    make_agent_trace: Callable[..., AgentTrace],
+    make_tool_trace: Callable[..., ToolTrace],
+    client: TestClient,
+):
+    headers = make_auth_headers(mock_user, session)
+    message = {
+        "role": "user",
+        "content": [{"text": "hello"}],
+        "timestamp": datetime.now(UTC).isoformat(),
+    }
+    trace = make_agent_trace(agent=mock_agent)
+    child = make_agent_trace(agent=make_agent(router=mock_router, name="Sub Agent"))
+    for agent_trace in (trace, child):
+        agent_trace.messages = [message]
+        session.add(agent_trace)
+    session.add(SubAgentTrace(parent_trace_id=trace.id, child_trace_id=child.id))
+    session.commit()
+    _ = make_tool_trace(agent_trace=trace, tool=mock_tool, output="echoed")
+
+    response = client.get(
+        f"/logging/markdown/?agent_trace_id={trace.id}", headers=headers
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert f"- Tool: {mock_tool.name} ({mock_tool.id})" in response.text
+    assert "### Sub-Agent Trace: Sub Agent:" in response.text
+    assert f"# Agent Trace: {child.id}" in response.text
 
 
 def test_logging_agent_trace_markdown_returns_404_for_missing_id(

@@ -10,10 +10,9 @@ from opentelemetry import trace
 from opentelemetry.trace import Span
 from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 from strands import Agent as StrandsAgent
 
-import database.general as database
 from agent_tools.hooks import RequireToolCalls
 from agent_tools.utils import (
     PROCESS_MODEL_STATE_KEY,
@@ -21,6 +20,7 @@ from agent_tools.utils import (
 )
 from database.agents.behaviours import GuiAgent, agent_types_of, behaviour_of
 from database.agents.models import Agent
+from database.engine import open_session, update_by_id
 from database.keys.models import RobotKey
 from database.logging.models import RecoveryContext, RobotException
 from observability import attributes as attrs
@@ -113,9 +113,7 @@ If the recovery task has NOT been fulfilled, call `set_continuation(recovered=fa
 You can't report `success` true without a continuation accepted by `set_continuation`."""
 
 
-def _get_valid_agent(
-    websocket: WebSocket, session: database.SessionDep
-) -> Agent | None:
+def _get_valid_agent(websocket: WebSocket, session: Session) -> Agent | None:
     try:
         agent_id = uuid.UUID(websocket.headers.get("X-AGENT-ID", ""))
     except ValueError:
@@ -236,11 +234,23 @@ Process Model:
 
 
 @router.websocket("/recovery/ws")
-async def handle_recovery_eval(
-    websocket: WebSocket, session: database.SessionDep
+async def handle_recovery_eval(websocket: WebSocket) -> None:
+    # Everything the run reads off the agent is loaded first; then its session
+    # ends its read transaction, so the eval holds no connection while it runs.
+    with open_session(expire_on_commit=False) as session:
+        robot_key = find_enabled_robot_key(
+            session, websocket.headers.get(ROBOT_KEY_HEADER)
+        )
+        agent = _get_valid_agent(websocket, session)
+        if agent is not None:
+            agent.load_tree()
+        session.commit()
+        await _accept_and_run_eval(websocket, robot_key, agent)
+
+
+async def _accept_and_run_eval(
+    websocket: WebSocket, robot_key: RobotKey | None, agent: Agent | None
 ) -> None:
-    robot_key = find_enabled_robot_key(session, websocket.headers.get(ROBOT_KEY_HEADER))
-    agent = _get_valid_agent(websocket, session)
     if robot_key and agent:
         await websocket.accept()
     else:
@@ -256,12 +266,11 @@ async def handle_recovery_eval(
         set_status_on_exception=False,
     ) as span:
         async with RobotConnection(websocket) as robot:
-            await _run_eval_turn(robot, session, robot_key, agent, span)
+            await _run_eval_turn(robot, robot_key, agent, span)
 
 
 async def _run_eval_turn(
     robot: RobotConnection,
-    session: database.SessionDep,
     robot_key: RobotKey,
     agent: Agent,
     span: Span,
@@ -278,9 +287,7 @@ async def _run_eval_turn(
         payload, recovery_task = _validate_eval_payload_or_raise(data)
 
         recovery_context = RecoveryContext.from_payload(payload=payload)
-        exception = _persist_exception_with_context(
-            session, data, robot_key, recovery_context
-        )
+        exception = _persist_exception_with_context(data, robot_key, recovery_context)
 
         result = await robot.run(
             _run_standalone_recovery(
@@ -298,12 +305,10 @@ async def _run_eval_turn(
         )
         await robot.close()
 
-        exception.infered_success = result["success"]
-        session.add(exception)
-        session.commit()
+        update_by_id(RobotException, exception.id, infered_success=result["success"])
     except AbortedByRobot as exc:
         if exception is not None:
-            _record_abort(session, exception, exc.abort)
+            _record_abort(exception, exc.abort)
         record_robot_abort(span, exc.abort)
         await robot.close(ABORT_CLOSE_CODE)
     except WebSocketDisconnect:

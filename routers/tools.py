@@ -18,7 +18,7 @@ router = APIRouter(
 def list_tools(
     session: SessionDep,
 ) -> Sequence[Tool]:
-    return session.exec(select(Tool)).unique().all()
+    return session.exec(select(Tool)).all()
 
 
 @router.get("/{tool_id}", response_model=Tool, summary="Get tool by ID")

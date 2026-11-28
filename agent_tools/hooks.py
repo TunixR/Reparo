@@ -7,7 +7,6 @@ from uuid import UUID, uuid4
 
 from opentelemetry import trace as trace_api
 from pydantic import ValidationError
-from sqlmodel import Session
 from strands.hooks import (
     AfterInvocationEvent,
     AfterToolCallEvent,
@@ -21,8 +20,8 @@ from strands.hooks import (
 from strands.types.content import ContentBlock, Message
 from strands.types.tools import ToolResultContent
 
-from database import engine as db_engine
 from database.agent_graphs.runner import AGENT_GRAPH_CONTEXT_KEY, AgentGraphContext
+from database.engine import open_session, update_by_id, update_row
 from database.logging.models import (
     PENDING_IMAGE_UUID,
     AgentGraphNodeTrace,
@@ -37,11 +36,6 @@ from settings import MAX_GUI_IMAGES
 MAX_REQUIRED_TOOL_REMINDERS = 3
 
 OMITTED_IMAGE_TEXT = "ommited screenshot due to max allowed images per message"
-
-
-def _open_session() -> Session:
-    # The engine is read when the session opens, so a swapped engine (tests) is used.
-    return Session(db_engine.general_engine)
 
 
 class MaxGuiImagesHook(HookProvider):
@@ -217,7 +211,7 @@ class ToolLoggingHook(HookProvider):
         if tool_name not in self.tools:
             return
 
-        with _open_session() as session:
+        with open_session() as session:
             trace_id = uuid4()
             tool_trace = ToolTrace(
                 id=trace_id,
@@ -234,25 +228,20 @@ class ToolLoggingHook(HookProvider):
         if tool_name not in self.tools:
             return
 
-        with _open_session() as session:
-            tool_trace = session.get(ToolTrace, self.trace_id)
+        if event.exception:
+            output, success = str(event.exception), False
+        else:
+            # FIXME: Support only text output for now
+            output = next(iter(event.result.get("content", [])), {}).get("text", "")
+            success = True
 
-            if not tool_trace:
-                raise RuntimeError(f"ToolTrace with id {self.trace_id} not found.")
-
-            tool_trace.finished_at = datetime.now(UTC)
-
-            if event.exception:
-                tool_trace.output = str(event.exception)
-                tool_trace.success = False
-            else:
-                tool_trace.output = next(iter(event.result.get("content", [])), {}).get(
-                    "text", ""
-                )  # FIXME: Support only text output for now
-                tool_trace.success = True
-
-            session.add(tool_trace)
-            session.commit()
+        update_by_id(
+            ToolTrace,
+            self.trace_id,
+            output=output,
+            success=success,
+            finished_at=datetime.now(UTC),
+        )
 
 
 class AgentLoggingHook(HookProvider):
@@ -288,7 +277,7 @@ class AgentLoggingHook(HookProvider):
         if self.created:
             return
         node_trace_id = self._claim_open_node_trace()
-        with _open_session() as session:
+        with open_session() as session:
             # We first register the agent trace here
             trace = AgentTrace(
                 id=self.agent_trace_id,
@@ -308,10 +297,14 @@ class AgentLoggingHook(HookProvider):
                 session.add(sub_trace)
 
             if node_trace_id is not None:
-                node_trace = session.get(AgentGraphNodeTrace, node_trace_id)
-                if node_trace is not None:
-                    node_trace.agent_trace_id = self.agent_trace_id
-                    session.add(node_trace)
+                # The agent trace is inserted first: the node trace links to it.
+                session.flush()
+                _ = update_row(
+                    session,
+                    AgentGraphNodeTrace,
+                    node_trace_id,
+                    agent_trace_id=self.agent_trace_id,
+                )
 
             session.commit()
             self.created = True
@@ -355,20 +348,16 @@ class AgentLoggingHook(HookProvider):
         self.update_trace()
 
     def update_trace(self, finished: bool = False, cost: float = 0.0):
-        with _open_session() as session:
-            trace = session.get(AgentTrace, self.agent_trace_id)
-            if not trace:
-                raise RuntimeError(
-                    f"AgentTrace with id {self.agent_trace_id} not found."
-                )
+        """Write the messages logged so far, and the finish, in one UPDATE.
 
-            trace.messages = self.messages
-            if finished:
-                trace.finished_at = datetime.now(UTC)
-                trace.cost = cost
-
-            session.add(trace)
-            session.commit()
+        The whole list is written each time, not appended: an earlier message
+        changes when its screenshot's S3 uuid is filled in, and Postgres rewrites
+        the whole JSONB value on any change anyway (see TECH_DEBT.md).
+        """
+        values: dict[str, object] = {"messages": self.messages}
+        if finished:
+            values |= {"finished_at": datetime.now(UTC), "cost": cost}
+        update_by_id(AgentTrace, self.agent_trace_id, **values)
 
     async def register_gui_trace(
         self,
@@ -379,24 +368,23 @@ class AgentLoggingHook(HookProvider):
         finished_at: datetime,
         success: bool = True,
     ):
-        with _open_session() as session:
-            gui_trace = await GUITrace.create(
-                screenshot_b=screenshot_bytes,
-                agent_trace_id=self.agent_trace_id,
-                action_type=action_type,
-                action_content=action_content,
-                success=success,
-                created_at=started_at,
-                finished_at=finished_at,
-            )
+        gui_trace = await GUITrace.create(
+            screenshot_b=screenshot_bytes,
+            agent_trace_id=self.agent_trace_id,
+            action_type=action_type,
+            action_content=action_content,
+            success=success,
+            created_at=started_at,
+            finished_at=finished_at,
+        )
+        with open_session(expire_on_commit=False) as session:
             session.add(gui_trace)
             session.commit()
-            session.refresh(gui_trace)
 
-            # Messages are logged before their screenshot's GUI trace is saved, so the
-            # latest image still pending gets the S3 uuid of the screenshot now.
-            if self._fill_pending_image(str(gui_trace.screenshot_key)):
-                self.update_trace()
+        # Messages are logged before their screenshot's GUI trace is saved, so the
+        # latest image still pending gets the S3 uuid of the screenshot now.
+        if self._fill_pending_image(str(gui_trace.screenshot_key)):
+            self.update_trace()
 
     def _fill_pending_image(self, image_uuid: str) -> bool:
         """Give the latest logged image still pending `image_uuid`; whether there was one."""

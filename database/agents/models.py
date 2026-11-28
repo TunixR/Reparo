@@ -168,9 +168,10 @@ class Agent(SQLModel, table=True):
         back_populates="agent"
     )
 
+    # Grows with every run, so access raises: read it with an explicit query.
     traces: list["AgentTrace"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
         back_populates="agent",
-        sa_relationship_kwargs={"lazy": "joined"},
+        sa_relationship_kwargs={"lazy": "raise"},
     )
 
     created_at: datetime = Field(
@@ -206,6 +207,23 @@ class Agent(SQLModel, table=True):
     def get_sub_agents(self) -> list["Agent"]:
         """Return the list of sub-agents associated with the agent."""
         return [sa.child_agent for sa in self.sub_agents if sa.child_agent.enabled]
+
+    def load_tree(self) -> None:
+        """Load this agent and every agent below it, with their routers and tools.
+
+        Joined eager loading stops where a sub-agent is an agent again, so without
+        this a run queries, opening a transaction on its session, when it reaches a
+        sub-agent's own tools or sub-agents.
+        """
+        pending: list[Agent] = [self]
+        seen: set[uuid.UUID] = set()
+        while pending:
+            agent = pending.pop()
+            if agent.id in seen:
+                continue
+            seen.add(agent.id)
+            _ = agent.router, agent.get_tools()
+            pending.extend(link.child_agent for link in agent.sub_agents)
 
     def get_model_params(self) -> dict[str, Any]:
         """Return the request parameters this agent sends to its router's model."""

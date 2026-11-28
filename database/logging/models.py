@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Optional, override
 from uuid import UUID, uuid4
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import raiseload, selectinload
 from sqlalchemy.orm.attributes import set_committed_value
@@ -101,6 +101,15 @@ def _message_log(index: int, msg: dict[str, Any], images: _Images) -> _Timestamp
 
 
 class AgentTrace(SQLModel, table=True):
+    # A recovery's traces in time order, also serving lookups by recovery alone.
+    __table_args__ = (
+        Index(
+            "ix_agenttrace_robot_exception_id_created_at",
+            "robot_exception_id",
+            "created_at",
+        ),
+    )
+
     id: UUID = Field(
         default_factory=uuid4,
         description="Unique identifier",
@@ -112,13 +121,14 @@ class AgentTrace(SQLModel, table=True):
     )
     robot_exception: "RobotException" = Relationship(back_populates="agent_traces")
 
-    agent_id: UUID = Field(foreign_key="agent.id")
+    agent_id: UUID = Field(foreign_key="agent.id", index=True)
     agent: "Agent" = Relationship(back_populates="traces")  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
 
+    # Grows with every GUI step, so access raises: read it with an explicit query.
     gui_traces: list["GUITrace"] = Relationship(
         back_populates="agent_trace",
         sa_relationship_kwargs={
-            "lazy": "joined",
+            "lazy": "raise",
             "foreign_keys": "GUITrace.agent_trace_id",
             "single_parent": True,
         },
@@ -127,10 +137,7 @@ class AgentTrace(SQLModel, table=True):
 
     sub_agents_traces: list["SubAgentTrace"] = Relationship(
         back_populates="parent_trace",
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "SubAgentTrace.parent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "SubAgentTrace.parent_trace_id"},
     )
 
     tool_traces: list["ToolTrace"] = Relationship(back_populates="agent_trace")
@@ -239,24 +246,20 @@ class SubAgentTrace(SQLModel, table=True):
     )
     parent_trace_id: UUID = Field(
         foreign_key="agenttrace.id",
+        index=True,
         description="Foreign key to the parent agent trace.",
     )
     parent_trace: AgentTrace = Relationship(
         back_populates="sub_agents_traces",
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "SubAgentTrace.parent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "SubAgentTrace.parent_trace_id"},
     )
     child_trace_id: UUID = Field(
         foreign_key="agenttrace.id",
+        index=True,
         description="Foreign key to the child agent trace.",
     )
     child_trace: AgentTrace = Relationship(
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "SubAgentTrace.child_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "SubAgentTrace.child_trace_id"},
     )
 
     def __init__(self, **data: object) -> None:
@@ -280,6 +283,7 @@ class RobotException(SQLModel, table=True):
     robot_key_id: UUID | None = Field(
         default=None,
         foreign_key="robotkey.id",
+        index=True,
         description="RobotKey used to submit the exception",
     )
     robot_key: RobotKey | None = Relationship(
@@ -345,7 +349,7 @@ class RecoveryUiLogEntry(RecoveryActivityFields, table=True):
     )
 
     recovery_context_id: UUID | None = Field(
-        default=None, foreign_key="recoverycontext.id"
+        default=None, foreign_key="recoverycontext.id", index=True
     )
     recovery_context: "RecoveryContext" = Relationship(back_populates="ui_log_entries")
 
@@ -388,7 +392,7 @@ class RecoveryContext(SQLModel, table=True):
     )
 
     robot_exception_id: UUID | None = Field(
-        default=None, foreign_key="robotexception.id"
+        default=None, foreign_key="robotexception.id", index=True
     )
     robot_exception: RobotException | None = Relationship(
         sa_relationship_kwargs={"uselist": False}, back_populates="recovery_context"
@@ -478,12 +482,10 @@ class GUITrace(SQLModel, table=True):
     agent_trace_id: UUID = Field(
         foreign_key="agenttrace.id",
         ondelete="CASCADE",
+        index=True,
     )
     agent_trace: AgentTrace = Relationship(
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "GUITrace.agent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "GUITrace.agent_trace_id"},
     )
 
     screenshot_key: str | None = Field(
@@ -529,16 +531,13 @@ class ToolTrace(SQLModel, table=True):
         primary_key=True,
     )
 
-    agent_trace_id: UUID = Field(foreign_key="agenttrace.id")
+    agent_trace_id: UUID = Field(foreign_key="agenttrace.id", index=True)
     agent_trace: AgentTrace = Relationship(
         back_populates="tool_traces",
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "ToolTrace.agent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "ToolTrace.agent_trace_id"},
     )
 
-    tool_id: UUID = Field(foreign_key="tool.id")
+    tool_id: UUID = Field(foreign_key="tool.id", index=True)
     tool: Tool = Relationship(back_populates="traces")
 
     input: dict[str, Any] = Field(
@@ -620,7 +619,7 @@ class AgentGraphTrace(SQLModel, table=True):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     agent_graph_id: UUID | None = Field(
-        default=None, foreign_key="agentgraph.id", ondelete="SET NULL"
+        default=None, foreign_key="agentgraph.id", ondelete="SET NULL", index=True
     )
     # A quoted ``X | None`` can't be resolved by SQLModel.
     agent_graph: Optional["AgentGraph"] = Relationship()
@@ -724,13 +723,14 @@ class AgentGraphNodeTrace(SQLModel, table=True):
     execution_index: int = Field(description="The node's place in the run, from 0.")
     node_key: str
     agent_trace_id: UUID | None = Field(
-        default=None, foreign_key="agenttrace.id", ondelete="SET NULL"
+        default=None, foreign_key="agenttrace.id", ondelete="SET NULL", index=True
     )
     agent_trace: AgentTrace | None = Relationship()
     entry_edge_id: UUID | None = Field(
         default=None,
         foreign_key="agentgraphedge.id",
         ondelete="SET NULL",
+        index=True,
         description="The edge the run entered the node by; null for the entry node.",
     )
     entry_condition: dict[str, Any] | None = Field(

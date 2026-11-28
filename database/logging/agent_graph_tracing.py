@@ -1,4 +1,7 @@
-"""Writes the trace of an agent graph run while it runs, in sessions of its own."""
+"""Writes the trace of an agent graph run while it runs, in sessions of its own.
+
+Rows are inserted, then updated by id: a trace is never read back.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +16,7 @@ from pydantic import BaseModel
 
 from database.agent_graphs.conditions import CONDITION
 from database.agent_graphs.runner import GraphOutcome, NodeCancelledError
-from database.engine import open_session
+from database.engine import open_session, update_by_id
 from database.logging.models import (
     AgentGraphNodeTrace,
     AgentGraphNodeTraceStatus,
@@ -43,7 +46,7 @@ class AgentGraphRunTrace:
 
     @classmethod
     def open(cls, agent_graph_id: UUID, robot_exception_id: UUID) -> Self:
-        with open_session() as session:
+        with open_session(expire_on_commit=False) as session:
             trace = AgentGraphTrace(
                 agent_graph_id=agent_graph_id, robot_exception_id=robot_exception_id
             )
@@ -74,15 +77,15 @@ class AgentGraphRunTrace:
         terminal_node_key: str | None = None,
         answer: dict[str, object] | None = None,
     ) -> None:
-        with open_session() as session:
-            trace = session.get_one(AgentGraphTrace, self.id)
-            trace.status = status
-            trace.failure_reason = failure_reason
-            trace.terminal_node_key = terminal_node_key
-            trace.answer = answer
-            trace.finished_at = datetime.now(UTC)
-            session.add(trace)
-            session.commit()
+        update_by_id(
+            AgentGraphTrace,
+            self.id,
+            status=status,
+            failure_reason=failure_reason,
+            terminal_node_key=terminal_node_key,
+            answer=answer,
+            finished_at=datetime.now(UTC),
+        )
 
     @contextmanager
     def node(
@@ -93,7 +96,7 @@ class AgentGraphRunTrace:
         A disabled agent or a cancelled task closes it as cancelled, any other
         error as failed; the error propagates.
         """
-        with open_session() as session:
+        with open_session(expire_on_commit=False) as session:
             node_trace = AgentGraphNodeTrace(
                 agent_graph_trace_id=self.id,
                 execution_index=execution_index,
@@ -121,18 +124,19 @@ class AgentGraphRunTrace:
             status, error = AgentGraphNodeTraceStatus.FAILED, _describe_error(exc)
             raise
         finally:
-            self._close_node(status, error)
+            self._close_node(node_trace.id, status, error)
 
-    def _close_node(self, status: AgentGraphNodeTraceStatus, error: str | None) -> None:
-        node_id = self._open_node_id
+    def _close_node(
+        self, node_id: UUID, status: AgentGraphNodeTraceStatus, error: str | None
+    ) -> None:
         self._open_node_id = None
-        with open_session() as session:
-            node_trace = session.get_one(AgentGraphNodeTrace, node_id)
-            node_trace.status = status
-            node_trace.error = error
-            node_trace.finished_at = datetime.now(UTC)
-            session.add(node_trace)
-            session.commit()
+        update_by_id(
+            AgentGraphNodeTrace,
+            node_id,
+            status=status,
+            error=error,
+            finished_at=datetime.now(UTC),
+        )
 
     def claim_open_node(self) -> UUID | None:
         """The open node trace, once: the node's own agent trace links to it."""

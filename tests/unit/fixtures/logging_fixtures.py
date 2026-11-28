@@ -5,7 +5,7 @@ These keep router tests readable by centralizing common DB setup.
 
 from collections.abc import Callable
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlmodel import Session
@@ -26,7 +26,7 @@ def make_robot_key(session: Session):
         key_raw: str | None = None,
     ) -> RobotKey:
         if key_raw is None:
-            key_raw = f"test-key-{UUID().hex[:8]}"
+            key_raw = f"test-key-{uuid4().hex[:8]}"
         key = RobotKey(
             name=name,
             description=None,
@@ -48,11 +48,14 @@ def make_robot_exception(session: Session):
         *,
         exception_details: dict[str, object] | None = None,
         robot_key_id: UUID | None = None,
+        created_at: datetime | None = None,
     ) -> RobotException:
         rex = RobotException(
             exception_details=exception_details or {"msg": "boom"},
             robot_key_id=robot_key_id,
         )
+        if created_at is not None:
+            rex.created_at = created_at
         session.add(rex)
         session.commit()
         session.refresh(rex)

@@ -7,6 +7,8 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
+import database.engine
+
 
 @compiles(JSONB, "sqlite")
 def _compile_jsonb_sqlite(_type, _compiler, **_kw):  # pyright: ignore[reportUnusedFunction, reportMissingParameterType]
@@ -63,3 +65,10 @@ def statements(engine: Engine) -> Iterator[list[str]]:
     event.listen(engine, "before_cursor_execute", record)
     yield executed
     event.remove(engine, "before_cursor_execute", record)
+
+
+@pytest.fixture
+def app_engine(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> Engine:
+    """The test engine, as the engine the app's own sessions open on."""
+    monkeypatch.setattr(database.engine, "general_engine", engine)
+    return engine
