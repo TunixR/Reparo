@@ -19,6 +19,12 @@ POSTGRES_MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW") or "10")
 POSTGRES_POOL_TIMEOUT = float(os.getenv("POSTGRES_POOL_TIMEOUT") or "30")
 POSTGRES_POOL_RECYCLE = int(os.getenv("POSTGRES_POOL_RECYCLE") or "-1")
 
+# The app's shared S3 client (s3/utils.py). Keep the downloads one bulk download runs at
+# once below the pool, so that a few exports and the screenshot uploads of running
+# recoveries can share the client.
+S3_POOL_CONNECTIONS = int(os.getenv("S3_POOL_CONNECTIONS") or "32")
+S3_MAX_CONCURRENT_DOWNLOADS = int(os.getenv("S3_MAX_CONCURRENT_DOWNLOADS") or "8")
+
 # LLM provider routers, seeded by populate.py from database/populators/routers.json.
 # PROVIDER (openrouter, openai or vllm), PROVIDER_API_BASE and PROVIDER_API_KEY are the defaults
 # for every router role; ROUTER_<ROLE>_PROVIDER / _API_BASE / _API_KEY (below) override them.

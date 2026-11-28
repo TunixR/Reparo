@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from main import app
 from s3 import utils as s3_utils
-from s3.utils import MAX_CONCURRENT_DOWNLOADS, S3Client
+from s3.utils import S3Client
+from settings import S3_MAX_CONCURRENT_DOWNLOADS
 
 
 class _FakeBody:
@@ -137,13 +138,13 @@ async def test_bulk_download_overlaps_up_to_the_limit_and_keeps_the_key_order(
     fake_s3: _FakeS3,
 ):
     fake_s3.delay = 0.01
-    keys = [f"key-{i}" for i in range(3 * MAX_CONCURRENT_DOWNLOADS)]
+    keys = [f"key-{i}" for i in range(3 * S3_MAX_CONCURRENT_DOWNLOADS)]
     for key in keys:
         fake_s3.objects[key] = key.encode()
 
     downloaded = await S3Client.bulk_download_bytes([*keys, keys[0]])
 
-    assert fake_s3.max_in_flight == MAX_CONCURRENT_DOWNLOADS
+    assert fake_s3.max_in_flight == S3_MAX_CONCURRENT_DOWNLOADS
     assert list(downloaded) == keys
     assert all(downloaded[key] == key.encode() for key in keys)
 

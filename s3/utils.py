@@ -9,12 +9,14 @@ import aioboto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from settings import AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET, S3_URL
-
-# Downloads one bulk download runs at once. Below the pool size, so that a few
-# exports and the screenshot uploads of running recoveries can share the client.
-MAX_CONCURRENT_DOWNLOADS = 8
-_MAX_POOL_CONNECTIONS = 32
+from settings import (
+    AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY,
+    S3_BUCKET,
+    S3_MAX_CONCURRENT_DOWNLOADS,
+    S3_POOL_CONNECTIONS,
+    S3_URL,
+)
 
 
 @dataclass
@@ -45,7 +47,7 @@ def _new_client() -> Any:  # aioboto3 ships no type stubs for its clients.
         aws_access_key_id=AWS_ACCESS_KEY_ID,
         aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
         region_name="us-east-1",
-        config=Config(max_pool_connections=_MAX_POOL_CONNECTIONS),
+        config=Config(max_pool_connections=S3_POOL_CONNECTIONS),
     )
 
 
@@ -146,7 +148,7 @@ class S3Client:
     ) -> dict[str, bytes]:
         """
         Downloads multiple files from the specified S3 bucket using the given keys,
-        `MAX_CONCURRENT_DOWNLOADS` at a time.
+        `S3_MAX_CONCURRENT_DOWNLOADS` at a time.
 
         Args:
             keys (list[str]): The S3 keys of the files to download.
@@ -160,7 +162,7 @@ class S3Client:
         unique_keys = list(dict.fromkeys(keys))
         if not unique_keys:
             return {}
-        slots = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+        slots = asyncio.Semaphore(S3_MAX_CONCURRENT_DOWNLOADS)
         async with S3Client._client() as s3_client:
 
             async def download(key: str) -> bytes:
