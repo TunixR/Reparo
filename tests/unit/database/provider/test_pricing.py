@@ -7,7 +7,6 @@ import httpx
 import pytest
 
 from database.provider.pricing import (
-    FAILURE_RETRY_SECONDS,
     PRICING_TTL_SECONDS,
     UNKNOWN_RATES,
     PricingCatalogue,
@@ -125,7 +124,11 @@ async def test_a_failed_fetch_is_unknown_and_retried_after_a_short_backoff(
     assert catalogue.requests == 1
 
     catalogue.respond = lambda: httpx.Response(200, json=CATALOGUE)
-    catalogue.clock.now += FAILURE_RETRY_SECONDS
+    catalogue.clock.now += 59
+    assert await catalogue.pricing.rates("vendor/model") == UNKNOWN_RATES
+    assert catalogue.requests == 1
+
+    catalogue.clock.now += 1
 
     assert await catalogue.pricing.rates("vendor/model") == (2.0, 10.0)
     assert catalogue.requests == 2
@@ -153,6 +156,7 @@ async def test_a_malformed_entry_is_unknown_and_spares_the_rest(catalogue: Catal
                     "pricing": {"prompt": "varies", "completion": "0"},
                 },
                 {"id": "vendor/no-pricing", "pricing": None},
+                {"id": "vendor/unpriced"},
                 {"pricing": {"prompt": "0.1", "completion": "0.1"}},
                 *CATALOGUE["data"],
             ]
@@ -161,6 +165,7 @@ async def test_a_malformed_entry_is_unknown_and_spares_the_rest(catalogue: Catal
 
     assert await catalogue.pricing.rates("vendor/bad") == UNKNOWN_RATES
     assert await catalogue.pricing.rates("vendor/no-pricing") == UNKNOWN_RATES
+    assert await catalogue.pricing.rates("vendor/unpriced") == UNKNOWN_RATES
     assert await catalogue.pricing.rates("vendor/model") == (2.0, 10.0)
     assert catalogue.requests == 1
 
@@ -179,4 +184,20 @@ async def test_concurrent_lookups_share_one_fetch(catalogue: Catalogue):
     catalogue.gate.set()
 
     assert await asyncio.gather(*lookups) == [(2.0, 10.0), (1.0, 3.0)] * 5
+    assert catalogue.requests == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_lookup_leaves_the_shared_fetch_running(catalogue: Catalogue):
+    catalogue.gate = asyncio.Event()
+    cancelled = asyncio.create_task(catalogue.pricing.rates("vendor/model"))
+    waiting = asyncio.create_task(catalogue.pricing.rates("vendor/model"))
+    _ = await catalogue.fetching.wait()
+
+    _ = cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    catalogue.gate.set()
+
+    assert await waiting == (2.0, 10.0)
     assert catalogue.requests == 1

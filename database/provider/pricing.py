@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from observability import attributes as attrs
 from observability.events import brief, error_type, log_event
@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 type Rates = tuple[float, float]
 """Prompt and completion prices of a model, in dollars per million tokens."""
 
-UNKNOWN_RATES: Rates = (-1.0, -1.0)
+UNKNOWN_COST = -1.0
+"""The cost of a conversation whose model has no known price."""
+UNKNOWN_RATES: Rates = (UNKNOWN_COST, UNKNOWN_COST)
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
@@ -35,18 +37,16 @@ FAILURE_RETRY_SECONDS = 60
 
 
 class PricingCatalogue:
-    """The rates of every model in a provider's catalogue at ``url``."""
+    """The rates of every model in the catalogue at ``url``, in OpenRouter's format."""
 
     def __init__(
         self,
         url: str,
         *,
-        ttl: float = PRICING_TTL_SECONDS,
         transport: httpx.AsyncBaseTransport | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._url = url
-        self._ttl = ttl
         self._transport = transport
         self._clock = clock
         self._rates: dict[str, Rates] = {}
@@ -63,15 +63,11 @@ class PricingCatalogue:
         """Join the refresh in flight, or start one: concurrent lookups fetch once.
 
         The refresh is a task of its own, shielded so a cancelled lookup doesn't cancel
-        it for the others. A task belongs to one event loop, and the catalogue outlives
-        loops (``asyncio.run`` in evals and tests), so a new loop starts its own.
+        it for the others. ``asyncio.run`` cancels the tasks its loop leaves behind, so
+        a refresh never outlives its loop (evals and tests run several).
         """
         task = self._refreshing
-        if (
-            task is None
-            or task.done()
-            or task.get_loop() is not asyncio.get_running_loop()
-        ):
+        if task is None or task.done():
             task = self._refreshing = asyncio.create_task(self._refresh())
         await asyncio.shield(task)
 
@@ -93,28 +89,23 @@ class PricingCatalogue:
             )
             self._expires_at = self._clock() + FAILURE_RETRY_SECONDS
         else:
-            self._expires_at = self._clock() + self._ttl
+            self._expires_at = self._clock() + PRICING_TTL_SECONDS
 
 
 class _Pricing(BaseModel):
     """A model's price, in dollars per token (OpenRouter sends the numbers as strings)."""
 
-    prompt: float = 0
-    completion: float = 0
+    prompt: float
+    completion: float
 
 
 class _CatalogueModel(BaseModel):
     id: str
-    pricing: _Pricing = Field(default_factory=_Pricing)
+    pricing: _Pricing
 
 
 class _Catalogue(BaseModel):
     data: list[object]
-
-
-OPENROUTER_PRICING = PricingCatalogue(OPENROUTER_MODELS_URL)
-"""The OpenRouter catalogue every OpenRouter router is priced from. The catalogue is
-public, so it is fetched without an API key and shared across routers."""
 
 
 def _parse(body: object) -> dict[str, Rates]:
@@ -130,3 +121,8 @@ def _parse(body: object) -> dict[str, Rates]:
             model.pricing.completion * 1_000_000,
         )
     return rates
+
+
+OPENROUTER_PRICING = PricingCatalogue(OPENROUTER_MODELS_URL)
+"""The OpenRouter catalogue every OpenRouter router is priced from. The catalogue is
+public, so it is fetched without an API key and shared across routers."""

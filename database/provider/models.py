@@ -9,6 +9,7 @@ from strands.models import Model
 
 from database.provider.pricing import (
     OPENROUTER_PRICING,
+    UNKNOWN_COST,
     UNKNOWN_RATES,
     Rates,
 )
@@ -164,7 +165,8 @@ class Router(SQLModel, table=True):
         )
 
     async def get_rates(self) -> Rates:
-        """Return the token rates for the router model. Per token"""
+        """Return the prompt and completion prices of the router model, in dollars per
+        million tokens, or `UNKNOWN_RATES` when the provider doesn't publish them."""
         if self.provider_type == self.Provider.OPENROUTER:
             return await OPENROUTER_PRICING.rates(self.model_name)
         return UNKNOWN_RATES
@@ -172,10 +174,13 @@ class Router(SQLModel, table=True):
     async def get_conversation_cost(
         self, input_tokens: int, output_tokens: int
     ) -> float:
-        """Calculate the cost of a conversation based on input and output tokens."""
+        """Calculate the cost of a conversation based on input and output tokens.
+
+        Tokens times dollars per million tokens: the cost is in millionths of a dollar.
+        """
         prompt_rate, completion_rate = await self.get_rates()
         if prompt_rate < 0 or completion_rate < 0:
-            return -1.0  # Unknown cost
+            return UNKNOWN_COST
 
         return (input_tokens * prompt_rate) + (output_tokens * completion_rate)
 

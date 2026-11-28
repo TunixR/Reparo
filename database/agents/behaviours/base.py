@@ -25,6 +25,7 @@ from database.agent_graphs.runner import (
     NodeRun,
 )
 from database.agents.models import Agent, AgentType, IgnoredField, ModelClass
+from database.provider.pricing import UNKNOWN_COST
 from observability import attributes as attrs
 from observability.events import log_event
 
@@ -203,12 +204,12 @@ class AgentBehaviour(ABC):
         Every AgentResult.metrics is the same object, so the usage sums every
         invocation of ``strands_agent``, including tokens spent before a failure.
         Pricing may wait on the provider's catalogue; a run cancelled meanwhile
-        still finishes its trace, at an unknown cost (-1).
+        still finishes its trace, at `UNKNOWN_COST`.
         """
         usage = strands_agent.event_loop_metrics.accumulated_usage
         input_tokens = usage.get("inputTokens", 0)
         output_tokens = usage.get("outputTokens", 0)
-        cost = -1.0
+        cost = UNKNOWN_COST
         try:
             cost = await self.agent.router.get_conversation_cost(
                 input_tokens, output_tokens
