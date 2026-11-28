@@ -89,10 +89,11 @@ class AgentTrace(SQLModel, table=True):
     agent_id: UUID = Field(foreign_key="agent.id")
     agent: "Agent" = Relationship(back_populates="traces")  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
 
+    # Grows with every GUI step, so access raises: read it with an explicit query.
     gui_traces: list["GUITrace"] = Relationship(
         back_populates="agent_trace",
         sa_relationship_kwargs={
-            "lazy": "joined",
+            "lazy": "raise",
             "foreign_keys": "GUITrace.agent_trace_id",
             "single_parent": True,
         },
@@ -101,10 +102,7 @@ class AgentTrace(SQLModel, table=True):
 
     sub_agents_traces: list["SubAgentTrace"] = Relationship(
         back_populates="parent_trace",
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "SubAgentTrace.parent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "SubAgentTrace.parent_trace_id"},
     )
 
     tool_traces: list["ToolTrace"] = Relationship(back_populates="agent_trace")
@@ -195,20 +193,14 @@ class SubAgentTrace(SQLModel, table=True):
     )
     parent_trace: AgentTrace = Relationship(
         back_populates="sub_agents_traces",
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "SubAgentTrace.parent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "SubAgentTrace.parent_trace_id"},
     )
     child_trace_id: UUID = Field(
         foreign_key="agenttrace.id",
         description="Foreign key to the child agent trace.",
     )
     child_trace: AgentTrace = Relationship(
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "SubAgentTrace.child_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "SubAgentTrace.child_trace_id"},
     )
 
     def __init__(self, **data: object) -> None:
@@ -432,10 +424,7 @@ class GUITrace(SQLModel, table=True):
         ondelete="CASCADE",
     )
     agent_trace: AgentTrace = Relationship(
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "GUITrace.agent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "GUITrace.agent_trace_id"},
     )
 
     screenshot_key: str | None = Field(
@@ -484,10 +473,7 @@ class ToolTrace(SQLModel, table=True):
     agent_trace_id: UUID = Field(foreign_key="agenttrace.id")
     agent_trace: AgentTrace = Relationship(
         back_populates="tool_traces",
-        sa_relationship_kwargs={
-            "lazy": "joined",
-            "foreign_keys": "ToolTrace.agent_trace_id",
-        },
+        sa_relationship_kwargs={"foreign_keys": "ToolTrace.agent_trace_id"},
     )
 
     tool_id: UUID = Field(foreign_key="tool.id")

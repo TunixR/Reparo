@@ -94,7 +94,7 @@ def _set_password(session: Session, user: User, password: str) -> None:
 def _delete_user(session: Session, user: User) -> None:
     """Delete ``user`` and, first, their sessions."""
     statement = select(UserSession).where(UserSession.user_id == user.id)
-    for user_session in session.exec(statement).unique().all():
+    for user_session in session.exec(statement).all():
         session.delete(user_session)
     session.delete(user)
     session.commit()
@@ -217,7 +217,7 @@ def list_users(
     """
     List all users. Requires admin role.
     """
-    users = session.exec(select(User)).unique().all()
+    users = session.exec(select(User)).all()
     return [UserPublic.model_validate(user) for user in users]
 
 
@@ -243,7 +243,7 @@ def search_users(
     if enabled is not None:
         statement = statement.where(User.enabled == enabled)
 
-    users = session.exec(statement).unique().all()
+    users = session.exec(statement).all()
     return [UserPublic.model_validate(user) for user in users]
 
 
