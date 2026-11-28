@@ -11,6 +11,7 @@ from typing import Any, NoReturn
 from pydantic import BaseModel
 from sqlalchemy import Index, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import object_session, validates
 from sqlmodel import Field, Relationship, Session, SQLModel, col, select
 
@@ -134,15 +135,34 @@ class AgentGraph(SQLModel, table=True):
         session = object_session(self)
         if session is None:
             return all(node.agent.enabled for node in self.nodes)
-        disabled = session.scalar(
-            select(func.count())
-            .select_from(Agent)
-            .where(
-                col(Agent.id).in_({node.agent_id for node in self.nodes}),
-                col(Agent.enabled).is_(False),
+        return not self._disabled_agents(session)
+
+    def _still_runnable(self) -> bool:
+        """`can_run`, read in a short session of its own.
+
+        The graph's session then opens no transaction during a run, so a running
+        graph holds no pooled connection while its nodes wait on models and the
+        robot.
+        """
+        session = object_session(self)
+        if session is None:
+            return self.can_run
+        with Session(session.get_bind()) as check:
+            return not self._disabled_agents(check)
+
+    def _disabled_agents(self, session: OrmSession) -> int:
+        """How many of the nodes' agents the database has disabled now."""
+        return (
+            session.scalar(
+                select(func.count())
+                .select_from(Agent)
+                .where(
+                    col(Agent.id).in_({node.agent_id for node in self.nodes}),
+                    col(Agent.enabled).is_(False),
+                )
             )
+            or 0
         )
-        return not disabled
 
     def recovery_gaps(self) -> list[str]:
         """Why recoveries can't run the graph; empty when they can."""
@@ -229,7 +249,7 @@ class AgentGraph(SQLModel, table=True):
                 telemetry.node(nodes_run, node.key, node.agent_id),
                 self._node_trace(context, nodes_run, node, entered_by),
             ):
-                if not self.can_run:
+                if not self._still_runnable():
                     self._cancel(node)
                 async with asyncio.timeout(self.node_timeout_s):
                     run = await behaviour_of(node.agent).run_node(state, node.input_map)

@@ -1,5 +1,8 @@
 from uuid import UUID, uuid4
 
+import pytest
+from sqlalchemy import Engine
+from sqlmodel import Session
 from strands.types.tools import ToolResult
 
 from agent_tools.hooks import ToolLoggingHook
@@ -8,15 +11,20 @@ from tests.unit.agent_tools._shared.fakes import (
     FakeAfterToolCallEvent,
     FakeBeforeToolCallEvent,
 )
-
-from ..shared.mock_session import (  # noqa: F401 We need to import these fixtures for them to activate
-    _STORE,  # pyright: ignore[reportPrivateUsage]
-    clear_store,  # pyright: ignore[reportUnusedImport]
-    patched_dependencies,  # pyright: ignore[reportUnusedImport]
-)
+from tests.unit.shared.sql_statements import recorded_statements, touching
 
 
-def test_log_tool_call_inserts_trace_for_tracked_tool():
+@pytest.fixture(autouse=True)
+def _app_engine(app_engine: Engine) -> Engine:  # pyright: ignore[reportUnusedFunction]
+    return app_engine
+
+
+def _stored(engine: Engine, trace_id: UUID) -> ToolTrace | None:
+    with Session(engine) as session:
+        return session.get(ToolTrace, trace_id)
+
+
+def test_log_tool_call_inserts_trace_for_tracked_tool(engine: Engine):
     agent_trace_id = uuid4()
     tool_id = uuid4()
     tools = {"my_tool": tool_id}
@@ -25,39 +33,29 @@ def test_log_tool_call_inserts_trace_for_tracked_tool():
     evt = FakeBeforeToolCallEvent("my_tool", input_value={"key": "val"})
     hook.log_tool_call(evt)
 
-    # trace_id should be set
     assert isinstance(hook.trace_id, UUID)
-
-    # After logging the response (which fetches and updates the trace),
-    # the trace should be retrievable in the spy store.
-    resp_evt = FakeAfterToolCallEvent(
-        "my_tool",
-        exception=None,
-        result={"status": "success", "content": [], "toolUseId": ""},
-    )
-    hook.log_tool_response(resp_evt)
-
-    trace_obj = _STORE.get(hook.trace_id)
+    trace_obj = _stored(engine, hook.trace_id)
     assert isinstance(trace_obj, ToolTrace)
     assert trace_obj.agent_trace_id == agent_trace_id
     assert trace_obj.tool_id == tool_id
     assert trace_obj.input == {"key": "val"}
+    assert trace_obj.finished_at is None
 
 
-def test_log_tool_call_ignored_for_untracked_tool():
+def test_log_tool_call_ignored_for_untracked_tool(engine: Engine):
     agent_trace_id = uuid4()
     tools = {"tracked_tool": uuid4()}
     hook = ToolLoggingHook(agent_trace_id=agent_trace_id, tools=tools)
 
-    evt = FakeBeforeToolCallEvent("other_tool", input_value="ignored")
-    hook.log_tool_call(evt)
+    with recorded_statements(engine) as statements:
+        hook.log_tool_call(FakeBeforeToolCallEvent("other_tool", input_value="x"))
 
     # No trace should be created and no trace_id set
     assert not hasattr(hook, "trace_id")
-    assert len(_STORE) == 0
+    assert statements == []
 
 
-def test_log_tool_response_success_updates_trace():
+def test_log_tool_response_success_updates_trace(engine: Engine):
     agent_trace_id = uuid4()
     tool_id = uuid4()
     hook = ToolLoggingHook(agent_trace_id=agent_trace_id, tools={"tool_x": tool_id})
@@ -73,14 +71,14 @@ def test_log_tool_response_success_updates_trace():
     resp_evt = FakeAfterToolCallEvent("tool_x", exception=None, result=result)
     hook.log_tool_response(resp_evt)
 
-    trace_obj = _STORE.get(hook.trace_id)
+    trace_obj = _stored(engine, hook.trace_id)
     assert isinstance(trace_obj, ToolTrace)
     assert trace_obj.success is True
     assert trace_obj.output == "result text"
     assert trace_obj.finished_at is not None
 
 
-def test_log_tool_response_failure_updates_trace_with_exception():
+def test_log_tool_response_failure_updates_trace_with_exception(engine: Engine):
     agent_trace_id = uuid4()
     tool_id = uuid4()
     hook = ToolLoggingHook(agent_trace_id=agent_trace_id, tools={"tool_y": tool_id})
@@ -93,8 +91,28 @@ def test_log_tool_response_failure_updates_trace_with_exception():
     )
     hook.log_tool_response(resp_evt)
 
-    trace_obj = _STORE.get(hook.trace_id)
+    trace_obj = _stored(engine, hook.trace_id)
     assert isinstance(trace_obj, ToolTrace)
     assert trace_obj.success is False
     assert "boom" in (trace_obj.output or "")
     assert trace_obj.finished_at is not None
+
+
+def test_a_tool_call_is_one_insert_and_one_update(engine: Engine):
+    hook = ToolLoggingHook(agent_trace_id=uuid4(), tools={"tool_x": uuid4()})
+
+    with recorded_statements(engine) as statements:
+        hook.log_tool_call(FakeBeforeToolCallEvent("tool_x", input_value={}))
+        hook.log_tool_response(FakeAfterToolCallEvent("tool_x", exception=None))
+
+    assert touching(statements, "SELECT", "tooltrace") == []
+    assert len(touching(statements, "INSERT", "tooltrace")) == 1
+    assert len(touching(statements, "UPDATE", "tooltrace")) == 1
+
+
+def test_log_tool_response_without_its_trace_raises():
+    hook = ToolLoggingHook(agent_trace_id=uuid4(), tools={"tool_x": uuid4()})
+    hook.trace_id = uuid4()
+
+    with pytest.raises(RuntimeError, match="not found"):
+        hook.log_tool_response(FakeAfterToolCallEvent("tool_x", exception=None))

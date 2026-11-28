@@ -119,3 +119,26 @@ knowingly leave one behind, add it here.
   `database` behind an interface they own (or move the code down a layer), break the cycles in
   `database.agent_graphs.runner`, report migration 0008's changes through logging, and delete each
   line as its finding goes. Then this entry goes too.
+
+## 12. An agent trace's messages are one JSONB list, rewritten on every message
+
+- **Where:** `AgentLoggingHook.update_trace` in `agent_tools/hooks.py`, and `AgentTrace.messages`
+  in `database/logging/models.py`.
+- **Why it's debt:** every message an agent adds writes the whole list again, so a run of n
+  messages writes O(n²) data. Appending in SQL (`messages || :new`) wouldn't help much: Postgres
+  rewrites a whole JSONB value on any change, and an earlier message still changes when its
+  screenshot's S3 uuid is filled in. The write is one UPDATE without a read, which is as cheap as
+  this layout allows.
+- **What fixing it means:** store each message as a row of its own (agent trace, position,
+  content), inserted once and updated only to fill in a screenshot, with a migration of the
+  existing lists and of the readers (`routers/logging.py`, the markdown export).
+
+## 13. Trace writes block the event loop
+
+- **Where:** the hooks in `agent_tools/hooks.py` and `AgentGraphRunTrace` in
+  `database/logging/agent_graph_tracing.py`, called from Strands callbacks and the graph runner.
+- **Why it's debt:** each write is a synchronous round trip to Postgres on the event loop thread,
+  so every other recovery and request served by the process waits for it. It is one statement per
+  write, but a slow database stalls the whole process.
+- **What fixing it means:** run the writes off the loop (a thread or an async engine), keeping
+  their order per trace, since a node trace links to an agent trace inserted just before it.
