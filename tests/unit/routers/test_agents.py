@@ -7,6 +7,7 @@ from sqlmodel import Session
 
 from database.agents.models import Agent, AgentCreate, AgentType, AgentUpdate
 from database.auth.models import User
+from database.logging.models import AgentTrace
 from database.provider.models import Router
 from tests.unit.shared.auth_helpers import make_auth_headers
 
@@ -126,6 +127,24 @@ def test_agents_admin_create_update_delete(
     delete_response = client.delete(f"/agents/{agent_id}", headers=headers)
     assert delete_response.status_code == status.HTTP_204_NO_CONTENT
     assert session.get(Agent, uuid.UUID(agent_id)) is None
+
+
+def test_agents_delete_of_an_agent_with_traces_keeps_both(
+    session: Session,
+    mock_admin: User,
+    mock_agent: Agent,
+    make_agent_trace: Callable[..., AgentTrace],
+    client: TestClient,
+):
+    headers = make_auth_headers(mock_admin, session)
+    trace_id = make_agent_trace(agent=mock_agent).id
+
+    response = client.delete(f"/agents/{mock_agent.id}", headers=headers)
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    session.expire_all()
+    assert session.get(Agent, mock_agent.id) is not None
+    assert session.get_one(AgentTrace, trace_id).agent_id == mock_agent.id
 
 
 ##############################

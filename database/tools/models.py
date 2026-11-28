@@ -23,9 +23,10 @@ class Tool(SQLModel, table=True):
         unique=True,
     )
 
+    # Grows with every call, so access raises: read it with an explicit query.
     traces: list["ToolTrace"] = Relationship(  # noqa: F821 # pyright:ignore[reportUndefinedVariable]
         back_populates="tool",
-        sa_relationship_kwargs={"lazy": "joined"},
+        sa_relationship_kwargs={"lazy": "raise"},
     )
 
     created_at: datetime = Field(

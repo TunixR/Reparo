@@ -142,16 +142,12 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"RobotException with ID {exception_id} not found.",
         )
-    gui_traces = (
-        session.exec(
-            select(GUITrace)
-            .join(AgentTrace)
-            .where(AgentTrace.robot_exception_id == exception_id)
-            .where(GUITrace.success)
-        )
-        .unique()
-        .all()
-    )
+    gui_traces = session.exec(
+        select(GUITrace)
+        .join(AgentTrace)
+        .where(AgentTrace.robot_exception_id == exception_id)
+        .where(GUITrace.success)
+    ).all()
 
     ui_log = "timestamp,event_type,click_x,click_y,text,screenshot\n"
     screenshots = []
@@ -212,7 +208,7 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
 def list_agent_traces(
     session: SessionDep,
 ) -> Sequence[AgentTrace]:
-    return session.exec(select(AgentTrace)).unique().all()
+    return session.exec(select(AgentTrace)).all()
 
 
 @router.get(
@@ -262,7 +258,7 @@ def delete_agent_trace(
 def list_gui_traces(
     session: SessionDep,
 ) -> Sequence[GUITrace]:
-    return session.exec(select(GUITrace)).unique().all()
+    return session.exec(select(GUITrace)).all()
 
 
 @router.get(
@@ -312,7 +308,7 @@ def delete_gui_trace(
 def list_tool_traces(
     session: SessionDep,
 ) -> Sequence[ToolTrace]:
-    return session.exec(select(ToolTrace)).unique().all()
+    return session.exec(select(ToolTrace)).all()
 
 
 @router.get(
