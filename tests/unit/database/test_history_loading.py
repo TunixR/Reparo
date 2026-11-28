@@ -11,7 +11,9 @@ from contextlib import contextmanager
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
+from httpx import Headers
 from sqlalchemy import Engine, event
+from sqlalchemy.exc import InvalidRequestError
 from sqlmodel import Session
 
 import database.engine
@@ -51,6 +53,35 @@ def tables_read(statements: list[str]) -> set[str]:
         for statement in statements
         for table in re.findall(r"(?:from|join) (\w+)", statement)
     }
+
+
+def reads_of(table: str, statements: list[str]) -> list[str]:
+    """The statements in ``statements`` that read ``table``."""
+    return [s for s in statements if table in tables_read([s])]
+
+
+@pytest.mark.parametrize(
+    ("model", "fixture", "history"),
+    [
+        (Agent, "mock_agent", "traces"),
+        (Tool, "mock_tool", "traces"),
+        (User, "mock_user", "sessions"),
+        (AgentTrace, "mock_agent_trace", "gui_traces"),
+    ],
+)
+def test_reading_history_through_a_relationship_raises(
+    model: type[Agent | Tool | User | AgentTrace],
+    fixture: str,
+    history: str,
+    engine: Engine,
+    request: pytest.FixtureRequest,
+):
+    """History is read with a bounded query, never by walking the relationship."""
+    row_id = request.getfixturevalue(fixture).id
+    with Session(engine) as fresh:
+        row = fresh.get_one(model, row_id)
+        with pytest.raises(InvalidRequestError, match="lazy='raise'"):
+            _ = getattr(row, history)
 
 
 def test_loading_an_agent_reads_none_of_its_or_its_tools_traces(
@@ -106,7 +137,28 @@ def test_logging_in_reads_none_of_the_users_past_sessions(
 
     assert response.status_code == status.HTTP_200_OK
     # Only the new session's own row is read back, by its id.
-    assert not any("join usersession" in statement for statement in statements)
+    assert len(reads_of("usersession", statements)) == 1
+
+
+@pytest.mark.parametrize("path", ["/auth/users", "/auth/users/search"])
+def test_listing_users_reads_none_of_their_sessions(
+    path: str,
+    engine: Engine,
+    session: Session,
+    mock_user: User,
+    admin_headers: Headers,
+    client: TestClient,
+):
+    for _ in range(3):
+        _ = persist_user_session(session, mock_user)
+
+    with emitted_sql(engine) as statements:
+        response = client.get(path, headers=admin_headers)
+
+    assert response.status_code == status.HTTP_200_OK
+    assert mock_user.username in {user["username"] for user in response.json()}
+    # Only authenticating the admin reads a session: their own, by its id.
+    assert len(reads_of("usersession", statements)) == 1
 
 
 def _start_sub_agent(parent: AgentLoggingHook) -> None:
