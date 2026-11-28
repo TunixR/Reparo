@@ -20,15 +20,20 @@ from routers.logging import router as logging_router
 from routers.provider import router as provider_router
 from routers.recovery import router as recovery_router
 from routers.tools import router as tools_router
+from s3 import S3Client
 from templates.recovery_payload import RecoveryPayload
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Set up Strands telemetry and flush observability data on shutdown."""
+    """Set up Strands telemetry and the S3 client; close and flush them on shutdown."""
     setup_strands_telemetry()
-    yield
-    shutdown_observability()
+    await S3Client.open()
+    try:
+        yield
+    finally:
+        await S3Client.close()
+        shutdown_observability()
 
 
 app = FastAPI(lifespan=lifespan)

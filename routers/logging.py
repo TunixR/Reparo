@@ -1,3 +1,4 @@
+import asyncio
 import zipfile
 from collections.abc import Sequence
 from io import BytesIO
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import raiseload
 from sqlmodel import Session, SQLModel, col, select
 from sqlmodel.sql.expression import SelectOfScalar
 
@@ -104,6 +106,21 @@ def _delete(session: Session, row: SQLModel) -> None:
     commit_or_500(session, f"delete {name}")
 
 
+# The export endpoints are async for their S3 downloads. Their database reads are `def`
+# dependencies, which FastAPI runs in its threadpool. They load everything the export
+# reads, so the async part runs no SQL on the event loop.
+
+
+def _agent_trace_tree_or_404(agent_trace_id: UUID, session: SessionDep) -> AgentTrace:
+    agent_trace = AgentTrace.get_with_markdown_tree(session, agent_trace_id)
+    if agent_trace is None:
+        raise not_found(f"AgentTrace with ID {agent_trace_id} not found.")
+    return agent_trace
+
+
+AgentTraceTreeDep = Annotated[AgentTrace, Depends(_agent_trace_tree_or_404)]
+
+
 @router.get(
     "/markdown/",
     description="Retrieve the markdown log for a given agent trace ID.",
@@ -113,17 +130,11 @@ def _delete(session: Session, row: SQLModel) -> None:
         200: {"content": {"text/markdown": {}}},
     },
 )
-async def get_agent_trace_markdown(agent_trace_id: UUID, session: SessionDep):
+async def get_agent_trace_markdown(agent_trace: AgentTraceTreeDep) -> Response:
     """
     Endpoint to retrieve the markdown log for a given agent trace ID.
     """
-    agent_trace = get_or_404(
-        session,
-        AgentTrace,
-        agent_trace_id,
-        f"AgentTrace with ID {agent_trace_id} not found.",
-    )
-    markdown_log = await agent_trace.get_makdown_log()
+    markdown_log = await agent_trace.get_markdown_log()
     return Response(content=markdown_log, media_type="text/markdown")
 
 
@@ -171,6 +182,28 @@ def _ui_log_zip(ui_log: str, screenshots: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
+def _successful_gui_steps_or_404(
+    exception_id: UUID, session: SessionDep
+) -> Sequence[GUITrace]:
+    """The recovery's successful GUI steps in the order they ran, without relationships."""
+    _ = get_or_404(
+        session,
+        RobotException,
+        exception_id,
+        f"RobotException with ID {exception_id} not found.",
+    )
+    return session.exec(
+        _traces_of_recovery(GUITrace, exception_id, oldest_first=True)
+        .where(col(GUITrace.success))
+        .options(raiseload("*"))
+    ).all()
+
+
+SuccessfulGUIStepsDep = Annotated[
+    Sequence[GUITrace], Depends(_successful_gui_steps_or_404)
+]
+
+
 @router.get(
     "/ui_log/",
     description="Retrieve the UI log for a given robot exception ID, alongside screenshots",
@@ -180,25 +213,12 @@ def _ui_log_zip(ui_log: str, screenshots: dict[str, bytes]) -> bytes:
         200: {"content": {"text/csv": {}}},
     },
 )
-async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
+async def get_exception_ui_log(
+    gui_traces: SuccessfulGUIStepsDep,
+) -> StreamingResponse:
     """
     Retrieve the UI log for a given robot exception ID.
     """
-    _ = get_or_404(
-        session,
-        RobotException,
-        exception_id,
-        f"RobotException with ID {exception_id} not found.",
-    )
-    gui_traces = (
-        session.exec(
-            _traces_of_recovery(GUITrace, exception_id, oldest_first=True).where(
-                col(GUITrace.success)
-            )
-        )
-        .unique()
-        .all()
-    )
     ui_log = _UI_LOG_HEADER + "".join(
         row for gui_trace in gui_traces for row in _ui_log_rows(gui_trace)
     )
@@ -209,9 +229,8 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
             if (key := gui_trace.screenshot_key) is not None
         ]
     )
-    return StreamingResponse(
-        iter([_ui_log_zip(ui_log, screenshots)]), media_type="application/zip"
-    )
+    archive = await asyncio.to_thread(_ui_log_zip, ui_log, screenshots)
+    return StreamingResponse(iter([archive]), media_type="application/zip")
 
 
 @router.get(
@@ -277,6 +296,20 @@ def get_agent_graph_trace(trace_id: UUID, session: SessionDep) -> AgentGraphTrac
     return _get_agent_graph_trace_or_404(trace_id, session)
 
 
+def _agent_graph_trace_tree_or_404(
+    trace_id: UUID, session: SessionDep
+) -> AgentGraphTrace:
+    trace = AgentGraphTrace.get_with_markdown_tree(session, trace_id)
+    if trace is None:
+        raise not_found("AgentGraphTrace not found")
+    return trace
+
+
+AgentGraphTraceTreeDep = Annotated[
+    AgentGraphTrace, Depends(_agent_graph_trace_tree_or_404)
+]
+
+
 @router.get(
     "/agent_graph_traces/{trace_id}/markdown",
     summary="Get AgentGraphTrace Markdown Log",
@@ -287,9 +320,8 @@ def get_agent_graph_trace(trace_id: UUID, session: SessionDep) -> AgentGraphTrac
     },
 )
 async def get_agent_graph_trace_markdown(
-    trace_id: UUID, session: SessionDep
+    trace: AgentGraphTraceTreeDep,
 ) -> Response:
-    trace = _get_agent_graph_trace_or_404(trace_id, session)
     return Response(content=await trace.get_markdown_log(), media_type="text/markdown")
 
 

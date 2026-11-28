@@ -1,5 +1,7 @@
+from collections.abc import Iterator
+
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, event
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
@@ -48,3 +50,16 @@ def session_fixture(engine: Engine):
     """
     with Session(engine) as session:
         yield session
+
+
+@pytest.fixture
+def statements(engine: Engine) -> Iterator[list[str]]:
+    """The SQL statements the engine runs while the test runs."""
+    executed: list[str] = []
+
+    def record(*args: object) -> None:
+        executed.append(str(args[2]))
+
+    event.listen(engine, "before_cursor_execute", record)
+    yield executed
+    event.remove(engine, "before_cursor_execute", record)

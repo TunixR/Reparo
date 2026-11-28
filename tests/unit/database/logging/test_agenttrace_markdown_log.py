@@ -105,7 +105,7 @@ async def test_no_messages_returns_early_with_no_messages_section_only():
     agent = make_agent()
     trace = make_agent_trace(agent, messages=None, inputs={"task": "T1"})
 
-    log = await trace.get_makdown_log()
+    log = await trace.get_markdown_log()
 
     # Header basics
     assert f"# Agent Trace: {trace.id}" in log
@@ -144,7 +144,7 @@ async def test_messages_are_rendered_in_log_after_bug_fix():
     ]
     trace = make_agent_trace(agent, messages=msgs)
 
-    log = await trace.get_makdown_log()
+    log = await trace.get_markdown_log()
 
     # Messages section is present
     assert "## Messages:" in log
@@ -235,7 +235,7 @@ async def test_flags_control_presence_of_tool_and_sub_sections(
     )
     add_sub_trace(child, grandchild, monkeypatch)
 
-    log = await parent.get_makdown_log(
+    log = await parent.get_markdown_log(
         include_subtraces=include_sub,
         include_tool_traces=include_tools,
     )
