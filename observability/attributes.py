@@ -108,6 +108,7 @@ EVENT_GUI_ACTION_RETRY = "gui.action_retry"
 EVENT_GUI_MAX_ACTIONS_EXCEEDED = "gui.max_actions_exceeded"
 
 EVENT_AGENT_USAGE = "agent.usage"
+EVENT_PRICING_FETCH_FAILED = "pricing.fetch_failed"
 EVENT_AGENT_GRAPH_CONDITION_ERROR = "agent_graph.condition_error"
 EVENT_AGENT_GRAPH_NODE_CANCELLED = "agent_graph.node_cancelled"
 EVENT_AGENT_GRAPH_FAILED = "agent_graph.failed"

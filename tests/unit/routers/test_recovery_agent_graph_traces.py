@@ -31,6 +31,7 @@ from tests.unit.fixtures.agent_graph_fixtures import (
     argument,
     output_model,
 )
+from tests.unit.shared.pricing import free_of_charge
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 GATEWAY = "Gateway Orchestrator"
@@ -135,7 +136,7 @@ def script(
             )
         }
         monkeypatch.setattr(Agent, "get_model", lambda self: models[self.name])  # pyright: ignore[reportUnknownLambdaType,reportUnknownMemberType]
-        monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(Router, "get_conversation_cost", free_of_charge)
         return models
 
     return _script

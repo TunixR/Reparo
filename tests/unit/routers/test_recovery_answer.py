@@ -45,6 +45,7 @@ from tests.unit.fixtures.agent_graph_fixtures import (
     argument,
     output_model,
 )
+from tests.unit.shared.pricing import free_of_charge
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 ERROR_AGENT_TOOL = "ui_exception_handler"
@@ -203,7 +204,7 @@ def script(
         monkeypatch.setattr(Agent, "get_model", lambda self: models[self.name])  # pyright: ignore[reportUnknownLambdaType,reportUnknownMemberType]
         # Agent traces are written through the production engine; not under test.
         monkeypatch.setattr(DefaultAgent, "logging_hooks", lambda self, state: [])  # pyright: ignore[reportUnknownLambdaType]
-        monkeypatch.setattr(Router, "get_conversation_cost", lambda self, i, o: 0.0)  # pyright: ignore[reportUnknownLambdaType]
+        monkeypatch.setattr(Router, "get_conversation_cost", free_of_charge)
         monkeypatch.setattr(Agent, "validate_input", lambda self, **k: k)  # pyright: ignore[reportUnknownLambdaType]
         return models
 

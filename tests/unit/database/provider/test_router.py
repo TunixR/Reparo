@@ -1,9 +1,12 @@
 from collections.abc import Callable
 
+import httpx
 import pytest
 from sqlmodel import Session
 
+from database.provider import models
 from database.provider.models import Router
+from database.provider.pricing import OPENROUTER_MODELS_URL, PricingCatalogue
 
 
 def test_router_defaults_to_text_capability(make_router: Callable[..., Router]):
@@ -152,3 +155,44 @@ def test_router_get_model_forwards_params(make_router: Callable[..., Router]):
         "reasoning_effort": "low",
         "temperature": 0.2,
     }
+
+
+@pytest.mark.asyncio
+async def test_router_cost_is_priced_by_the_openrouter_catalogue(
+    make_router: Callable[..., Router], monkeypatch: pytest.MonkeyPatch
+):
+    fetched: list[httpx.URL] = []
+
+    def catalogue(request: httpx.Request) -> httpx.Response:
+        fetched.append(request.url)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "vendor/model",
+                        "pricing": {"prompt": "0.000002", "completion": "0.00001"},
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr(
+        models,
+        "OPENROUTER_PRICING",
+        PricingCatalogue(
+            OPENROUTER_MODELS_URL, transport=httpx.MockTransport(catalogue)
+        ),
+    )
+    openrouter = make_router(
+        provider_type=Router.Provider.OPENROUTER, model_name="vendor/model"
+    )
+    unlisted = make_router(
+        provider_type=Router.Provider.OPENROUTER, model_name="vendor/unlisted"
+    )
+    vllm = make_router(provider_type=Router.Provider.VLLM, model_name="vendor/model")
+
+    assert await openrouter.get_conversation_cost(100, 10) == pytest.approx(300.0)
+    assert await unlisted.get_conversation_cost(100, 10) == -1.0
+    assert await vllm.get_conversation_cost(100, 10) == -1.0
+    assert fetched == [httpx.URL(OPENROUTER_MODELS_URL)]

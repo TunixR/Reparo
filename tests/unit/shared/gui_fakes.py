@@ -16,6 +16,7 @@ from database.agents.behaviours.gui import GuiAgent, TextGuiAgent, TooledGuiAgen
 from database.agents.behaviours.gui.shared import GUI_ARGUMENTS, GuiRun
 from database.agents.models import Agent
 from tests.unit.shared.fake_websocket import FakeWebSocket, make_test_image_bytes
+from tests.unit.shared.pricing import free_of_charge
 from tests.unit.shared.scripted_model import ScriptedModel, ToolCall, Turn
 
 
@@ -24,6 +25,7 @@ class FakeHook(HookProvider):
 
     def __init__(self, **_: Any) -> None:
         self.gui_traces: list[tuple[str, bool]] = []
+        self.trace_updates: list[tuple[bool, float]] = []
 
     @override
     def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
@@ -41,7 +43,7 @@ class FakeHook(HookProvider):
         self.gui_traces.append((action_type, success))
 
     def update_trace(self, finished: bool = False, cost: float = 0.0) -> None:
-        return None
+        self.trace_updates.append((finished, cost))
 
 
 UITARS_PARSER = "database.agents.behaviours.gui.parsers.uitars:UITarsParser"
@@ -77,7 +79,7 @@ def fake_router(
         relative_dim=relative_dim,
         original_coords=original_coords,
         model_name=model_name,
-        get_conversation_cost=lambda _i, _o: 0.0,
+        get_conversation_cost=free_of_charge,
     )
 
 
