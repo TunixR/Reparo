@@ -334,14 +334,15 @@ async def test_logging_delete_agent_trace_deletes_its_gui_traces(
     client: TestClient,
 ):
     headers = make_auth_headers(mock_user, session)
-    gui_trace_ids = [
-        make_gui_trace(
-            agent_trace=mock_agent_trace,
-            screenshot_key=await MockS3Client.upload_bytes(
-                file_bytes=b"jpeg-bytes", content_type="image/jpeg"
-            ),
-        ).id
+    screenshot_keys = [
+        await MockS3Client.upload_bytes(
+            file_bytes=b"jpeg-bytes", content_type="image/jpeg"
+        )
         for _ in range(2)
+    ]
+    gui_trace_ids = [
+        make_gui_trace(agent_trace=mock_agent_trace, screenshot_key=key).id
+        for key in screenshot_keys
     ]
 
     response = client.delete(
@@ -352,6 +353,10 @@ async def test_logging_delete_agent_trace_deletes_its_gui_traces(
     for gui_trace_id in gui_trace_ids:
         response = client.get(f"/logging/gui_traces/{gui_trace_id}", headers=headers)
         assert response.status_code == status.HTTP_404_NOT_FOUND
+    # The before_delete hook removed each step's screenshot from S3.
+    for key in screenshot_keys:
+        with pytest.raises(KeyError):
+            _ = await MockS3Client.download_bytes(key)
 
 
 def test_logging_robot_exceptions_lists_existing_exceptions(
