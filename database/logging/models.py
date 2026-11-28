@@ -1,16 +1,22 @@
 import enum
 import json
 from base64 import b64encode
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Optional, override
 from uuid import UUID, uuid4
 
 from sqlalchemy import Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import raiseload, selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlmodel import (
     Field,
     Relationship,
+    Session,
     SQLModel,
+    col,
+    select,
 )
 
 from database.keys.models import RobotKey
@@ -28,34 +34,54 @@ type _TimestampedLog = tuple[datetime, str]
 # Image uuid a logged message carries until its screenshot finishes uploading to S3.
 PENDING_IMAGE_UUID = "<uuid_pending>"
 
+# The bytes of the image a markdown log embeds, by its S3 key.
+type _Images = Callable[[str], bytes]
 
-async def _image_markdown(image: dict[str, Any]) -> str:
+
+async def _render_with_images(render: Callable[[_Images], str]) -> str:
+    """``render``'s markdown, with its images downloaded concurrently.
+
+    A first render, without images, records the keys the second one embeds, so the
+    downloads follow the renderer's own walk of the trace tree.
+    """
+    keys: list[str] = []
+
+    def record(key: str) -> bytes:
+        keys.append(key)
+        return b""
+
+    _ = render(record)
+    images = await S3Client.bulk_download_bytes(keys)
+    return render(images.__getitem__)
+
+
+def _image_markdown(image: dict[str, Any], images: _Images) -> str:
     image_uuid: str = image.get("uuid", "")
     if image_uuid == PENDING_IMAGE_UUID:
         return "_Image upload pending..._\n"
-    image_b = await S3Client.download_bytes(image_uuid)
+    image_b = images(image_uuid)
     if not image_b:
         return "_Image no longer available_\n"
     return f"![Image](data:image/jpeg;base64,{b64encode(image_b).decode()})\n"
 
 
-async def _tool_result_markdown(tool_result: dict[str, Any]) -> str:
+def _tool_result_markdown(tool_result: dict[str, Any], images: _Images) -> str:
     log = ""
     for item in tool_result.get("content", []):
         if item.get("image", None):
-            log += await _image_markdown(item["image"])
+            log += _image_markdown(item["image"], images)
         else:
             log += f"{item}\n"
     return log
 
 
-async def _content_part_markdown(part: dict[str, Any]) -> str:
+def _content_part_markdown(part: dict[str, Any], images: _Images) -> str:
     if "text" in part:
         return f"{part['text']}\n"
     if "image" in part:
-        return await _image_markdown(part["image"])
+        return _image_markdown(part["image"], images)
     if "toolResult" in part:
-        return await _tool_result_markdown(part["toolResult"])
+        return _tool_result_markdown(part["toolResult"], images)
     return f"{part}\n"  # Unknown dict format
 
 
@@ -66,11 +92,11 @@ def _message_timestamp(msg: dict[str, Any]) -> datetime:
     return date
 
 
-async def _message_log(index: int, msg: dict[str, Any]) -> _TimestampedLog:
+def _message_log(index: int, msg: dict[str, Any], images: _Images) -> _TimestampedLog:
     log_msg = f"\n### Message {index}:\n"
     log_msg += f"- **{msg.get('role', '').capitalize()}:** "
     for part in msg.get("content", []):
-        log_msg += await _content_part_markdown(part)
+        log_msg += _content_part_markdown(part, images)
     return _message_timestamp(msg), log_msg
 
 
@@ -136,17 +162,38 @@ class AgentTrace(SQLModel, table=True):
         nullable=True,
     )
 
-    async def get_makdown_log(
+    @classmethod
+    def get_with_markdown_tree(
+        cls, session: Session, trace_id: UUID
+    ) -> "AgentTrace | None":
+        """The trace with all `get_markdown_log` reads, so rendering it runs no SQL."""
+        return load_agent_trace_trees(session, [trace_id]).get(trace_id)
+
+    async def get_markdown_log(
         self, include_subtraces: bool = True, include_tool_traces: bool = True
     ) -> str:
+        """The trace as markdown, with its images downloaded concurrently."""
+        return await _render_with_images(
+            lambda images: self.markdown_log(
+                images, include_subtraces, include_tool_traces
+            )
+        )
+
+    def markdown_log(
+        self,
+        images: _Images,
+        include_subtraces: bool = True,
+        include_tool_traces: bool = True,
+    ) -> str:
+        """The trace as markdown, embedding ``images``."""
         log = self._markdown_header()
         if not self.messages:
             return log + "_No messages recorded._\n"
 
         timestamped_logs = [
-            *[await _message_log(i, msg) for i, msg in enumerate(self.messages)],
+            *[_message_log(i, msg, images) for i, msg in enumerate(self.messages)],
             *self._tool_trace_logs(include_tool_traces),
-            *await self._sub_trace_logs(include_subtraces, include_tool_traces),
+            *self._sub_trace_logs(images, include_subtraces, include_tool_traces),
         ]
         timestamped_logs.sort(key=lambda x: x[0])
         return log + "".join(log_msg for _, log_msg in timestamped_logs)
@@ -172,8 +219,8 @@ class AgentTrace(SQLModel, table=True):
             logs.append((tool_trace.created_at, log_msg))
         return logs
 
-    async def _sub_trace_logs(
-        self, include_subtraces: bool, include_tool_traces: bool
+    def _sub_trace_logs(
+        self, images: _Images, include_subtraces: bool, include_tool_traces: bool
     ) -> list[_TimestampedLog]:
         logs: list[_TimestampedLog] = []
         for sub_trace in self.sub_agents_traces:
@@ -181,7 +228,8 @@ class AgentTrace(SQLModel, table=True):
             log_msg = f"\n### Sub-Agent Trace: {child.agent.name}:\n"
             if include_subtraces:
                 log_msg += "BEGIN Sub-Agent Trace:\n"
-                log_msg += await child.get_makdown_log(
+                log_msg += child.markdown_log(
+                    images,
                     include_subtraces=include_subtraces,
                     include_tool_traces=include_tool_traces,
                 )
@@ -512,6 +560,47 @@ class ToolTrace(SQLModel, table=True):
     )
 
 
+def load_agent_trace_trees(
+    session: Session, trace_ids: Collection[UUID]
+) -> dict[UUID, AgentTrace]:
+    """The traces of ``trace_ids`` and their sub-agent traces, all levels down, by id.
+
+    Each trace comes with everything its markdown log reads (agent, tool traces and
+    their tools, sub-agent traces and their child traces) and nothing else: reading
+    anything more raises instead of running SQL. One round of queries per level.
+    """
+    # The ignores: SQLModel types a relationship attribute as the value it holds.
+    level_options = (
+        selectinload(AgentTrace.agent).raiseload("*"),
+        selectinload(AgentTrace.tool_traces).options(  # pyright: ignore[reportArgumentType]
+            selectinload(ToolTrace.tool).raiseload("*"),  # pyright: ignore[reportArgumentType]
+            raiseload("*"),
+        ),
+        # The next level's query loads the child traces.
+        selectinload(AgentTrace.sub_agents_traces).raiseload("*"),  # pyright: ignore[reportArgumentType]
+        raiseload("*"),
+    )
+    loaded: dict[UUID, AgentTrace] = {}
+    level_ids = set(trace_ids)
+    while level_ids:
+        level = session.exec(
+            select(AgentTrace)
+            .where(col(AgentTrace.id).in_(level_ids))
+            .options(*level_options)
+        ).all()
+        loaded |= {trace.id: trace for trace in level}
+        level_ids = {
+            sub_trace.child_trace_id
+            for trace in level
+            for sub_trace in trace.sub_agents_traces
+        } - loaded.keys()
+    for trace in loaded.values():
+        for sub_trace in trace.sub_agents_traces:
+            child = loaded.get(sub_trace.child_trace_id)
+            set_committed_value(sub_trace, "child_trace", child)
+    return loaded
+
+
 class AgentGraphTraceStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
@@ -560,7 +649,41 @@ class AgentGraphTrace(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = Field(default=None)
 
+    @classmethod
+    def get_with_markdown_tree(
+        cls, session: Session, trace_id: UUID
+    ) -> "AgentGraphTrace | None":
+        """The run with all `get_markdown_log` reads, so rendering it runs no SQL."""
+        trace = session.exec(
+            select(cls)
+            .where(cls.id == trace_id)
+            .options(
+                # The ignores: SQLModel types a relationship as the value it holds.
+                selectinload(cls.agent_graph).raiseload("*"),  # pyright: ignore[reportArgumentType]
+                # Their agent traces are loaded below.
+                selectinload(cls.node_traces).raiseload("*"),  # pyright: ignore[reportArgumentType]
+                raiseload("*"),
+            )
+        ).first()
+        if trace is None:
+            return None
+        agent_traces = load_agent_trace_trees(
+            session, [n.agent_trace_id for n in trace.node_traces if n.agent_trace_id]
+        )
+        for node_trace in trace.node_traces:
+            agent_trace = (
+                agent_traces.get(node_trace.agent_trace_id)
+                if node_trace.agent_trace_id
+                else None
+            )
+            set_committed_value(node_trace, "agent_trace", agent_trace)
+        return trace
+
     async def get_markdown_log(self) -> str:
+        """The run as markdown, with its images downloaded concurrently."""
+        return await _render_with_images(self.markdown_log)
+
+    def markdown_log(self, images: _Images) -> str:
         """The run's header, then each node execution followed by its agent trace."""
         graph = self.agent_graph
         log = f"# Agent Graph Trace: {self.id}\n\n"
@@ -583,7 +706,7 @@ class AgentGraphTrace(SQLModel, table=True):
             else "**Answer:** none\n"
         )
         for node_trace in self.node_traces:
-            log += "\n" + await node_trace.get_markdown_log()
+            log += "\n" + node_trace.markdown_log(images)
         return log
 
 
@@ -620,7 +743,7 @@ class AgentGraphNodeTrace(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = Field(default=None)
 
-    async def get_markdown_log(self) -> str:
+    def markdown_log(self, images: _Images) -> str:
         """How the run entered the node and how it ended, then its agent trace."""
         agent_trace = self.agent_trace
         log = f"## Node {self.execution_index}: {self.node_key}\n\n"
@@ -647,7 +770,7 @@ class AgentGraphNodeTrace(SQLModel, table=True):
             log += f"**Error:** {self.error}\n\n"
         if agent_trace is None:
             return log + "_No agent trace recorded._\n"
-        return log + await agent_trace.get_makdown_log()
+        return log + agent_trace.markdown_log(images)
 
 
 class AgentGraphNodeTraceRead(SQLModel):

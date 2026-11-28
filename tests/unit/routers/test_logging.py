@@ -21,7 +21,7 @@ from database.logging.models import (
 )
 from database.provider.models import Router
 from database.tools.models import Tool
-from tests.unit.shared.auth_helpers import make_auth_headers
+from tests.unit.shared.auth_helpers import Headers, make_auth_headers
 from tests.unit.shared.mock_s3 import MockS3Client
 
 
@@ -505,6 +505,36 @@ async def test_logging_exception_ui_log_lists_steps_in_the_order_they_ran(
     with zipfile.ZipFile(BytesIO(response.content)) as zipf:
         rows = list(csv.DictReader(StringIO(zipf.read("ui_log.csv").decode())))
     assert [row["text"] for row in rows] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_logging_exception_ui_log_reads_only_the_steps_and_their_exception(
+    statements: list[str],
+    user_headers: Headers,
+    mock_agent: Agent,
+    mock_robot_exception: RobotException,
+    make_agent_trace: Callable[..., AgentTrace],
+    make_gui_trace: Callable[..., GUITrace],
+    client: TestClient,
+):
+    trace = make_agent_trace(
+        agent=mock_agent, robot_exception_id=mock_robot_exception.id
+    )
+    for _ in range(3):
+        _ = make_gui_trace(agent_trace=trace, screenshot_key=None)
+    statements.clear()
+
+    response = client.get(
+        f"/logging/ui_log/?exception_id={mock_robot_exception.id}",
+        headers=user_headers,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    steps = [s for s in statements if s.startswith("SELECT guitrace.")]
+    # The join that filters the steps by recovery, and no eager loads.
+    assert len(steps) == 1
+    assert steps[0].count("JOIN") == 1
+    assert "robotexception" in " ".join(statements)
 
 
 @pytest.mark.asyncio
