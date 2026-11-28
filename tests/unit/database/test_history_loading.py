@@ -11,7 +11,6 @@ from contextlib import contextmanager
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
-from httpx import Headers
 from sqlalchemy import Engine, event
 from sqlalchemy.exc import InvalidRequestError
 from sqlmodel import Session
@@ -146,14 +145,15 @@ def test_listing_users_reads_none_of_their_sessions(
     engine: Engine,
     session: Session,
     mock_user: User,
-    admin_headers: Headers,
+    mock_admin: User,
     client: TestClient,
 ):
     for _ in range(3):
         _ = persist_user_session(session, mock_user)
+    headers = make_auth_headers(mock_admin, session)
 
     with emitted_sql(engine) as statements:
-        response = client.get(path, headers=admin_headers)
+        response = client.get(path, headers=headers)
 
     assert response.status_code == status.HTTP_200_OK
     assert mock_user.username in {user["username"] for user in response.json()}
