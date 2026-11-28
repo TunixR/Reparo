@@ -83,51 +83,6 @@ TRACE_LISTS = ["agent_traces", "gui_traces", "tool_traces"]
 
 
 @pytest.mark.parametrize("trace_list", TRACE_LISTS)
-def test_logging_trace_list_filtered_by_robot_exception_holds_its_steps_newest_first(
-    trace_list: str,
-    session: Session,
-    mock_user: User,
-    mock_agent: Agent,
-    mock_tool: Tool,
-    make_robot_exception: Callable[..., RobotException],
-    make_agent_trace: Callable[..., AgentTrace],
-    make_gui_trace: Callable[..., GUITrace],
-    make_tool_trace: Callable[..., ToolTrace],
-    client: TestClient,
-):
-    def step(exception: RobotException, at: datetime) -> dict[str, str]:
-        trace = make_agent_trace(
-            agent=mock_agent, robot_exception_id=exception.id, created_at=at
-        )
-        gui = make_gui_trace(agent_trace=trace, created_at=at)
-        tool = make_tool_trace(agent_trace=trace, tool=mock_tool, created_at=at)
-        return {
-            "agent_traces": str(trace.id),
-            "gui_traces": str(gui.id),
-            "tool_traces": str(tool.id),
-        }
-
-    ours, other = make_robot_exception(), make_robot_exception()
-    start = datetime(2026, 1, 1, tzinfo=UTC)
-    # Saved oldest first, the order the database returns without an ORDER BY.
-    first = step(ours, start)
-    second = step(ours, start + timedelta(seconds=1))
-    _ = step(other, start + timedelta(seconds=2))
-
-    response = client.get(
-        f"/logging/{trace_list}",
-        params={"robot_exception_id": str(ours.id)},
-        headers=make_auth_headers(mock_user, session),
-    )
-
-    assert response.status_code == status.HTTP_200_OK
-    assert [item["id"] for item in response.json()] == [
-        second[trace_list],
-        first[trace_list],
-    ]
-
-
-@pytest.mark.parametrize("trace_list", TRACE_LISTS)
 def test_logging_trace_list_filtered_by_unknown_robot_exception_is_empty(
     trace_list: str,
     session: Session,

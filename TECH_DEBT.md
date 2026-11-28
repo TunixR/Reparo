@@ -142,3 +142,14 @@ knowingly leave one behind, add it here.
   write, but a slow database stalls the whole process.
 - **What fixing it means:** run the writes off the loop (a thread or an async engine), keeping
   their order per trace, since a node trace links to an agent trace inserted just before it.
+
+## 14. Agent trace lists carry each trace's whole conversation
+
+- **Where:** `list_agent_traces` in `routers/logging.py`, which answers `AgentTrace` rows as they
+  are stored.
+- **Why it's debt:** each listed trace brings its `messages` (the whole LLM conversation, often
+  with image references), although a list is for picking a trace to open. A page of up to 1000
+  traces can be megabytes of JSON the caller doesn't read.
+- **What fixing it means:** a list read model without `messages`, with the full trace left to
+  `GET /logging/agent_traces/{trace_id}`. It changes the list's
+  response shape, so clients that read `messages` from the list must move to the detail call.
