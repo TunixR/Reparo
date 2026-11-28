@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, col, select
 from sqlmodel.sql.expression import SelectOfScalar
@@ -23,7 +23,7 @@ from database.logging.models import (
     ToolTrace,
 )
 from middlewares.auth import get_current_user
-from routers.common import get_or_404, not_found
+from routers.common import PageQuery, Pagination, get_or_404, not_found
 from s3.utils import S3Client
 
 
@@ -46,21 +46,25 @@ router = APIRouter(
 )
 
 
-RobotExceptionFilter = Annotated[
-    UUID | None,
-    Query(description="Only the traces of this robot exception."),
-]
+class RecoveryPage(Pagination):
+    """A page of the history of every recovery, or of one."""
+
+    robot_exception_id: UUID | None = Field(
+        default=None, description="Only the traces of this robot exception."
+    )
+
+
+RecoveryPageQuery = Annotated[RecoveryPage, Query()]
 
 
 def _traces_of_recovery[T: (AgentTrace, GUITrace, ToolTrace)](
-    trace: type[T], robot_exception_id: UUID | None, *, oldest_first: bool = False
+    trace: type[T], robot_exception_id: UUID | None
 ) -> SelectOfScalar[T]:
-    """Traces newest first; only those of one recovery if given.
+    """Traces, only those of one recovery if given.
 
     GUI and tool traces belong to a recovery through their agent trace.
     """
-    created_at = col(trace.created_at)
-    query = select(trace).order_by(created_at if oldest_first else created_at.desc())
+    query = select(trace)
     if robot_exception_id is None:
         return query
     if trace is not AgentTrace:
@@ -85,9 +89,13 @@ def _get_recovery_context_or_404(
 
 
 def _list_traces[T: (AgentTrace, GUITrace, ToolTrace)](
-    session: Session, trace: type[T], robot_exception_id: UUID | None
+    session: Session, trace: type[T], page: RecoveryPage
 ) -> Sequence[T]:
-    return session.exec(_traces_of_recovery(trace, robot_exception_id)).all()
+    """A page of traces, newest first; only those of one recovery if given."""
+    query = page.newest_first(
+        _traces_of_recovery(trace, page.robot_exception_id), trace
+    )
+    return session.exec(query).all()
 
 
 def _delete(session: Session, row: SQLModel) -> None:
@@ -191,9 +199,9 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
         f"RobotException with ID {exception_id} not found.",
     )
     gui_traces = session.exec(
-        _traces_of_recovery(GUITrace, exception_id, oldest_first=True).where(
-            col(GUITrace.success)
-        )
+        _traces_of_recovery(GUITrace, exception_id)
+        .where(col(GUITrace.success))
+        .order_by(col(GUITrace.created_at))
     ).all()
     ui_log = _UI_LOG_HEADER + "".join(
         row for gui_trace in gui_traces for row in _ui_log_rows(gui_trace)
@@ -214,9 +222,9 @@ async def get_exception_ui_log(exception_id: UUID, session: SessionDep):
     "/agent_traces", response_model=Sequence[AgentTrace], summary="List AgentTraces"
 )
 def list_agent_traces(
-    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
+    session: SessionDep, page: RecoveryPageQuery
 ) -> Sequence[AgentTrace]:
-    return _list_traces(session, AgentTrace, robot_exception_id)
+    return _list_traces(session, AgentTrace, page)
 
 
 @router.get(
@@ -249,13 +257,15 @@ def delete_agent_trace(
     summary="List AgentGraphTraces",
 )
 def list_agent_graph_traces(
-    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
+    session: SessionDep, page: RecoveryPageQuery
 ) -> Sequence[AgentGraphTrace]:
-    """Agent graph runs, newest first; only those of one recovery if given."""
-    query = select(AgentGraphTrace).order_by(col(AgentGraphTrace.created_at).desc())
-    if robot_exception_id is not None:
-        query = query.where(AgentGraphTrace.robot_exception_id == robot_exception_id)
-    return session.exec(query).all()
+    """A page of agent graph runs, newest first; only those of one recovery if given."""
+    query = select(AgentGraphTrace)
+    if page.robot_exception_id is not None:
+        query = query.where(
+            AgentGraphTrace.robot_exception_id == page.robot_exception_id
+        )
+    return session.exec(page.newest_first(query, AgentGraphTrace)).all()
 
 
 def _get_agent_graph_trace_or_404(
@@ -290,10 +300,8 @@ async def get_agent_graph_trace_markdown(
 
 
 @router.get("/gui_traces", response_model=Sequence[GUITrace], summary="List GUITraces")
-def list_gui_traces(
-    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
-) -> Sequence[GUITrace]:
-    return _list_traces(session, GUITrace, robot_exception_id)
+def list_gui_traces(session: SessionDep, page: RecoveryPageQuery) -> Sequence[GUITrace]:
+    return _list_traces(session, GUITrace, page)
 
 
 @router.get(
@@ -322,9 +330,9 @@ def delete_gui_trace(
     "/tool_traces", response_model=Sequence[ToolTrace], summary="List ToolTraces"
 )
 def list_tool_traces(
-    session: SessionDep, robot_exception_id: RobotExceptionFilter = None
+    session: SessionDep, page: RecoveryPageQuery
 ) -> Sequence[ToolTrace]:
-    return _list_traces(session, ToolTrace, robot_exception_id)
+    return _list_traces(session, ToolTrace, page)
 
 
 @router.get(
@@ -356,8 +364,11 @@ def delete_tool_trace(
     response_model=Sequence[RobotException],
     summary="List RobotExceptions",
 )
-def list_robot_exceptions(session: SessionDep) -> Sequence[RobotException]:
-    return session.exec(select(RobotException)).all()
+def list_robot_exceptions(
+    session: SessionDep, page: PageQuery
+) -> Sequence[RobotException]:
+    """A page of robot exceptions, newest first."""
+    return session.exec(page.newest_first(select(RobotException), RobotException)).all()
 
 
 @router.get(
@@ -368,10 +379,11 @@ def list_robot_exceptions(session: SessionDep) -> Sequence[RobotException]:
 def list_robot_exceptions_by_key(
     key_id: UUID,
     session: SessionDep,
+    page: PageQuery,
 ) -> Sequence[RobotException]:
-    return session.exec(
-        select(RobotException).where(RobotException.robot_key_id == key_id)
-    ).all()
+    """A page of the robot exceptions submitted with one key, newest first."""
+    query = select(RobotException).where(RobotException.robot_key_id == key_id)
+    return session.exec(page.newest_first(query, RobotException)).all()
 
 
 @router.get(
